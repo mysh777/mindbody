@@ -72,7 +72,7 @@ export function Dashboard() {
   return (
     <div className="min-h-screen bg-slate-50">
       <div className="bg-white border-b border-slate-200 shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-6">
+        <div className="px-4 py-6">
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-3xl font-bold text-slate-900">Mindbody Analytics</h1>
@@ -89,7 +89,7 @@ export function Dashboard() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-6">
+      <div className="px-4 py-6">
         {activeTab === 'overview' && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
             <div className="flex items-start gap-3">
