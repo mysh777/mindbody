@@ -7,8 +7,8 @@ export type MenuSection =
   | 'locations'
   | 'staff'
   | 'service-categories'
-  | 'session-types'
-  | 'staff-session-types'
+  | 'services'
+  | 'staff-services'
   | 'pricing-options'
   | 'clients'
   | 'appointments'
@@ -37,13 +37,13 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
     { id: 'locations', label: 'Locations', icon: MapPin, color: 'blue' },
     { id: 'staff', label: 'Staff', icon: UserCog, color: 'violet' },
     { id: 'service-categories', label: 'Service Categories', icon: Grid3x3, color: 'cyan' },
-    { id: 'session-types', label: 'Session Types', icon: Tag, color: 'green' },
-    { id: 'staff-session-types', label: 'Staff ↔ Session Types', icon: Grid3x3, color: 'teal' },
-    { id: 'pricing-options', label: 'Services', icon: Package, color: 'lime' },
+    { id: 'services', label: 'Services', icon: Tag, color: 'green' },
+    { id: 'staff-services', label: 'Staff ↔ Services', icon: Grid3x3, color: 'teal' },
+    { id: 'pricing-options', label: 'Pricing Options', icon: Package, color: 'lime' },
     { id: 'clients', label: 'Clients', icon: Users, color: 'orange' },
     { id: 'appointments', label: 'Appointments', icon: Calendar, color: 'red' },
     { id: 'sales', label: 'Sales', icon: DollarSign, color: 'emerald' },
-    { id: 'payments', label: 'Payments', icon: CreditCard, color: 'indigo' },
+    { id: 'payments', label: 'Payments', icon: CreditCard, color: 'sky' },
     { id: 'sale-items', label: 'Sale Items', icon: FileText, color: 'amber' },
     { id: 'retail-products', label: 'Retail Products', icon: ShoppingBag, color: 'rose' },
   ];

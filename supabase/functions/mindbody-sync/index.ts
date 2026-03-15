@@ -424,7 +424,7 @@ async function syncSessionTypes(supabase: any, config: MindbodyConfig) {
     console.log(`Found ${sessionTypes.length} session types at offset ${offset}`);
 
     if (offset === 0) {
-      await saveRawData(supabase, 'session_types', data, sessionTypes.length, data.PaginationResponse);
+      await saveRawData(supabase, 'services', data, sessionTypes.length, data.PaginationResponse);
     }
 
     if (sessionTypes.length === 0) break;
@@ -444,7 +444,7 @@ async function syncSessionTypes(supabase: any, config: MindbodyConfig) {
         updated_at: new Date().toISOString(),
       };
 
-      await supabase.from("session_types").upsert(sessionTypeData, {
+      await supabase.from("services").upsert(sessionTypeData, {
         onConflict: "mindbody_id",
       });
     }
@@ -502,7 +502,7 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig) {
 
     for (const sst of staffSessionTypes) {
       const { data: sessionType } = await supabase
-        .from("session_types")
+        .from("services")
         .select("id")
         .eq("mindbody_id", String(sst.Id))
         .maybeSingle();
@@ -522,7 +522,7 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig) {
         updated_at: new Date().toISOString(),
       };
 
-      await supabase.from("staff_session_types").upsert(relationData, {
+      await supabase.from("staff_services").upsert(relationData, {
         onConflict: "id",
       });
 
@@ -621,13 +621,13 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
 
       if (insertedPricing && service.ProgramId) {
         const { data: sessionTypesForProgram } = await supabase
-          .from("session_types")
+          .from("services")
           .select("id")
           .eq("program_id", String(service.ProgramId));
 
         if (sessionTypesForProgram && sessionTypesForProgram.length > 0) {
           for (const st of sessionTypesForProgram) {
-            await supabase.from("pricing_option_session_types").upsert({
+            await supabase.from("pricing_option_services").upsert({
               pricing_option_id: insertedPricing.id,
               session_type_id: st.id,
             }, {
@@ -1162,7 +1162,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      if (shouldSyncAll || syncType === "programs" || syncType === "session_types" || isQuickMode) {
+      if (shouldSyncAll || syncType === "programs" || syncType === "services" || isQuickMode) {
         try {
           console.log('\n--- Syncing Programs (Service Categories) ---');
           results.programs = await syncPrograms(supabase, config);
@@ -1173,25 +1173,25 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      if (shouldSyncAll || syncType === "session_types" || isQuickMode) {
+      if (shouldSyncAll || syncType === "services" || isQuickMode) {
         try {
           console.log('\n--- Syncing Session Types ---');
-          results.session_types = await syncSessionTypes(supabase, config);
-          console.log(`✅ Session types synced: ${results.session_types}`);
+          results.services = await syncSessionTypes(supabase, config);
+          console.log(`✅ Session types synced: ${results.services}`);
         } catch (e) {
           console.error('❌ Session types sync failed:', e);
-          results.session_types = 0;
+          results.services = 0;
         }
       }
 
-      if (shouldSyncAll || syncType === "staff_session_types" || isQuickMode) {
+      if (shouldSyncAll || syncType === "staff_services" || isQuickMode) {
         try {
           console.log('\n--- Syncing Staff-Session Type Relationships ---');
-          results.staff_session_types = await syncStaffSessionTypes(supabase, config);
-          console.log(`✅ Staff-Session relationships synced: ${results.staff_session_types}`);
+          results.staff_services = await syncStaffSessionTypes(supabase, config);
+          console.log(`✅ Staff-Session relationships synced: ${results.staff_services}`);
         } catch (e) {
           console.error('❌ Staff-Session relationships sync failed:', e);
-          results.staff_session_types = 0;
+          results.staff_services = 0;
         }
       }
 
