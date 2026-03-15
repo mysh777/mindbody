@@ -117,7 +117,7 @@ function getUserHeaders(config: MindbodyConfig, userToken: string) {
   return {
     "Api-Key": config.apiKey,
     "SiteId": config.siteId,
-    "Authorization": userToken,
+    "Authorization": `Bearer ${userToken}`,
     "Content-Type": "application/json",
   };
 }
