@@ -993,7 +993,7 @@ async function syncProducts(supabase: any, config: MindbodyConfig) {
   let totalSynced = 0;
 
   while (true) {
-    const url = `${MINDBODY_BASE_URL}/site/products?limit=${limit}&offset=${offset}`;
+    const url = `${MINDBODY_BASE_URL}/sale/products?limit=${limit}&offset=${offset}`;
     const startTime = Date.now();
 
     const response = await fetch(url, {
