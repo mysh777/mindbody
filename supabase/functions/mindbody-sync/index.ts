@@ -16,32 +16,29 @@ interface MindbodyConfig {
 const MINDBODY_BASE_URL = "https://api.mindbodyonline.com/public/v6";
 
 async function getUserToken(supabase: any, config: MindbodyConfig): Promise<string | null> {
-  // For most endpoints, we don't need a User Token
-  // User Token is only required for endpoints that modify data or access sensitive information
-  // Source Credentials (API Key + SiteId + Basic Auth) are sufficient for read operations
+  // User Token is REQUIRED for protected endpoints:
+  // - appointment/appointments
+  // - sale/sales
+  // - client/clientvisits
 
   const staffUsername = Deno.env.get("MINDBODY_STAFF_USERNAME");
   const staffPassword = Deno.env.get("MINDBODY_STAFF_PASSWORD");
 
-  // If staff credentials are not configured, return null
-  // The system will work with Source Credentials only for public endpoints
   if (!staffUsername || !staffPassword) {
-    console.log("Staff credentials not configured - using Source Credentials only");
+    console.warn("⚠️ Staff credentials not configured");
+    console.warn("Protected endpoints (appointments, sales, clientvisits) will be SKIPPED");
     return null;
   }
 
   const url = `${MINDBODY_BASE_URL}/usertoken/issue`;
   const startTime = Date.now();
 
-  // Authorization header uses source credentials
-  const sourceCredentials = btoa(`${config.sourceName}:${config.sourcePassword}`);
-
   const requestBody = {
     Username: staffUsername,
     Password: staffPassword,
   };
 
-  console.log(`Requesting user token for staff username: ${staffUsername}`);
+  console.log(`Requesting user token for: ${staffUsername}`);
 
   try {
     const response = await fetch(url, {
@@ -49,7 +46,6 @@ async function getUserToken(supabase: any, config: MindbodyConfig): Promise<stri
       headers: {
         "Api-Key": config.apiKey,
         "SiteId": config.siteId,
-        "Authorization": `Basic ${sourceCredentials}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(requestBody),
@@ -77,12 +73,18 @@ async function getUserToken(supabase: any, config: MindbodyConfig): Promise<stri
     );
 
     if (!response.ok) {
-      console.warn(`Failed to get user token: ${response.status} - ${responseText}`);
-      console.warn("Continuing with Source Credentials only");
+      console.error(`❌ User token request failed: ${response.status}`);
+      console.error(`Response: ${responseText}`);
+      console.warn("Protected endpoints will be SKIPPED");
       return null;
     }
 
-    return responseBody.AccessToken;
+    const token = responseBody.AccessToken || responseBody.Token;
+    if (token) {
+      console.log("✅ User token obtained successfully");
+    }
+
+    return token;
   } catch (error) {
     const durationMs = Date.now() - startTime;
     await logApiCall(
@@ -95,20 +97,27 @@ async function getUserToken(supabase: any, config: MindbodyConfig): Promise<stri
       error instanceof Error ? error.message : String(error),
       durationMs
     );
-    console.warn("User token request failed, continuing with Source Credentials only");
+    console.error("❌ User token request exception:", error);
     return null;
   }
 }
 
-function getAuthHeaders(config: MindbodyConfig) {
-  // Use Source Credentials for all API calls
-  // This works for most read-only operations
-  const sourceCredentials = btoa(`${config.sourceName}:${config.sourcePassword}`);
-
+function getSourceHeaders(config: MindbodyConfig) {
+  // Source headers for public/open endpoints
+  // Do NOT include Authorization header
   return {
     "Api-Key": config.apiKey,
     "SiteId": config.siteId,
-    "Authorization": `Basic ${sourceCredentials}`,
+    "Content-Type": "application/json",
+  };
+}
+
+function getUserHeaders(config: MindbodyConfig, userToken: string) {
+  // User token headers for protected endpoints
+  return {
+    "Api-Key": config.apiKey,
+    "SiteId": config.siteId,
+    "Authorization": userToken,
     "Content-Type": "application/json",
   };
 }
@@ -140,7 +149,7 @@ async function syncClients(supabase: any, config: MindbodyConfig) {
 
     const startTime = Date.now();
     const response = await fetch(url, {
-      headers: getAuthHeaders(config),
+      headers: getSourceHeaders(config),
     });
     const durationMs = Date.now() - startTime;
 
@@ -223,7 +232,7 @@ async function syncClients(supabase: any, config: MindbodyConfig) {
   return totalSynced;
 }
 
-async function syncAppointments(supabase: any, config: MindbodyConfig) {
+async function syncAppointments(supabase: any, config: MindbodyConfig, userToken: string) {
   const startDate = new Date();
   startDate.setMonth(startDate.getMonth() - 3);
   const endDate = new Date();
@@ -234,16 +243,40 @@ async function syncAppointments(supabase: any, config: MindbodyConfig) {
   let totalSynced = 0;
 
   while (true) {
-    const response = await fetch(
-      `${MINDBODY_BASE_URL}/appointment/appointments?startDate=${startDate.toISOString().split('T')[0]}&endDate=${endDate.toISOString().split('T')[0]}&limit=${limit}&offset=${offset}`,
-      {
-        headers: getAuthHeaders(config),
-      }
-    );
+    const url = `${MINDBODY_BASE_URL}/appointment/appointments?startDate=${startDate.toISOString().split('T')[0]}&endDate=${endDate.toISOString().split('T')[0]}&limit=${limit}&offset=${offset}`;
+    const startTime = Date.now();
 
-    if (!response.ok) break;
+    const response = await fetch(url, {
+      headers: getUserHeaders(config, userToken),
+    });
 
-    const data = await response.json();
+    const durationMs = Date.now() - startTime;
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      console.error(`❌ Appointments sync failed: ${response.status}`);
+      console.error(`Response: ${responseText}`);
+
+      await logApiCall(
+        supabase,
+        url,
+        "GET",
+        null,
+        response.status,
+        responseText,
+        `Failed to fetch appointments`,
+        durationMs
+      );
+      break;
+    }
+
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      data = {};
+    }
+
     const appointments = data.Appointments || [];
 
     if (appointments.length === 0) break;
@@ -289,7 +322,7 @@ async function syncClassDescriptions(supabase: any, config: MindbodyConfig) {
     const response = await fetch(
       `${MINDBODY_BASE_URL}/class/classdescriptions?limit=${limit}&offset=${offset}`,
       {
-        headers: getAuthHeaders(config),
+        headers: getSourceHeaders(config),
       }
     );
 
@@ -344,7 +377,7 @@ async function syncClasses(supabase: any, config: MindbodyConfig) {
     const response = await fetch(
       `${MINDBODY_BASE_URL}/class/classes?startDateTime=${startDate.toISOString()}&endDateTime=${endDate.toISOString()}&limit=${limit}&offset=${offset}`,
       {
-        headers: getAuthHeaders(config),
+        headers: getSourceHeaders(config),
       }
     );
 
@@ -390,7 +423,7 @@ async function syncClasses(supabase: any, config: MindbodyConfig) {
   return totalSynced;
 }
 
-async function syncSales(supabase: any, config: MindbodyConfig) {
+async function syncSales(supabase: any, config: MindbodyConfig, userToken: string) {
   const startDate = new Date();
   startDate.setMonth(startDate.getMonth() - 3);
   const endDate = new Date();
@@ -400,16 +433,40 @@ async function syncSales(supabase: any, config: MindbodyConfig) {
   let totalSynced = 0;
 
   while (true) {
-    const response = await fetch(
-      `${MINDBODY_BASE_URL}/sale/sales?startSaleDateTime=${startDate.toISOString()}&endSaleDateTime=${endDate.toISOString()}&limit=${limit}&offset=${offset}`,
-      {
-        headers: getAuthHeaders(config),
-      }
-    );
+    const url = `${MINDBODY_BASE_URL}/sale/sales?startSaleDateTime=${startDate.toISOString()}&endSaleDateTime=${endDate.toISOString()}&limit=${limit}&offset=${offset}`;
+    const startTime = Date.now();
 
-    if (!response.ok) break;
+    const response = await fetch(url, {
+      headers: getUserHeaders(config, userToken),
+    });
 
-    const data = await response.json();
+    const durationMs = Date.now() - startTime;
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      console.error(`❌ Sales sync failed: ${response.status}`);
+      console.error(`Response: ${responseText}`);
+
+      await logApiCall(
+        supabase,
+        url,
+        "GET",
+        null,
+        response.status,
+        responseText,
+        `Failed to fetch sales`,
+        durationMs
+      );
+      break;
+    }
+
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      data = {};
+    }
+
     const sales = data.Sales || [];
 
     if (sales.length === 0) break;
@@ -470,7 +527,7 @@ async function syncStaff(supabase: any, config: MindbodyConfig) {
     const response = await fetch(
       `${MINDBODY_BASE_URL}/staff/staff?limit=${limit}&offset=${offset}`,
       {
-        headers: getAuthHeaders(config),
+        headers: getSourceHeaders(config),
       }
     );
 
@@ -625,9 +682,8 @@ Deno.serve(async (req: Request) => {
       console.log(`Source Name: ${config.sourceName}`);
       console.log(`Sync Type: ${syncType}`);
 
-      console.log('\n--- Authentication: Source Credentials Only ---');
-      console.log('Using Api-Key + SiteId + Basic Auth (SourceName:SourcePassword)');
-      console.log('User Token NOT required for read-only operations');
+      console.log('\n=== Phase 1: Public Endpoints (Source Credentials) ===');
+      console.log('Using Api-Key + SiteId only (NO Authorization header)');
 
       const results: Record<string, number> = {};
 
@@ -656,14 +712,24 @@ Deno.serve(async (req: Request) => {
         results.clients = await syncClients(supabase, config);
       }
 
-      if (syncType === "all" || syncType === "appointments") {
-        console.log('\n--- Syncing Appointments ---');
-        results.appointments = await syncAppointments(supabase, config);
+      console.log('\n=== Phase 2: Protected Endpoints (User Token Required) ===');
+
+      const userToken = await getUserToken(supabase, config);
+
+      if (userToken && (syncType === "all" || syncType === "appointments")) {
+        console.log('\n--- Syncing Appointments (with User Token) ---');
+        results.appointments = await syncAppointments(supabase, config, userToken);
+      } else if (syncType === "all" || syncType === "appointments") {
+        console.warn('⚠️ Skipping appointments sync - no user token available');
+        results.appointments = 0;
       }
 
-      if (syncType === "all" || syncType === "sales") {
-        console.log('\n--- Syncing Sales ---');
-        results.sales = await syncSales(supabase, config);
+      if (userToken && (syncType === "all" || syncType === "sales")) {
+        console.log('\n--- Syncing Sales (with User Token) ---');
+        results.sales = await syncSales(supabase, config, userToken);
+      } else if (syncType === "all" || syncType === "sales") {
+        console.warn('⚠️ Skipping sales sync - no user token available');
+        results.sales = 0;
       }
 
       const totalRecords = Object.values(results).reduce((sum, count) => sum + count, 0);
