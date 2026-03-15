@@ -49,6 +49,11 @@ interface PricingOption {
   program_name: string | null;
 }
 
+interface PricingOptionService {
+  pricing_option_id: string;
+  service_id: string;
+}
+
 interface GroupedServices {
   category: ServiceCategory | null;
   services: Service[];
@@ -58,6 +63,7 @@ export function ServicesGroupedView() {
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [pricingOptions, setPricingOptions] = useState<PricingOption[]>([]);
+  const [pricingServiceLinks, setPricingServiceLinks] = useState<PricingOptionService[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const [expandedServices, setExpandedServices] = useState<Set<string>>(new Set());
@@ -69,19 +75,22 @@ export function ServicesGroupedView() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [categoriesRes, servicesRes, pricingRes] = await Promise.all([
+      const [categoriesRes, servicesRes, pricingRes, linksRes] = await Promise.all([
         supabase.from('service_categories').select('*').order('name', { ascending: true }),
         supabase.from('services').select('*').order('name', { ascending: true }),
         supabase.from('pricing_options').select('*'),
+        supabase.from('pricing_option_services').select('pricing_option_id, service_id'),
       ]);
 
       if (categoriesRes.error) throw categoriesRes.error;
       if (servicesRes.error) throw servicesRes.error;
       if (pricingRes.error) throw pricingRes.error;
+      if (linksRes.error) throw linksRes.error;
 
       setCategories(categoriesRes.data || []);
       setServices(servicesRes.data || []);
       setPricingOptions(pricingRes.data || []);
+      setPricingServiceLinks(linksRes.data || []);
 
       const allCategoryIds = new Set((categoriesRes.data || []).map(c => c.id));
       setExpandedCategories(allCategoryIds);
@@ -132,17 +141,11 @@ export function ServicesGroupedView() {
   };
 
   const getPricingOptionsForService = (service: Service): PricingOption[] => {
-    return pricingOptions.filter(po => {
-      const programMatch = po.program_id === service.program_id;
-      const nameMatch =
-        po.service_type === service.name ||
-        po.service_category === service.name ||
-        po.program_name === service.name ||
-        service.name.toLowerCase().includes(po.service_type?.toLowerCase() || '') ||
-        po.service_type?.toLowerCase().includes(service.name.toLowerCase() || '');
+    const linkedPricingIds = pricingServiceLinks
+      .filter(link => link.service_id === service.id)
+      .map(link => link.pricing_option_id);
 
-      return programMatch || nameMatch;
-    });
+    return pricingOptions.filter(po => linkedPricingIds.includes(po.id));
   };
 
   const groupedData: GroupedServices[] = [
