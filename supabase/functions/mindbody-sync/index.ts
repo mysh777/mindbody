@@ -581,7 +581,7 @@ async function syncLocations(supabase: any, config: MindbodyConfig) {
   console.log(`Fetching locations from: ${url}`);
 
   const response = await fetch(url, {
-    headers: getAuthHeaders(config),
+    headers: getSourceHeaders(config),
   });
 
   console.log(`Locations API response status: ${response.status}`);
