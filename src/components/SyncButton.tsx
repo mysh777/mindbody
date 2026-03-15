@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { RefreshCw, Users, Calendar, DollarSign, MapPin, UserCog, BookOpen, GraduationCap } from 'lucide-react';
+import { RefreshCw, Users, Calendar, DollarSign, MapPin, UserCog, BookOpen, GraduationCap, Package, ShoppingBag } from 'lucide-react';
 
 interface SyncButtonProps {
   onSyncComplete?: () => void;
 }
 
-type SyncType = 'quick' | 'all' | 'locations' | 'staff' | 'class_descriptions' | 'classes' | 'clients' | 'appointments' | 'sales';
+type SyncType = 'quick' | 'all' | 'locations' | 'services' | 'products' | 'staff' | 'class_descriptions' | 'classes' | 'clients' | 'appointments' | 'sales';
 
 interface SyncStatus {
   [key: string]: 'idle' | 'syncing' | 'success' | 'error';
@@ -76,6 +76,8 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
 
   const syncButtons = [
     { type: 'locations' as SyncType, label: 'Locations', icon: MapPin, color: 'blue' },
+    { type: 'services' as SyncType, label: 'Services (Pricing)', icon: Package, color: 'cyan' },
+    { type: 'products' as SyncType, label: 'Retail Products', icon: ShoppingBag, color: 'pink' },
     { type: 'staff' as SyncType, label: 'Staff', icon: UserCog, color: 'purple' },
     { type: 'class_descriptions' as SyncType, label: 'Class Types', icon: BookOpen, color: 'green' },
     { type: 'classes' as SyncType, label: 'Classes', icon: GraduationCap, color: 'teal' },
@@ -100,6 +102,8 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
 
     const colorClasses: { [key: string]: string } = {
       blue: 'bg-blue-600 hover:bg-blue-700',
+      cyan: 'bg-cyan-600 hover:bg-cyan-700',
+      pink: 'bg-pink-600 hover:bg-pink-700',
       slate: 'bg-slate-600 hover:bg-slate-700',
       purple: 'bg-purple-600 hover:bg-purple-700',
       green: 'bg-green-600 hover:bg-green-700',
@@ -134,7 +138,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
 
       <div className="border-t pt-4">
         <h3 className="text-sm font-semibold text-gray-700 mb-3">Sync Individual Tables:</h3>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           {syncButtons.map(({ type, label, icon: Icon, color }) => (
             <button
               key={type}

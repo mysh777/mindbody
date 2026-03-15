@@ -50,24 +50,40 @@ export function DataTable() {
   const dataTypes: { value: DataType; label: string }[] = [
     { value: 'clients', label: 'Clients' },
     { value: 'appointments', label: 'Appointments' },
-    { value: 'classes', label: 'Classes' },
+    { value: 'services', label: 'Services (Pricing Options)' },
+    { value: 'products', label: 'Retail Products' },
     { value: 'sales', label: 'Sales' },
     { value: 'sale_items', label: 'Sale Items' },
     { value: 'staff', label: 'Staff' },
     { value: 'locations', label: 'Locations' },
+    { value: 'classes', label: 'Classes' },
     { value: 'class_descriptions', label: 'Class Descriptions' },
     { value: 'class_visits', label: 'Class Visits' },
-    { value: 'products', label: 'Products' },
-    { value: 'services', label: 'Services' },
   ];
 
   const loadData = async () => {
     setLoading(true);
     setColumnFilters({});
     try {
-      console.log(`📊 Loading data from table: ${dataType}`);
+      const tableMap: Record<DataType, string> = {
+        'clients': 'clients',
+        'appointments': 'appointments',
+        'classes': 'classes',
+        'sales': 'sales',
+        'sale_items': 'sale_items',
+        'staff': 'staff',
+        'locations': 'locations',
+        'class_descriptions': 'class_descriptions',
+        'class_visits': 'class_visits',
+        'products': 'retail_products',
+        'services': 'pricing_options',
+      };
+
+      const tableName = tableMap[dataType];
+      console.log(`📊 Loading data from table: ${tableName} (${dataType})`);
+
       const { data: result, error } = await supabase
-        .from(dataType)
+        .from(tableName)
         .select('*')
         .order('created_at', { ascending: false })
         .limit(limit);
@@ -76,7 +92,7 @@ export function DataTable() {
         console.error('❌ Error loading data:', error);
         throw error;
       }
-      console.log(`✅ Loaded ${result?.length || 0} rows from ${dataType}`);
+      console.log(`✅ Loaded ${result?.length || 0} rows from ${tableName}`);
       setData(result || []);
     } catch (error) {
       console.error('Error loading data:', error);
