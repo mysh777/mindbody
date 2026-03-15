@@ -577,6 +577,9 @@ async function syncStaff(supabase: any, config: MindbodyConfig) {
 }
 
 async function syncLocations(supabase: any, config: MindbodyConfig) {
+  console.log('Entered syncLocations');
+  console.log(`Using SiteId: ${config.siteId}`);
+
   const url = `${MINDBODY_BASE_URL}/site/locations`;
   console.log(`Fetching locations from: ${url}`);
 
@@ -633,7 +636,14 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { syncType = "all" } = await req.json().catch(() => ({}));
+    const { syncType = "locations" } = await req.json().catch(() => ({}));
+
+    if (syncType === "ping") {
+      return new Response(
+        JSON.stringify({ success: true, message: "Function is alive", timestamp: new Date().toISOString() }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -663,6 +673,9 @@ Deno.serve(async (req: Request) => {
       siteId: mindbodySiteId,
     };
 
+    console.log('ENV check ok');
+    console.log('About to insert sync_logs');
+
     const { data: logData } = await supabase
       .from("sync_logs")
       .insert({
@@ -674,6 +687,7 @@ Deno.serve(async (req: Request) => {
       .single();
 
     const logId = logData?.id;
+    console.log('Sync log created:', logId);
 
     try {
       console.log('=== Starting Mindbody Sync ===');
@@ -688,45 +702,94 @@ Deno.serve(async (req: Request) => {
       const results: Record<string, number> = {};
 
       if (syncType === "all" || syncType === "locations") {
-        console.log('\n--- Syncing Locations ---');
-        results.locations = await syncLocations(supabase, config);
+        try {
+          console.log('\n--- Syncing Locations ---');
+          console.log('About to start locations sync');
+          results.locations = await syncLocations(supabase, config);
+          console.log(`Locations synced: ${results.locations}`);
+        } catch (e) {
+          console.error('Locations sync failed:', e);
+          results.locations = 0;
+        }
       }
 
       if (syncType === "all" || syncType === "staff") {
-        console.log('\n--- Syncing Staff ---');
-        results.staff = await syncStaff(supabase, config);
+        try {
+          console.log('\n--- Syncing Staff ---');
+          results.staff = await syncStaff(supabase, config);
+          console.log(`Staff synced: ${results.staff}`);
+        } catch (e) {
+          console.error('Staff sync failed:', e);
+          results.staff = 0;
+        }
       }
 
       if (syncType === "all" || syncType === "class_descriptions") {
-        console.log('\n--- Syncing Class Descriptions ---');
-        results.class_descriptions = await syncClassDescriptions(supabase, config);
+        try {
+          console.log('\n--- Syncing Class Descriptions ---');
+          results.class_descriptions = await syncClassDescriptions(supabase, config);
+          console.log(`Class descriptions synced: ${results.class_descriptions}`);
+        } catch (e) {
+          console.error('Class descriptions sync failed:', e);
+          results.class_descriptions = 0;
+        }
       }
 
       if (syncType === "all" || syncType === "classes") {
-        console.log('\n--- Syncing Classes ---');
-        results.classes = await syncClasses(supabase, config);
+        try {
+          console.log('\n--- Syncing Classes ---');
+          results.classes = await syncClasses(supabase, config);
+          console.log(`Classes synced: ${results.classes}`);
+        } catch (e) {
+          console.error('Classes sync failed:', e);
+          results.classes = 0;
+        }
       }
 
       if (syncType === "all" || syncType === "clients") {
-        console.log('\n--- Syncing Clients ---');
-        results.clients = await syncClients(supabase, config);
+        try {
+          console.log('\n--- Syncing Clients ---');
+          results.clients = await syncClients(supabase, config);
+          console.log(`Clients synced: ${results.clients}`);
+        } catch (e) {
+          console.error('Clients sync failed:', e);
+          results.clients = 0;
+        }
       }
 
       console.log('\n=== Phase 2: Protected Endpoints (User Token Required) ===');
 
-      const userToken = await getUserToken(supabase, config);
+      let userToken: string | null = null;
+      try {
+        userToken = await getUserToken(supabase, config);
+        console.log(`User token obtained: ${userToken ? 'yes' : 'no'}`);
+      } catch (e) {
+        console.error('Failed to get user token:', e);
+      }
 
       if (userToken && (syncType === "all" || syncType === "appointments")) {
-        console.log('\n--- Syncing Appointments (with User Token) ---');
-        results.appointments = await syncAppointments(supabase, config, userToken);
+        try {
+          console.log('\n--- Syncing Appointments (with User Token) ---');
+          results.appointments = await syncAppointments(supabase, config, userToken);
+          console.log(`Appointments synced: ${results.appointments}`);
+        } catch (e) {
+          console.error('Appointments sync failed:', e);
+          results.appointments = 0;
+        }
       } else if (syncType === "all" || syncType === "appointments") {
         console.warn('⚠️ Skipping appointments sync - no user token available');
         results.appointments = 0;
       }
 
       if (userToken && (syncType === "all" || syncType === "sales")) {
-        console.log('\n--- Syncing Sales (with User Token) ---');
-        results.sales = await syncSales(supabase, config, userToken);
+        try {
+          console.log('\n--- Syncing Sales (with User Token) ---');
+          results.sales = await syncSales(supabase, config, userToken);
+          console.log(`Sales synced: ${results.sales}`);
+        } catch (e) {
+          console.error('Sales sync failed:', e);
+          results.sales = 0;
+        }
       } else if (syncType === "all" || syncType === "sales") {
         console.warn('⚠️ Skipping sales sync - no user token available');
         results.sales = 0;
