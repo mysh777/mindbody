@@ -62,6 +62,9 @@ export function ServicesGroupedView() {
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const [expandedServices, setExpandedServices] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive'>('all');
+  const [filterOnlineBooking, setFilterOnlineBooking] = useState<'all' | 'yes' | 'no'>('all');
+  const [sortBy, setSortBy] = useState<'name' | 'price-count'>('name');
 
   const loadData = async () => {
     setLoading(true);
@@ -129,10 +132,17 @@ export function ServicesGroupedView() {
   };
 
   const getPricingOptionsForService = (service: Service): PricingOption[] => {
-    return pricingOptions.filter(po =>
-      po.program_id === service.program_id &&
-      (po.service_type === service.name || po.service_category === service.name)
-    );
+    return pricingOptions.filter(po => {
+      const programMatch = po.program_id === service.program_id;
+      const nameMatch =
+        po.service_type === service.name ||
+        po.service_category === service.name ||
+        po.program_name === service.name ||
+        service.name.toLowerCase().includes(po.service_type?.toLowerCase() || '') ||
+        po.service_type?.toLowerCase().includes(service.name.toLowerCase() || '');
+
+      return programMatch || nameMatch;
+    });
   };
 
   const groupedData: GroupedServices[] = [
@@ -148,14 +158,47 @@ export function ServicesGroupedView() {
 
   const filteredGroupedData = groupedData.map(group => ({
     ...group,
-    services: group.services.filter(service =>
-      search === '' ||
-      service.name.toLowerCase().includes(search.toLowerCase()) ||
-      (service.description && service.description.toLowerCase().includes(search.toLowerCase()))
-    ),
+    services: group.services.filter(service => {
+      const matchesSearch =
+        search === '' ||
+        service.name.toLowerCase().includes(search.toLowerCase()) ||
+        (service.description && service.description.toLowerCase().includes(search.toLowerCase()));
+
+      const matchesStatus =
+        filterStatus === 'all' ||
+        (filterStatus === 'active' && service.active) ||
+        (filterStatus === 'inactive' && !service.active);
+
+      const matchesOnlineBooking =
+        filterOnlineBooking === 'all' ||
+        (filterOnlineBooking === 'yes' && service.online_booking_enabled) ||
+        (filterOnlineBooking === 'no' && !service.online_booking_enabled);
+
+      return matchesSearch && matchesStatus && matchesOnlineBooking;
+    }).sort((a, b) => {
+      if (sortBy === 'name') {
+        return a.name.localeCompare(b.name);
+      } else {
+        const aPricing = getPricingOptionsForService(a).length;
+        const bPricing = getPricingOptionsForService(b).length;
+        return bPricing - aPricing;
+      }
+    }),
   })).filter(group => group.services.length > 0);
 
   const totalServices = filteredGroupedData.reduce((sum, group) => sum + group.services.length, 0);
+  const totalPricingOptions = filteredGroupedData.reduce(
+    (sum, group) => sum + group.services.reduce((s, service) => s + getPricingOptionsForService(service).length, 0),
+    0
+  );
+  const activeServices = filteredGroupedData.reduce(
+    (sum, group) => sum + group.services.filter(s => s.active).length,
+    0
+  );
+  const onlineBookableServices = filteredGroupedData.reduce(
+    (sum, group) => sum + group.services.filter(s => s.online_booking_enabled).length,
+    0
+  );
 
   const handleExport = () => {
     const flatData = filteredGroupedData.flatMap(group =>
@@ -224,9 +267,38 @@ export function ServicesGroupedView() {
       </div>
 
       <div className="p-6 space-y-4">
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <div className="flex gap-4 items-center">
-            <div className="flex-1">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+            <div className="text-sm text-slate-600">Total Services</div>
+            <div className="text-2xl font-bold text-slate-900 mt-1">{totalServices}</div>
+            <div className="text-xs text-slate-500 mt-1">
+              {activeServices} active · {totalServices - activeServices} inactive
+            </div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+            <div className="text-sm text-slate-600">Pricing Options</div>
+            <div className="text-2xl font-bold text-green-600 mt-1">{totalPricingOptions}</div>
+            <div className="text-xs text-slate-500 mt-1">
+              {totalServices > 0 ? (totalPricingOptions / totalServices).toFixed(1) : 0} per service
+            </div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+            <div className="text-sm text-slate-600">Categories</div>
+            <div className="text-2xl font-bold text-blue-600 mt-1">{filteredGroupedData.length}</div>
+            <div className="text-xs text-slate-500 mt-1">{categories.length} total in database</div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+            <div className="text-sm text-slate-600">Online Booking</div>
+            <div className="text-2xl font-bold text-purple-600 mt-1">{onlineBookableServices}</div>
+            <div className="text-xs text-slate-500 mt-1">
+              {totalServices > 0 ? Math.round((onlineBookableServices / totalServices) * 100) : 0}% of services
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-4">
+          <div className="flex gap-4 items-center flex-wrap">
+            <div className="flex-1 min-w-[200px]">
               <input
                 type="text"
                 placeholder="Search services..."
@@ -235,6 +307,36 @@ export function ServicesGroupedView() {
                 className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
+            <div className="flex gap-2">
+              <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value as any)}
+                className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+              >
+                <option value="all">All Status</option>
+                <option value="active">Active Only</option>
+                <option value="inactive">Inactive Only</option>
+              </select>
+              <select
+                value={filterOnlineBooking}
+                onChange={(e) => setFilterOnlineBooking(e.target.value as any)}
+                className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+              >
+                <option value="all">All Booking</option>
+                <option value="yes">Online Only</option>
+                <option value="no">Offline Only</option>
+              </select>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as any)}
+                className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+              >
+                <option value="name">Sort by Name</option>
+                <option value="price-count">Sort by Price Count</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end">
             <button
               onClick={expandAll}
               className="px-4 py-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
