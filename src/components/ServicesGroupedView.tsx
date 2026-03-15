@@ -49,9 +49,9 @@ interface PricingOption {
   program_name: string | null;
 }
 
-interface PricingOptionService {
+interface PricingOptionSessionType {
   pricing_option_id: string;
-  service_id: string;
+  session_type_id: string;
 }
 
 interface GroupedServices {
@@ -63,7 +63,7 @@ export function ServicesGroupedView() {
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [pricingOptions, setPricingOptions] = useState<PricingOption[]>([]);
-  const [pricingServiceLinks, setPricingServiceLinks] = useState<PricingOptionService[]>([]);
+  const [pricingServiceLinks, setPricingServiceLinks] = useState<PricingOptionSessionType[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const [expandedServices, setExpandedServices] = useState<Set<string>>(new Set());
@@ -77,9 +77,9 @@ export function ServicesGroupedView() {
     try {
       const [categoriesRes, servicesRes, pricingRes, linksRes] = await Promise.all([
         supabase.from('service_categories').select('*').order('name', { ascending: true }),
-        supabase.from('services').select('*').order('name', { ascending: true }),
+        supabase.from('session_types').select('*').order('name', { ascending: true }),
         supabase.from('pricing_options').select('*'),
-        supabase.from('pricing_option_services').select('pricing_option_id, service_id'),
+        supabase.from('pricing_option_session_types').select('pricing_option_id, session_type_id'),
       ]);
 
       if (categoriesRes.error) throw categoriesRes.error;
@@ -142,7 +142,7 @@ export function ServicesGroupedView() {
 
   const getPricingOptionsForService = (service: Service): PricingOption[] => {
     const linkedPricingIds = pricingServiceLinks
-      .filter(link => link.service_id === service.id)
+      .filter(link => link.session_type_id === service.id)
       .map(link => link.pricing_option_id);
 
     return pricingOptions.filter(po => linkedPricingIds.includes(po.id));
