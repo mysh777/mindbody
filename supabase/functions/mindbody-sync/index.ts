@@ -138,7 +138,20 @@ async function logApiCall(supabase: any, endpoint: string, method: string, reque
   }
 }
 
-async function syncClients(supabase: any, config: MindbodyConfig) {
+async function saveRawData(supabase: any, endpointType: string, responseData: any, recordCount: number, paginationInfo: any = null) {
+  try {
+    await supabase.from("api_raw_data").insert({
+      endpoint_type: endpointType,
+      response_data: responseData,
+      record_count: recordCount,
+      pagination_info: paginationInfo,
+    });
+  } catch (err) {
+    console.error("Failed to save raw data:", err);
+  }
+}
+
+async function syncClients(supabase: any, config: MindbodyConfig, userToken?: string) {
   let offset = 0;
   const limit = 100;
   let totalSynced = 0;
@@ -146,10 +159,11 @@ async function syncClients(supabase: any, config: MindbodyConfig) {
   while (true) {
     const url = `${MINDBODY_BASE_URL}/client/clients?limit=${limit}&offset=${offset}`;
     console.log(`Fetching clients from: ${url}`);
+    console.log(`Using ${userToken ? 'User Token' : 'Source credentials'}`);
 
     const startTime = Date.now();
     const response = await fetch(url, {
-      headers: getSourceHeaders(config),
+      headers: userToken ? getUserHeaders(config, userToken) : getSourceHeaders(config),
     });
     const durationMs = Date.now() - startTime;
 
@@ -187,6 +201,11 @@ async function syncClients(supabase: any, config: MindbodyConfig) {
     const clients = data.Clients || [];
 
     console.log(`Found ${clients.length} clients in response`);
+
+    // Save raw data for inspection
+    if (offset === 0) {
+      await saveRawData(supabase, 'clients', data, clients.length, data.PaginationResponse);
+    }
 
     if (clients.length === 0) break;
 
@@ -279,6 +298,11 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
 
     const appointments = data.Appointments || [];
 
+    // Save raw data for inspection
+    if (offset === 0) {
+      await saveRawData(supabase, 'appointments', data, appointments.length, data.PaginationResponse);
+    }
+
     if (appointments.length === 0) break;
 
     for (const appt of appointments) {
@@ -355,6 +379,11 @@ async function syncClassDescriptions(supabase: any, config: MindbodyConfig) {
     }
 
     const descriptions = data.ClassDescriptions || [];
+
+    // Save raw data for inspection
+    if (offset === 0) {
+      await saveRawData(supabase, 'class_descriptions', data, descriptions.length, data.PaginationResponse);
+    }
 
     if (descriptions.length === 0) break;
 
@@ -435,6 +464,11 @@ async function syncClasses(supabase: any, config: MindbodyConfig) {
     }
 
     const classes = data.Classes || [];
+
+    // Save raw data for inspection
+    if (offset === 0) {
+      await saveRawData(supabase, 'classes', data, classes.length, data.PaginationResponse);
+    }
 
     if (classes.length === 0) break;
 
@@ -518,6 +552,11 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
     }
 
     const sales = data.Sales || [];
+
+    // Save raw data for inspection
+    if (offset === 0) {
+      await saveRawData(supabase, 'sales', data, sales.length, data.PaginationResponse);
+    }
 
     if (sales.length === 0) break;
 
@@ -621,6 +660,11 @@ async function syncStaff(supabase: any, config: MindbodyConfig) {
 
     const staffMembers = data.StaffMembers || [];
 
+    // Save raw data for inspection
+    if (offset === 0) {
+      await saveRawData(supabase, 'staff', data, staffMembers.length, data.PaginationResponse);
+    }
+
     if (staffMembers.length === 0) break;
 
     for (const staff of staffMembers) {
@@ -707,6 +751,9 @@ async function syncLocations(supabase: any, config: MindbodyConfig) {
   const locations = data.Locations || [];
 
   console.log(`Found ${locations.length} locations in response`);
+
+  // Save raw data for inspection
+  await saveRawData(supabase, 'locations', data, locations.length, data.PaginationResponse);
 
   for (const loc of locations) {
     const locData = {
@@ -852,17 +899,6 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      if (syncType === "all" || syncType === "clients") {
-        try {
-          console.log('\n--- Syncing Clients ---');
-          results.clients = await syncClients(supabase, config);
-          console.log(`Clients synced: ${results.clients}`);
-        } catch (e) {
-          console.error('Clients sync failed:', e);
-          results.clients = 0;
-        }
-      }
-
       console.log('\n=== Phase 2: Protected Endpoints (User Token Required) ===');
 
       let userToken: string | null = null;
@@ -871,6 +907,20 @@ Deno.serve(async (req: Request) => {
         console.log(`User token obtained: ${userToken ? 'yes' : 'no'}`);
       } catch (e) {
         console.error('Failed to get user token:', e);
+      }
+
+      if (userToken && (syncType === "all" || syncType === "clients")) {
+        try {
+          console.log('\n--- Syncing Clients (with User Token) ---');
+          results.clients = await syncClients(supabase, config, userToken);
+          console.log(`Clients synced: ${results.clients}`);
+        } catch (e) {
+          console.error('Clients sync failed:', e);
+          results.clients = 0;
+        }
+      } else if (syncType === "all" || syncType === "clients") {
+        console.warn('⚠️ Skipping clients sync - no user token available');
+        results.clients = 0;
       }
 
       if (userToken && (syncType === "all" || syncType === "appointments")) {

@@ -7,6 +7,7 @@ import { Charts } from './Charts';
 import { SyncHistory } from './SyncHistory';
 import { ApiLogs } from './ApiLogs';
 import { ActivationCode } from './ActivationCode';
+import { RawApiData } from './RawApiData';
 import { Users, Calendar, DollarSign, TrendingUp, Database, FileText, Key } from 'lucide-react';
 
 interface Stats {
@@ -25,7 +26,7 @@ export function Dashboard() {
     revenue: 0,
     lastSync: null,
   });
-  const [activeTab, setActiveTab] = useState<'overview' | 'activation' | 'data' | 'pivot' | 'charts' | 'history' | 'logs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'activation' | 'data' | 'pivot' | 'charts' | 'history' | 'logs' | 'raw'>('overview');
   const [loading, setLoading] = useState(true);
 
   const loadStats = async () => {
@@ -67,6 +68,7 @@ export function Dashboard() {
     { id: 'charts', label: 'Charts', icon: TrendingUp },
     { id: 'history', label: 'Sync History', icon: Calendar },
     { id: 'logs', label: 'API Logs', icon: FileText },
+    { id: 'raw', label: 'Raw API Data', icon: FileText },
   ] as const;
 
   return (
@@ -211,6 +213,7 @@ export function Dashboard() {
         {activeTab === 'charts' && <Charts />}
         {activeTab === 'history' && <SyncHistory />}
         {activeTab === 'logs' && <ApiLogs />}
+        {activeTab === 'raw' && <RawApiData />}
       </div>
     </div>
   );
