@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { FileJson, ChevronDown, ChevronRight } from 'lucide-react';
+import { FileJson, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react';
 
 interface RawData {
   id: string;
@@ -17,6 +17,7 @@ export function RawApiData() {
   const [loading, setLoading] = useState(true);
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => {
     loadRawData();
@@ -47,6 +48,27 @@ export function RawApiData() {
       newExpanded.add(id);
     }
     setExpandedIds(newExpanded);
+  };
+
+  const copyToClipboard = async (item: RawData) => {
+    try {
+      const jsonString = JSON.stringify(item.response_data, null, 2);
+      await navigator.clipboard.writeText(jsonString);
+      setCopiedId(item.id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch (error) {
+      console.error('Failed to copy:', error);
+    }
+  };
+
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  const getDataSize = (data: any) => {
+    return new Blob([JSON.stringify(data)]).size;
   };
 
   const endpointTypes = Array.from(new Set(data.map(d => d.endpoint_type)));
@@ -117,41 +139,63 @@ export function RawApiData() {
           </div>
         ) : (
           <div className="space-y-4">
-            {filteredData.map((item) => (
-              <div key={item.id} className="border border-slate-200 rounded-lg overflow-hidden">
-                <div
-                  onClick={() => toggleExpand(item.id)}
-                  className="flex items-center justify-between p-4 bg-slate-50 cursor-pointer hover:bg-slate-100 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    {expandedIds.has(item.id) ? (
-                      <ChevronDown className="w-5 h-5 text-slate-600" />
-                    ) : (
-                      <ChevronRight className="w-5 h-5 text-slate-600" />
-                    )}
-                    <div>
-                      <h3 className="font-semibold text-slate-900">{item.endpoint_type}</h3>
-                      <p className="text-sm text-slate-600">
-                        {item.record_count} records • {new Date(item.synced_at).toLocaleString()}
-                      </p>
+            {filteredData.map((item) => {
+              const dataSize = getDataSize(item.response_data);
+
+              return (
+                <div key={item.id} className="border border-slate-200 rounded-lg overflow-hidden">
+                  <div className="flex items-center justify-between p-4 bg-slate-50">
+                    <div
+                      onClick={() => toggleExpand(item.id)}
+                      className="flex items-center gap-3 flex-1 cursor-pointer hover:bg-slate-100 transition-colors -m-4 p-4 rounded-lg"
+                    >
+                      {expandedIds.has(item.id) ? (
+                        <ChevronDown className="w-5 h-5 text-slate-600" />
+                      ) : (
+                        <ChevronRight className="w-5 h-5 text-slate-600" />
+                      )}
+                      <div>
+                        <h3 className="font-semibold text-slate-900">{item.endpoint_type}</h3>
+                        <p className="text-sm text-slate-600">
+                          {item.record_count} records • {formatBytes(dataSize)} • {new Date(item.synced_at).toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {item.pagination_info && (
+                        <div className="text-sm text-slate-600">
+                          Page Size: {item.pagination_info.PageSize || 0} / Total: {item.pagination_info.TotalResults || 0}
+                        </div>
+                      )}
+                      <button
+                        onClick={() => copyToClipboard(item)}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
+                      >
+                        {copiedId === item.id ? (
+                          <>
+                            <Check className="w-4 h-4" />
+                            Copied!
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-4 h-4" />
+                            Copy JSON
+                          </>
+                        )}
+                      </button>
                     </div>
                   </div>
-                  {item.pagination_info && (
-                    <div className="text-sm text-slate-600">
-                      Page Size: {item.pagination_info.PageSize || 0} / Total: {item.pagination_info.TotalResults || 0}
+
+                  {expandedIds.has(item.id) && (
+                    <div className="p-4 bg-slate-900 max-h-[600px] overflow-auto">
+                      <pre className="text-xs text-green-400 overflow-x-auto whitespace-pre-wrap break-words">
+                        {JSON.stringify(item.response_data, null, 2)}
+                      </pre>
                     </div>
                   )}
                 </div>
-
-                {expandedIds.has(item.id) && (
-                  <div className="p-4 bg-slate-900">
-                    <pre className="text-xs text-green-400 overflow-x-auto">
-                      {JSON.stringify(item.response_data, null, 2)}
-                    </pre>
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
