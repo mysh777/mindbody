@@ -637,7 +637,8 @@ async function syncStaff(supabase: any, config: MindbodyConfig) {
   let totalSynced = 0;
 
   while (true) {
-    const url = `${MINDBODY_BASE_URL}/staff/staff?limit=${limit}&offset=${offset}`;
+    // Add StaffEmail=true to include email addresses in response
+    const url = `${MINDBODY_BASE_URL}/staff/staff?limit=${limit}&offset=${offset}&StaffEmail=true`;
     const startTime = Date.now();
 
     const response = await fetch(url, {
