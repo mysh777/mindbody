@@ -4,6 +4,7 @@ import { Sidebar, MenuSection } from './Sidebar';
 import { ApiIntegration } from './ApiIntegration';
 import { PivotTable } from './PivotTable';
 import { TableView } from './TableView';
+import { ServicesGroupedView } from './ServicesGroupedView';
 
 interface Stats {
   clients: number;
@@ -90,6 +91,10 @@ export function Dashboard() {
           </div>
         </div>
       );
+    }
+
+    if (activeSection === 'services') {
+      return <ServicesGroupedView />;
     }
 
     const tableConfig = tableNameMap[activeSection];

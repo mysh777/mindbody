@@ -1,0 +1,292 @@
+import { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
+import { Download, RefreshCw, ChevronRight, ChevronDown } from 'lucide-react';
+import { exportToExcel } from '../utils/exportExcel';
+
+interface Service {
+  id: string;
+  mindbody_id: string;
+  name: string;
+  program_id: string | null;
+  default_duration_minutes: number | null;
+  description: string | null;
+  active: boolean;
+  online_booking_enabled: boolean;
+  raw_data: any;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ServiceCategory {
+  id: string;
+  mindbody_id: string;
+  name: string;
+  description: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface GroupedServices {
+  category: ServiceCategory | null;
+  services: Service[];
+}
+
+export function ServicesGroupedView() {
+  const [categories, setCategories] = useState<ServiceCategory[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const [categoriesRes, servicesRes] = await Promise.all([
+        supabase.from('service_categories').select('*').order('name', { ascending: true }),
+        supabase.from('services').select('*').order('name', { ascending: true }),
+      ]);
+
+      if (categoriesRes.error) throw categoriesRes.error;
+      if (servicesRes.error) throw servicesRes.error;
+
+      setCategories(categoriesRes.data || []);
+      setServices(servicesRes.data || []);
+
+      const allCategoryIds = new Set((categoriesRes.data || []).map(c => c.id));
+      setExpandedCategories(allCategoryIds);
+    } catch (error) {
+      console.error('Error loading data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const toggleCategory = (categoryId: string) => {
+    setExpandedCategories(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(categoryId)) {
+        newSet.delete(categoryId);
+      } else {
+        newSet.add(categoryId);
+      }
+      return newSet;
+    });
+  };
+
+  const collapseAll = () => setExpandedCategories(new Set());
+  const expandAll = () => {
+    const allIds = new Set([
+      ...categories.map(c => c.id),
+      'uncategorized'
+    ]);
+    setExpandedCategories(allIds);
+  };
+
+  const groupedData: GroupedServices[] = [
+    ...categories.map(category => ({
+      category,
+      services: services.filter(s => s.program_id === category.id),
+    })),
+    {
+      category: null,
+      services: services.filter(s => !s.program_id),
+    },
+  ].filter(group => group.services.length > 0);
+
+  const filteredGroupedData = groupedData.map(group => ({
+    ...group,
+    services: group.services.filter(service =>
+      search === '' ||
+      service.name.toLowerCase().includes(search.toLowerCase()) ||
+      (service.description && service.description.toLowerCase().includes(search.toLowerCase()))
+    ),
+  })).filter(group => group.services.length > 0);
+
+  const totalServices = filteredGroupedData.reduce((sum, group) => sum + group.services.length, 0);
+
+  const handleExport = () => {
+    const flatData = filteredGroupedData.flatMap(group =>
+      group.services.map(service => ({
+        category_name: group.category?.name || 'Uncategorized',
+        service_id: service.id,
+        service_name: service.name,
+        duration_minutes: service.default_duration_minutes,
+        active: service.active,
+        online_booking: service.online_booking_enabled,
+        description: service.description,
+      }))
+    );
+    exportToExcel(flatData, 'Services_by_Category');
+  };
+
+  return (
+    <div className="w-full bg-slate-50 min-h-full">
+      <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-bold text-slate-900">Services (Grouped by Category)</h2>
+            <p className="text-slate-600 mt-1">
+              {loading ? 'Loading...' : `${totalServices} services in ${filteredGroupedData.length} categories`}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={loadData}
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+            <button
+              onClick={handleExport}
+              disabled={totalServices === 0}
+              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+            >
+              <Download className="w-4 h-4" />
+              Export
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="p-6 space-y-4">
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <div className="flex gap-4 items-center">
+            <div className="flex-1">
+              <input
+                type="text"
+                placeholder="Search services..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <button
+              onClick={expandAll}
+              className="px-4 py-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
+            >
+              Expand All
+            </button>
+            <button
+              onClick={collapseAll}
+              className="px-4 py-2 text-sm text-slate-600 hover:text-slate-700 font-medium"
+            >
+              Collapse All
+            </button>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center text-slate-600">
+            Loading...
+          </div>
+        ) : filteredGroupedData.length === 0 ? (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center text-slate-600">
+            {services.length === 0 ? 'No services available. Try running a sync first.' : 'No services match your search'}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filteredGroupedData.map((group) => {
+              const categoryId = group.category?.id || 'uncategorized';
+              const isExpanded = expandedCategories.has(categoryId);
+
+              return (
+                <div key={categoryId} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                  <button
+                    onClick={() => toggleCategory(categoryId)}
+                    className="w-full flex items-center justify-between px-6 py-4 hover:bg-slate-50 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      {isExpanded ? (
+                        <ChevronDown className="w-5 h-5 text-slate-600" />
+                      ) : (
+                        <ChevronRight className="w-5 h-5 text-slate-600" />
+                      )}
+                      <div className="text-left">
+                        <h3 className="font-semibold text-slate-900 text-lg">
+                          {group.category?.name || 'Uncategorized'}
+                        </h3>
+                        {group.category?.description && (
+                          <p className="text-sm text-slate-600 mt-0.5">{group.category.description}</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
+                        {group.services.length} {group.services.length === 1 ? 'service' : 'services'}
+                      </span>
+                      {group.category?.active !== undefined && !group.category.active && (
+                        <span className="px-3 py-1 bg-red-100 text-red-700 rounded-full text-xs font-medium">
+                          Inactive Category
+                        </span>
+                      )}
+                    </div>
+                  </button>
+
+                  {isExpanded && (
+                    <div className="border-t border-slate-200">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-slate-50 border-b border-slate-200">
+                            <tr>
+                              <th className="px-6 py-3 text-left font-semibold text-slate-700 text-xs">Service Name</th>
+                              <th className="px-6 py-3 text-left font-semibold text-slate-700 text-xs w-32">Duration</th>
+                              <th className="px-6 py-3 text-left font-semibold text-slate-700 text-xs w-28">Status</th>
+                              <th className="px-6 py-3 text-left font-semibold text-slate-700 text-xs w-32">Online Booking</th>
+                              <th className="px-6 py-3 text-left font-semibold text-slate-700 text-xs">Description</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {group.services.map((service) => (
+                              <tr key={service.id} className="hover:bg-slate-50 transition-colors">
+                                <td className="px-6 py-3 text-slate-900 font-medium">{service.name}</td>
+                                <td className="px-6 py-3 text-slate-700">
+                                  {service.default_duration_minutes ? `${service.default_duration_minutes} min` : '-'}
+                                </td>
+                                <td className="px-6 py-3">
+                                  {service.active ? (
+                                    <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium">
+                                      Active
+                                    </span>
+                                  ) : (
+                                    <span className="px-2 py-1 bg-red-100 text-red-700 rounded text-xs font-medium">
+                                      Inactive
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-6 py-3">
+                                  {service.online_booking_enabled ? (
+                                    <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs font-medium">
+                                      Enabled
+                                    </span>
+                                  ) : (
+                                    <span className="px-2 py-1 bg-slate-100 text-slate-700 rounded text-xs font-medium">
+                                      Disabled
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-6 py-3 text-slate-600 text-xs max-w-md truncate" title={service.description || ''}>
+                                  {service.description || '-'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
