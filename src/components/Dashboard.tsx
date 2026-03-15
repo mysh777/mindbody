@@ -22,14 +22,12 @@ const tableNameMap: Record<MenuSection, { tableName: string; displayName: string
   'service-categories': { tableName: 'service_categories', displayName: 'Service Categories' },
   'session-types': { tableName: 'session_types', displayName: 'Session Types' },
   'staff-session-types': { tableName: 'staff_session_types', displayName: 'Staff ↔ Session Types' },
-  'pricing-options': { tableName: 'pricing_options', displayName: 'Pricing Options' },
+  'pricing-options': { tableName: 'pricing_options', displayName: 'Services' },
   'clients': { tableName: 'clients', displayName: 'Clients' },
   'appointments': { tableName: 'appointments', displayName: 'Appointments' },
   'sales': { tableName: 'sales', displayName: 'Sales' },
   'sale-items': { tableName: 'sale_items', displayName: 'Sale Items' },
-  'products': { tableName: 'products', displayName: 'Products' },
   'retail-products': { tableName: 'retail_products', displayName: 'Retail Products' },
-  'services': { tableName: 'services', displayName: 'Services' },
 };
 
 export function Dashboard() {

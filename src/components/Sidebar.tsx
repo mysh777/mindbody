@@ -14,9 +14,7 @@ export type MenuSection =
   | 'appointments'
   | 'sales'
   | 'sale-items'
-  | 'products'
-  | 'retail-products'
-  | 'services';
+  | 'retail-products';
 
 interface SidebarProps {
   activeSection: MenuSection;
@@ -40,14 +38,12 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
     { id: 'service-categories', label: 'Service Categories', icon: Grid3x3, color: 'cyan' },
     { id: 'session-types', label: 'Session Types', icon: Tag, color: 'green' },
     { id: 'staff-session-types', label: 'Staff ↔ Session Types', icon: Grid3x3, color: 'teal' },
-    { id: 'pricing-options', label: 'Pricing Options', icon: Package, color: 'pink' },
+    { id: 'pricing-options', label: 'Services', icon: FileJson, color: 'lime' },
     { id: 'clients', label: 'Clients', icon: Users, color: 'orange' },
     { id: 'appointments', label: 'Appointments', icon: Calendar, color: 'red' },
     { id: 'sales', label: 'Sales', icon: DollarSign, color: 'emerald' },
     { id: 'sale-items', label: 'Sale Items', icon: FileText, color: 'amber' },
-    { id: 'products', label: 'Products', icon: Package, color: 'indigo' },
     { id: 'retail-products', label: 'Retail Products', icon: ShoppingBag, color: 'rose' },
-    { id: 'services', label: 'Services', icon: FileJson, color: 'lime' },
   ];
 
   const getItemClass = (itemId: MenuSection) => {
