@@ -723,7 +723,7 @@ async function syncStaff(supabase: any, config: MindbodyConfig) {
 async function syncServices(supabase: any, config: MindbodyConfig, userToken: string) {
   console.log('Syncing services (pricing options)');
 
-  const url = `${MINDBODY_BASE_URL}/site/services`;
+  const url = `${MINDBODY_BASE_URL}/sale/services`;
   const startTime = Date.now();
 
   let offset = 0;
