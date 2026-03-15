@@ -319,16 +319,41 @@ async function syncClassDescriptions(supabase: any, config: MindbodyConfig) {
   let totalSynced = 0;
 
   while (true) {
-    const response = await fetch(
-      `${MINDBODY_BASE_URL}/class/classdescriptions?limit=${limit}&offset=${offset}`,
-      {
-        headers: getSourceHeaders(config),
-      }
+    const url = `${MINDBODY_BASE_URL}/class/classdescriptions?limit=${limit}&offset=${offset}`;
+    const startTime = Date.now();
+
+    const response = await fetch(url, {
+      headers: getSourceHeaders(config),
+    });
+
+    const durationMs = Date.now() - startTime;
+    const responseText = await response.text();
+
+    let data;
+    let error = null;
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      error = `Failed to parse response: ${e.message}`;
+      data = {};
+    }
+
+    await logApiCall(
+      supabase,
+      url,
+      "GET",
+      null,
+      response.status,
+      data,
+      error,
+      durationMs
     );
 
-    if (!response.ok) break;
+    if (!response.ok) {
+      console.error(`❌ Class descriptions sync failed: ${response.status}`);
+      break;
+    }
 
-    const data = await response.json();
     const descriptions = data.ClassDescriptions || [];
 
     if (descriptions.length === 0) break;
@@ -374,16 +399,41 @@ async function syncClasses(supabase: any, config: MindbodyConfig) {
   let totalSynced = 0;
 
   while (true) {
-    const response = await fetch(
-      `${MINDBODY_BASE_URL}/class/classes?startDateTime=${startDate.toISOString()}&endDateTime=${endDate.toISOString()}&limit=${limit}&offset=${offset}`,
-      {
-        headers: getSourceHeaders(config),
-      }
+    const url = `${MINDBODY_BASE_URL}/class/classes?startDateTime=${startDate.toISOString()}&endDateTime=${endDate.toISOString()}&limit=${limit}&offset=${offset}`;
+    const startTime = Date.now();
+
+    const response = await fetch(url, {
+      headers: getSourceHeaders(config),
+    });
+
+    const durationMs = Date.now() - startTime;
+    const responseText = await response.text();
+
+    let data;
+    let error = null;
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      error = `Failed to parse response: ${e.message}`;
+      data = {};
+    }
+
+    await logApiCall(
+      supabase,
+      url,
+      "GET",
+      null,
+      response.status,
+      data,
+      error,
+      durationMs
     );
 
-    if (!response.ok) break;
+    if (!response.ok) {
+      console.error(`❌ Classes sync failed: ${response.status}`);
+      break;
+    }
 
-    const data = await response.json();
     const classes = data.Classes || [];
 
     if (classes.length === 0) break;
@@ -472,6 +522,16 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
     if (sales.length === 0) break;
 
     for (const sale of sales) {
+      // Calculate total from Payments array
+      const totalPaymentAmount = sale.Payments?.reduce((sum: number, payment: any) => {
+        return sum + (payment.Amount || 0);
+      }, 0) || 0;
+
+      // Calculate total from PurchasedItems
+      const totalItemsAmount = sale.PurchasedItems?.reduce((sum: number, item: any) => {
+        return sum + (item.TotalAmount || 0);
+      }, 0) || 0;
+
       const saleData = {
         id: sale.Id || sale.SaleId,
         mindbody_id: sale.Id || sale.SaleId,
@@ -480,8 +540,8 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
         sale_datetime: sale.SaleDateTime,
         client_id: sale.ClientId,
         location_id: sale.LocationId,
-        total: sale.Total || 0,
-        payment_amount: sale.PaymentAmount || 0,
+        total: totalItemsAmount,
+        payment_amount: totalPaymentAmount,
         raw_data: sale,
         synced_at: new Date().toISOString(),
       };
@@ -494,13 +554,13 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
         for (const item of sale.PurchasedItems) {
           const itemData = {
             sale_id: insertedSale.id,
-            item_type: item.Type,
+            item_type: item.IsService ? 'Service' : 'Product',
             item_id: item.Id,
-            item_name: item.Name,
-            amount: item.Amount || 0,
+            item_name: item.Description,
+            amount: item.TotalAmount || 0,
             quantity: item.Quantity || 1,
             discount_amount: item.DiscountAmount || 0,
-            tax: item.Tax || 0,
+            tax: item.TaxAmount || 0,
             raw_data: item,
           };
 
@@ -524,16 +584,41 @@ async function syncStaff(supabase: any, config: MindbodyConfig) {
   let totalSynced = 0;
 
   while (true) {
-    const response = await fetch(
-      `${MINDBODY_BASE_URL}/staff/staff?limit=${limit}&offset=${offset}`,
-      {
-        headers: getSourceHeaders(config),
-      }
+    const url = `${MINDBODY_BASE_URL}/staff/staff?limit=${limit}&offset=${offset}`;
+    const startTime = Date.now();
+
+    const response = await fetch(url, {
+      headers: getSourceHeaders(config),
+    });
+
+    const durationMs = Date.now() - startTime;
+    const responseText = await response.text();
+
+    let data;
+    let error = null;
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      error = `Failed to parse response: ${e.message}`;
+      data = {};
+    }
+
+    await logApiCall(
+      supabase,
+      url,
+      "GET",
+      null,
+      response.status,
+      data,
+      error,
+      durationMs
     );
 
-    if (!response.ok) break;
+    if (!response.ok) {
+      console.error(`❌ Staff sync failed: ${response.status}`);
+      break;
+    }
 
-    const data = await response.json();
     const staffMembers = data.StaffMembers || [];
 
     if (staffMembers.length === 0) break;
@@ -583,21 +668,42 @@ async function syncLocations(supabase: any, config: MindbodyConfig) {
   const url = `${MINDBODY_BASE_URL}/site/locations`;
   console.log(`Fetching locations from: ${url}`);
 
+  const startTime = Date.now();
   const response = await fetch(url, {
     headers: getSourceHeaders(config),
   });
 
+  const durationMs = Date.now() - startTime;
   console.log(`Locations API response status: ${response.status}`);
 
   const responseText = await response.text();
   console.log(`Locations API response: ${responseText}`);
+
+  let data;
+  let error = null;
+  try {
+    data = JSON.parse(responseText);
+  } catch (e) {
+    error = `Failed to parse response: ${e.message}`;
+    data = {};
+  }
+
+  await logApiCall(
+    supabase,
+    url,
+    "GET",
+    null,
+    response.status,
+    data,
+    error,
+    durationMs
+  );
 
   if (!response.ok) {
     console.error(`Failed to fetch locations: ${response.status} - ${responseText}`);
     return 0;
   }
 
-  const data = JSON.parse(responseText);
   const locations = data.Locations || [];
 
   console.log(`Found ${locations.length} locations in response`);
