@@ -55,11 +55,25 @@ export function TableView({ tableName, displayName }: TableViewProps) {
     try {
       console.log(`📊 Loading data from table: ${tableName}`);
 
-      const { data: result, error } = await supabase
+      let query = supabase.from(tableName).select('*').limit(limit);
+
+      const { data: schemaCheck } = await supabase
         .from(tableName)
         .select('*')
-        .order('created_at', { ascending: false })
-        .limit(limit);
+        .limit(1);
+
+      if (schemaCheck && schemaCheck.length > 0) {
+        const columns = Object.keys(schemaCheck[0]);
+        if (columns.includes('created_at')) {
+          query = query.order('created_at', { ascending: false });
+        } else if (columns.includes('synced_at')) {
+          query = query.order('synced_at', { ascending: false });
+        } else if (columns.includes('updated_at')) {
+          query = query.order('updated_at', { ascending: false });
+        }
+      }
+
+      const { data: result, error } = await query;
 
       if (error) {
         console.error('❌ Error loading data:', error);

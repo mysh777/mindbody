@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Download, RefreshCw, ChevronRight, ChevronDown } from 'lucide-react';
+import { Download, RefreshCw, ChevronRight, ChevronDown, DollarSign } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 
 interface Service {
@@ -27,6 +27,28 @@ interface ServiceCategory {
   updated_at: string;
 }
 
+interface PricingOption {
+  id: string;
+  mindbody_id: string;
+  name: string;
+  service_type: string | null;
+  service_category: string | null;
+  price: number | null;
+  online_price: number | null;
+  duration: number | null;
+  tax_included: boolean;
+  tax_rate: number | null;
+  sold_online: boolean;
+  bookable_online: boolean;
+  is_introductory: boolean;
+  session_count: number | null;
+  expiration_days: number | null;
+  revenue_category: string | null;
+  active: boolean;
+  program_id: string | null;
+  program_name: string | null;
+}
+
 interface GroupedServices {
   category: ServiceCategory | null;
   services: Service[];
@@ -35,23 +57,28 @@ interface GroupedServices {
 export function ServicesGroupedView() {
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
   const [services, setServices] = useState<Service[]>([]);
+  const [pricingOptions, setPricingOptions] = useState<PricingOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  const [expandedServices, setExpandedServices] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [categoriesRes, servicesRes] = await Promise.all([
+      const [categoriesRes, servicesRes, pricingRes] = await Promise.all([
         supabase.from('service_categories').select('*').order('name', { ascending: true }),
         supabase.from('services').select('*').order('name', { ascending: true }),
+        supabase.from('pricing_options').select('*'),
       ]);
 
       if (categoriesRes.error) throw categoriesRes.error;
       if (servicesRes.error) throw servicesRes.error;
+      if (pricingRes.error) throw pricingRes.error;
 
       setCategories(categoriesRes.data || []);
       setServices(servicesRes.data || []);
+      setPricingOptions(pricingRes.data || []);
 
       const allCategoryIds = new Set((categoriesRes.data || []).map(c => c.id));
       setExpandedCategories(allCategoryIds);
@@ -78,13 +105,34 @@ export function ServicesGroupedView() {
     });
   };
 
-  const collapseAll = () => setExpandedCategories(new Set());
+  const toggleService = (serviceId: string) => {
+    setExpandedServices(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(serviceId)) {
+        newSet.delete(serviceId);
+      } else {
+        newSet.add(serviceId);
+      }
+      return newSet;
+    });
+  };
+
+  const collapseAll = () => {
+    setExpandedCategories(new Set());
+    setExpandedServices(new Set());
+  };
+
   const expandAll = () => {
-    const allIds = new Set([
-      ...categories.map(c => c.id),
-      'uncategorized'
-    ]);
-    setExpandedCategories(allIds);
+    const allCategoryIds = new Set([...categories.map(c => c.id), 'uncategorized']);
+    setExpandedCategories(allCategoryIds);
+    setExpandedServices(new Set());
+  };
+
+  const getPricingOptionsForService = (service: Service): PricingOption[] => {
+    return pricingOptions.filter(po =>
+      po.program_id === service.program_id &&
+      (po.service_type === service.name || po.service_category === service.name)
+    );
   };
 
   const groupedData: GroupedServices[] = [
@@ -111,17 +159,37 @@ export function ServicesGroupedView() {
 
   const handleExport = () => {
     const flatData = filteredGroupedData.flatMap(group =>
-      group.services.map(service => ({
-        category_name: group.category?.name || 'Uncategorized',
-        service_id: service.id,
-        service_name: service.name,
-        duration_minutes: service.default_duration_minutes,
-        active: service.active,
-        online_booking: service.online_booking_enabled,
-        description: service.description,
-      }))
+      group.services.flatMap(service => {
+        const pricing = getPricingOptionsForService(service);
+        if (pricing.length === 0) {
+          return [{
+            category_name: group.category?.name || 'Uncategorized',
+            service_name: service.name,
+            duration_minutes: service.default_duration_minutes,
+            active: service.active,
+            online_booking: service.online_booking_enabled,
+            description: service.description,
+            pricing_name: '-',
+            price: '-',
+            online_price: '-',
+          }];
+        }
+        return pricing.map(po => ({
+          category_name: group.category?.name || 'Uncategorized',
+          service_name: service.name,
+          duration_minutes: service.default_duration_minutes,
+          active: service.active,
+          online_booking: service.online_booking_enabled,
+          description: service.description,
+          pricing_name: po.name,
+          price: po.price,
+          online_price: po.online_price,
+          session_count: po.session_count,
+          expiration_days: po.expiration_days,
+        }));
+      })
     );
-    exportToExcel(flatData, 'Services_by_Category');
+    exportToExcel(flatData, 'Services_with_Pricing');
   };
 
   return (
@@ -129,7 +197,7 @@ export function ServicesGroupedView() {
       <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-bold text-slate-900">Services (Grouped by Category)</h2>
+            <h2 className="text-2xl font-bold text-slate-900">Services with Pricing</h2>
             <p className="text-slate-600 mt-1">
               {loading ? 'Loading...' : `${totalServices} services in ${filteredGroupedData.length} categories`}
             </p>
@@ -194,7 +262,7 @@ export function ServicesGroupedView() {
           <div className="space-y-3">
             {filteredGroupedData.map((group) => {
               const categoryId = group.category?.id || 'uncategorized';
-              const isExpanded = expandedCategories.has(categoryId);
+              const isCategoryExpanded = expandedCategories.has(categoryId);
 
               return (
                 <div key={categoryId} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -203,7 +271,7 @@ export function ServicesGroupedView() {
                     className="w-full flex items-center justify-between px-6 py-4 hover:bg-slate-50 transition-colors"
                   >
                     <div className="flex items-center gap-3">
-                      {isExpanded ? (
+                      {isCategoryExpanded ? (
                         <ChevronDown className="w-5 h-5 text-slate-600" />
                       ) : (
                         <ChevronRight className="w-5 h-5 text-slate-600" />
@@ -229,27 +297,40 @@ export function ServicesGroupedView() {
                     </div>
                   </button>
 
-                  {isExpanded && (
+                  {isCategoryExpanded && (
                     <div className="border-t border-slate-200">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead className="bg-slate-50 border-b border-slate-200">
-                            <tr>
-                              <th className="px-6 py-3 text-left font-semibold text-slate-700 text-xs">Service Name</th>
-                              <th className="px-6 py-3 text-left font-semibold text-slate-700 text-xs w-32">Duration</th>
-                              <th className="px-6 py-3 text-left font-semibold text-slate-700 text-xs w-28">Status</th>
-                              <th className="px-6 py-3 text-left font-semibold text-slate-700 text-xs w-32">Online Booking</th>
-                              <th className="px-6 py-3 text-left font-semibold text-slate-700 text-xs">Description</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {group.services.map((service) => (
-                              <tr key={service.id} className="hover:bg-slate-50 transition-colors">
-                                <td className="px-6 py-3 text-slate-900 font-medium">{service.name}</td>
-                                <td className="px-6 py-3 text-slate-700">
-                                  {service.default_duration_minutes ? `${service.default_duration_minutes} min` : '-'}
-                                </td>
-                                <td className="px-6 py-3">
+                      <div className="divide-y divide-slate-100">
+                        {group.services.map((service) => {
+                          const isServiceExpanded = expandedServices.has(service.id);
+                          const servicePricing = getPricingOptionsForService(service);
+
+                          return (
+                            <div key={service.id} className="bg-slate-50">
+                              <div className="flex items-center px-6 py-3 hover:bg-slate-100 transition-colors">
+                                <button
+                                  onClick={() => toggleService(service.id)}
+                                  className="flex items-center gap-3 flex-1 text-left"
+                                >
+                                  {isServiceExpanded ? (
+                                    <ChevronDown className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                                  ) : (
+                                    <ChevronRight className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                                  )}
+                                  <span className="font-medium text-slate-900">{service.name}</span>
+                                </button>
+
+                                <div className="flex items-center gap-3">
+                                  {service.default_duration_minutes && (
+                                    <span className="text-xs text-slate-600">
+                                      {service.default_duration_minutes} min
+                                    </span>
+                                  )}
+                                  {servicePricing.length > 0 && (
+                                    <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium flex items-center gap-1">
+                                      <DollarSign className="w-3 h-3" />
+                                      {servicePricing.length} {servicePricing.length === 1 ? 'price' : 'prices'}
+                                    </span>
+                                  )}
                                   {service.active ? (
                                     <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium">
                                       Active
@@ -259,25 +340,94 @@ export function ServicesGroupedView() {
                                       Inactive
                                     </span>
                                   )}
-                                </td>
-                                <td className="px-6 py-3">
-                                  {service.online_booking_enabled ? (
+                                  {service.online_booking_enabled && (
                                     <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs font-medium">
-                                      Enabled
-                                    </span>
-                                  ) : (
-                                    <span className="px-2 py-1 bg-slate-100 text-slate-700 rounded text-xs font-medium">
-                                      Disabled
+                                      Online
                                     </span>
                                   )}
-                                </td>
-                                <td className="px-6 py-3 text-slate-600 text-xs max-w-md truncate" title={service.description || ''}>
-                                  {service.description || '-'}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                                </div>
+                              </div>
+
+                              {isServiceExpanded && (
+                                <div className="bg-white border-t border-slate-200">
+                                  {servicePricing.length === 0 ? (
+                                    <div className="px-12 py-6 text-center text-slate-500 text-sm">
+                                      No pricing options available for this service
+                                    </div>
+                                  ) : (
+                                    <div className="overflow-x-auto">
+                                      <table className="w-full text-sm">
+                                        <thead className="bg-slate-50 border-b border-slate-200">
+                                          <tr>
+                                            <th className="px-6 py-2 text-left font-semibold text-slate-700 text-xs">Pricing Option</th>
+                                            <th className="px-6 py-2 text-right font-semibold text-slate-700 text-xs w-28">Price</th>
+                                            <th className="px-6 py-2 text-right font-semibold text-slate-700 text-xs w-28">Online Price</th>
+                                            <th className="px-6 py-2 text-center font-semibold text-slate-700 text-xs w-24">Duration</th>
+                                            <th className="px-6 py-2 text-center font-semibold text-slate-700 text-xs w-24">Sessions</th>
+                                            <th className="px-6 py-2 text-center font-semibold text-slate-700 text-xs w-28">Expiration</th>
+                                            <th className="px-6 py-2 text-center font-semibold text-slate-700 text-xs w-24">Status</th>
+                                            <th className="px-6 py-2 text-center font-semibold text-slate-700 text-xs w-28">Online</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                          {servicePricing.map((pricing) => (
+                                            <tr key={pricing.id} className="hover:bg-slate-50 transition-colors">
+                                              <td className="px-6 py-2.5 text-slate-900">
+                                                {pricing.name}
+                                                {pricing.is_introductory && (
+                                                  <span className="ml-2 px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-medium">
+                                                    Intro
+                                                  </span>
+                                                )}
+                                              </td>
+                                              <td className="px-6 py-2.5 text-right text-slate-900 font-mono font-medium">
+                                                {pricing.price ? `€${pricing.price}` : '-'}
+                                              </td>
+                                              <td className="px-6 py-2.5 text-right text-slate-900 font-mono font-medium">
+                                                {pricing.online_price ? `€${pricing.online_price}` : '-'}
+                                              </td>
+                                              <td className="px-6 py-2.5 text-center text-slate-700">
+                                                {pricing.duration ? `${pricing.duration} min` : '-'}
+                                              </td>
+                                              <td className="px-6 py-2.5 text-center text-slate-700">
+                                                {pricing.session_count || '-'}
+                                              </td>
+                                              <td className="px-6 py-2.5 text-center text-slate-700">
+                                                {pricing.expiration_days ? `${pricing.expiration_days} days` : '-'}
+                                              </td>
+                                              <td className="px-6 py-2.5 text-center">
+                                                {pricing.active ? (
+                                                  <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-medium">
+                                                    Active
+                                                  </span>
+                                                ) : (
+                                                  <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded text-xs font-medium">
+                                                    Inactive
+                                                  </span>
+                                                )}
+                                              </td>
+                                              <td className="px-6 py-2.5 text-center">
+                                                {pricing.bookable_online ? (
+                                                  <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs font-medium">
+                                                    Yes
+                                                  </span>
+                                                ) : (
+                                                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded text-xs font-medium">
+                                                    No
+                                                  </span>
+                                                )}
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
