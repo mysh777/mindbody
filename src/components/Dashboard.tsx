@@ -8,7 +8,7 @@ import { SyncHistory } from './SyncHistory';
 import { ApiLogs } from './ApiLogs';
 import { ActivationCode } from './ActivationCode';
 import { RawApiData } from './RawApiData';
-import { Users, Calendar, DollarSign, TrendingUp, Database, FileText, Key } from 'lucide-react';
+import { Users, Calendar, DollarSign, TrendingUp, Database, FileText, Key, FileJson } from 'lucide-react';
 
 interface Stats {
   clients: number;
@@ -68,7 +68,7 @@ export function Dashboard() {
     { id: 'charts', label: 'Charts', icon: TrendingUp },
     { id: 'history', label: 'Sync History', icon: Calendar },
     { id: 'logs', label: 'API Logs', icon: FileText },
-    { id: 'raw', label: 'Raw API Data', icon: FileText },
+    { id: 'raw', label: 'Raw API Data', icon: FileJson },
   ] as const;
 
   return (

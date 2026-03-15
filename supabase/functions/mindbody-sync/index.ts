@@ -789,7 +789,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { syncType = "locations" } = await req.json().catch(() => ({}));
+    const { syncType = "quick" } = await req.json().catch(() => ({}));
 
     if (syncType === "ping") {
       return new Response(
@@ -854,7 +854,11 @@ Deno.serve(async (req: Request) => {
 
       const results: Record<string, number> = {};
 
-      if (syncType === "all" || syncType === "locations") {
+      // Quick mode: only sync locations and last 100 sales (no staff, no classes)
+      const isQuickMode = syncType === "quick";
+      const shouldSyncAll = syncType === "all";
+
+      if (shouldSyncAll || syncType === "locations" || isQuickMode) {
         try {
           console.log('\n--- Syncing Locations ---');
           console.log('About to start locations sync');
@@ -866,7 +870,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      if (syncType === "all" || syncType === "staff") {
+      if (shouldSyncAll || syncType === "staff") {
         try {
           console.log('\n--- Syncing Staff ---');
           results.staff = await syncStaff(supabase, config);
@@ -877,7 +881,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      if (syncType === "all" || syncType === "class_descriptions") {
+      if (shouldSyncAll || syncType === "class_descriptions") {
         try {
           console.log('\n--- Syncing Class Descriptions ---');
           results.class_descriptions = await syncClassDescriptions(supabase, config);
@@ -888,7 +892,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      if (syncType === "all" || syncType === "classes") {
+      if (shouldSyncAll || syncType === "classes") {
         try {
           console.log('\n--- Syncing Classes ---');
           results.classes = await syncClasses(supabase, config);
@@ -909,7 +913,7 @@ Deno.serve(async (req: Request) => {
         console.error('Failed to get user token:', e);
       }
 
-      if (userToken && (syncType === "all" || syncType === "clients")) {
+      if (userToken && (shouldSyncAll || syncType === "clients")) {
         try {
           console.log('\n--- Syncing Clients (with User Token) ---');
           results.clients = await syncClients(supabase, config, userToken);
@@ -918,12 +922,12 @@ Deno.serve(async (req: Request) => {
           console.error('Clients sync failed:', e);
           results.clients = 0;
         }
-      } else if (syncType === "all" || syncType === "clients") {
+      } else if (shouldSyncAll || syncType === "clients") {
         console.warn('⚠️ Skipping clients sync - no user token available');
         results.clients = 0;
       }
 
-      if (userToken && (syncType === "all" || syncType === "appointments")) {
+      if (userToken && (shouldSyncAll || syncType === "appointments")) {
         try {
           console.log('\n--- Syncing Appointments (with User Token) ---');
           results.appointments = await syncAppointments(supabase, config, userToken);
@@ -932,12 +936,12 @@ Deno.serve(async (req: Request) => {
           console.error('Appointments sync failed:', e);
           results.appointments = 0;
         }
-      } else if (syncType === "all" || syncType === "appointments") {
+      } else if (shouldSyncAll || syncType === "appointments") {
         console.warn('⚠️ Skipping appointments sync - no user token available');
         results.appointments = 0;
       }
 
-      if (userToken && (syncType === "all" || syncType === "sales")) {
+      if (userToken && (shouldSyncAll || syncType === "sales" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Sales (with User Token) ---');
           results.sales = await syncSales(supabase, config, userToken);
@@ -946,7 +950,7 @@ Deno.serve(async (req: Request) => {
           console.error('Sales sync failed:', e);
           results.sales = 0;
         }
-      } else if (syncType === "all" || syncType === "sales") {
+      } else if (shouldSyncAll || syncType === "sales" || isQuickMode) {
         console.warn('⚠️ Skipping sales sync - no user token available');
         results.sales = 0;
       }

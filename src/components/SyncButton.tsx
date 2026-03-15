@@ -5,7 +5,7 @@ interface SyncButtonProps {
   onSyncComplete?: () => void;
 }
 
-type SyncType = 'all' | 'locations' | 'staff' | 'class_descriptions' | 'classes' | 'clients' | 'appointments' | 'sales';
+type SyncType = 'quick' | 'all' | 'locations' | 'staff' | 'class_descriptions' | 'classes' | 'clients' | 'appointments' | 'sales';
 
 interface SyncStatus {
   [key: string]: 'idle' | 'syncing' | 'success' | 'error';
@@ -100,6 +100,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
 
     const colorClasses: { [key: string]: string } = {
       blue: 'bg-blue-600 hover:bg-blue-700',
+      slate: 'bg-slate-600 hover:bg-slate-700',
       purple: 'bg-purple-600 hover:bg-purple-700',
       green: 'bg-green-600 hover:bg-green-700',
       teal: 'bg-teal-600 hover:bg-teal-700',
@@ -114,12 +115,21 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
   return (
     <div className="flex flex-col gap-4">
       <button
+        onClick={() => handleSync('quick')}
+        disabled={syncStatus['quick'] === 'syncing'}
+        className={getButtonClass('quick', 'blue')}
+      >
+        <RefreshCw className={`w-5 h-5 ${syncStatus['quick'] === 'syncing' ? 'animate-spin' : ''}`} />
+        {syncStatus['quick'] === 'syncing' ? 'Quick Syncing...' : 'Quick Sync (Sales)'}
+      </button>
+
+      <button
         onClick={() => handleSync('all')}
         disabled={syncStatus['all'] === 'syncing'}
-        className={getButtonClass('all', 'blue')}
+        className={getButtonClass('all', 'slate')}
       >
         <RefreshCw className={`w-5 h-5 ${syncStatus['all'] === 'syncing' ? 'animate-spin' : ''}`} />
-        {syncStatus['all'] === 'syncing' ? 'Syncing All...' : 'Sync All Data'}
+        {syncStatus['all'] === 'syncing' ? 'Full Syncing...' : 'Full Sync (All Data)'}
       </button>
 
       <div className="border-t pt-4">
