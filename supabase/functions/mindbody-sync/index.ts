@@ -720,7 +720,7 @@ async function syncStaff(supabase: any, config: MindbodyConfig) {
   return totalSynced;
 }
 
-async function syncServices(supabase: any, config: MindbodyConfig) {
+async function syncServices(supabase: any, config: MindbodyConfig, userToken: string) {
   console.log('Syncing services (pricing options)');
 
   const url = `${MINDBODY_BASE_URL}/site/services`;
@@ -735,7 +735,7 @@ async function syncServices(supabase: any, config: MindbodyConfig) {
     console.log(`Fetching services: ${fullUrl}`);
 
     const response = await fetch(fullUrl, {
-      headers: getSourceHeaders(config),
+      headers: getUserHeaders(config, userToken),
     });
 
     const durationMs = Date.now() - startTime;
@@ -1043,16 +1043,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      if (shouldSyncAll || syncType === "services" || isQuickMode) {
-        try {
-          console.log('\n--- Syncing Services (Pricing Options) ---');
-          results.services = await syncServices(supabase, config);
-          console.log(`Services synced: ${results.services}`);
-        } catch (e) {
-          console.error('Services sync failed:', e);
-          results.services = 0;
-        }
-      }
+      // Services moved to Phase 2 - requires user token
 
       if (shouldSyncAll || syncType === "products") {
         try {
@@ -1148,6 +1139,20 @@ Deno.serve(async (req: Request) => {
       } else if (shouldSyncAll || syncType === "sales" || isQuickMode) {
         console.warn('⚠️ Skipping sales sync - no user token available');
         results.sales = 0;
+      }
+
+      if (userToken && (shouldSyncAll || syncType === "services" || isQuickMode)) {
+        try {
+          console.log('\n--- Syncing Services (with User Token) ---');
+          results.services = await syncServices(supabase, config, userToken);
+          console.log(`Services synced: ${results.services}`);
+        } catch (e) {
+          console.error('Services sync failed:', e);
+          results.services = 0;
+        }
+      } else if (shouldSyncAll || syncType === "services" || isQuickMode) {
+        console.warn('⚠️ Skipping services sync - no user token available');
+        results.services = 0;
       }
 
       const totalRecords = Object.values(results).reduce((sum, count) => sum + count, 0);
