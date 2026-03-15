@@ -278,6 +278,57 @@ async function syncStaff(supabase: any, config: MindbodyConfig) {
   return totalSynced;
 }
 
+async function syncPrograms(supabase: any, config: MindbodyConfig) {
+  console.log('Syncing programs (service categories)');
+
+  const url = `${MINDBODY_BASE_URL}/site/programs`;
+  const startTime = Date.now();
+
+  const response = await fetch(url, {
+    headers: getSourceHeaders(config),
+  });
+
+  const durationMs = Date.now() - startTime;
+  const responseText = await response.text();
+
+  let data;
+  let error = null;
+  try {
+    data = JSON.parse(responseText);
+  } catch (e) {
+    error = `Failed to parse response: ${e.message}`;
+    data = {};
+  }
+
+  await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
+
+  if (!response.ok) {
+    console.error(`Failed to fetch programs: ${response.status}`);
+    return 0;
+  }
+
+  const programs = data.Programs || [];
+  console.log(`Found ${programs.length} programs`);
+
+  await saveRawData(supabase, 'programs', data, programs.length, null);
+
+  for (const program of programs) {
+    const categoryData = {
+      id: String(program.Id),
+      mindbody_id: String(program.Id),
+      name: program.Name,
+      description: program.Description,
+      active: true,
+    };
+
+    await supabase.from("service_categories").upsert(categoryData, {
+      onConflict: "mindbody_id",
+    });
+  }
+
+  return programs.length;
+}
+
 async function syncSessionTypes(supabase: any, config: MindbodyConfig) {
   console.log('Syncing session types (appointment types)');
 
@@ -415,9 +466,29 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
         synced_at: new Date().toISOString(),
       };
 
-      await supabase.from("pricing_options").upsert(pricingData, {
+      const { data: insertedPricing } = await supabase.from("pricing_options").upsert(pricingData, {
         onConflict: "mindbody_id",
-      });
+      }).select().single();
+
+      if (insertedPricing && service.ProgramId) {
+        const { data: sessionTypesForProgram } = await supabase
+          .from("session_types")
+          .select("id")
+          .eq("program_id", String(service.ProgramId));
+
+        if (sessionTypesForProgram && sessionTypesForProgram.length > 0) {
+          for (const st of sessionTypesForProgram) {
+            await supabase.from("pricing_option_session_types").upsert({
+              pricing_option_id: insertedPricing.id,
+              session_type_id: st.id,
+            }, {
+              onConflict: "pricing_option_id,session_type_id",
+              ignoreDuplicates: true,
+            });
+          }
+          console.log(`Linked pricing option ${service.Name} to ${sessionTypesForProgram.length} session types`);
+        }
+      }
     }
 
     totalSynced += services.length;
@@ -867,6 +938,17 @@ Deno.serve(async (req: Request) => {
         } catch (e) {
           console.error('❌ Staff sync failed:', e);
           results.staff = 0;
+        }
+      }
+
+      if (shouldSyncAll || syncType === "programs" || syncType === "session_types" || isQuickMode) {
+        try {
+          console.log('\n--- Syncing Programs (Service Categories) ---');
+          results.programs = await syncPrograms(supabase, config);
+          console.log(`✅ Programs synced: ${results.programs}`);
+        } catch (e) {
+          console.error('❌ Programs sync failed:', e);
+          results.programs = 0;
         }
       }
 
