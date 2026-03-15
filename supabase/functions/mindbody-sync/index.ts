@@ -143,6 +143,55 @@ async function saveRawData(supabase: any, endpointType: string, responseData: an
   }
 }
 
+async function syncSites(supabase: any, config: MindbodyConfig) {
+  console.log('Syncing site information');
+  const url = `${MINDBODY_BASE_URL}/site/sites`;
+  const startTime = Date.now();
+
+  const response = await fetch(url, {
+    headers: getSourceHeaders(config),
+  });
+
+  const durationMs = Date.now() - startTime;
+  const responseText = await response.text();
+
+  let data;
+  let error = null;
+  try {
+    data = JSON.parse(responseText);
+  } catch (e) {
+    error = `Failed to parse response: ${e.message}`;
+    data = {};
+  }
+
+  await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
+
+  if (!response.ok) {
+    console.error(`Failed to fetch sites: ${response.status}`);
+    return 0;
+  }
+
+  const sites = data.Sites || [];
+  console.log(`Found ${sites.length} sites`);
+  await saveRawData(supabase, 'sites', data, sites.length, data.PaginationResponse);
+
+  for (const site of sites) {
+    const siteData = {
+      mindbody_id: String(site.Id),
+      name: site.Name,
+      per_staff_pricing: site.PerStaffPricing || false,
+      raw_data: site,
+      synced_at: new Date().toISOString(),
+    };
+
+    await supabase.from("sites").upsert(siteData, {
+      onConflict: "mindbody_id",
+    });
+  }
+
+  return sites.length;
+}
+
 async function syncLocations(supabase: any, config: MindbodyConfig) {
   console.log('Syncing locations');
   const url = `${MINDBODY_BASE_URL}/site/locations`;
@@ -174,7 +223,13 @@ async function syncLocations(supabase: any, config: MindbodyConfig) {
   const locations = data.Locations || [];
   await saveRawData(supabase, 'locations', data, locations.length, data.PaginationResponse);
 
+  let validCount = 0;
   for (const loc of locations) {
+    if (!loc.Name || loc.Name.trim() === '') {
+      console.log(`Skipping invalid location: ${loc.Id}`);
+      continue;
+    }
+
     const locData = {
       id: String(loc.Id || loc.LocationId),
       mindbody_id: String(loc.Id || loc.LocationId),
@@ -194,9 +249,11 @@ async function syncLocations(supabase: any, config: MindbodyConfig) {
     await supabase.from("locations").upsert(locData, {
       onConflict: "mindbody_id",
     });
+    validCount++;
   }
 
-  return locations.length;
+  console.log(`Valid locations synced: ${validCount}/${locations.length}`);
+  return validCount;
 }
 
 async function syncStaff(supabase: any, config: MindbodyConfig) {
@@ -396,6 +453,81 @@ async function syncSessionTypes(supabase: any, config: MindbodyConfig) {
     offset += limit;
 
     if (sessionTypes.length < limit) break;
+  }
+
+  return totalSynced;
+}
+
+async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig) {
+  console.log('Syncing staff session types (staff-service relationships)');
+
+  const { data: allStaff } = await supabase.from("staff").select("id, mindbody_id");
+
+  if (!allStaff || allStaff.length === 0) {
+    console.warn('No staff found. Run staff sync first.');
+    return 0;
+  }
+
+  let totalSynced = 0;
+
+  for (const staff of allStaff) {
+    const url = `${MINDBODY_BASE_URL}/staff/staffsessiontypes?staffId=${staff.mindbody_id}`;
+    const startTime = Date.now();
+
+    const response = await fetch(url, {
+      headers: getSourceHeaders(config),
+    });
+
+    const durationMs = Date.now() - startTime;
+    const responseText = await response.text();
+
+    let data;
+    let error = null;
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      error = `Failed to parse response: ${e.message}`;
+      data = {};
+    }
+
+    await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
+
+    if (!response.ok) {
+      console.error(`Failed to fetch session types for staff ${staff.mindbody_id}: ${response.status}`);
+      continue;
+    }
+
+    const staffSessionTypes = data.StaffSessionTypes || [];
+    console.log(`Found ${staffSessionTypes.length} session types for staff ${staff.mindbody_id}`);
+
+    for (const sst of staffSessionTypes) {
+      const { data: sessionType } = await supabase
+        .from("session_types")
+        .select("id")
+        .eq("mindbody_id", String(sst.Id))
+        .maybeSingle();
+
+      if (!sessionType) {
+        console.warn(`Session type ${sst.Id} not found in database`);
+        continue;
+      }
+
+      const relationId = `${staff.id}_${sessionType.id}`;
+      const relationData = {
+        id: relationId,
+        staff_id: staff.id,
+        session_type_id: sessionType.id,
+        is_active: true,
+        raw_data: sst,
+        updated_at: new Date().toISOString(),
+      };
+
+      await supabase.from("staff_session_types").upsert(relationData, {
+        onConflict: "id",
+      });
+
+      totalSynced++;
+    }
   }
 
   return totalSynced;
@@ -919,6 +1051,17 @@ Deno.serve(async (req: Request) => {
 
       console.log('\n=== Phase 1: Public Endpoints ===');
 
+      if (shouldSyncAll || syncType === "sites" || isQuickMode) {
+        try {
+          console.log('\n--- Syncing Sites ---');
+          results.sites = await syncSites(supabase, config);
+          console.log(`✅ Sites synced: ${results.sites}`);
+        } catch (e) {
+          console.error('❌ Sites sync failed:', e);
+          results.sites = 0;
+        }
+      }
+
       if (shouldSyncAll || syncType === "locations" || isQuickMode) {
         try {
           console.log('\n--- Syncing Locations ---');
@@ -963,14 +1106,14 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      if (shouldSyncAll || syncType === "products") {
+      if (shouldSyncAll || syncType === "staff_session_types" || isQuickMode) {
         try {
-          console.log('\n--- Syncing Retail Products ---');
-          results.products = await syncProducts(supabase, config);
-          console.log(`✅ Products synced: ${results.products}`);
+          console.log('\n--- Syncing Staff-Session Type Relationships ---');
+          results.staff_session_types = await syncStaffSessionTypes(supabase, config);
+          console.log(`✅ Staff-Session relationships synced: ${results.staff_session_types}`);
         } catch (e) {
-          console.error('❌ Products sync failed:', e);
-          results.products = 0;
+          console.error('❌ Staff-Session relationships sync failed:', e);
+          results.staff_session_types = 0;
         }
       }
 
