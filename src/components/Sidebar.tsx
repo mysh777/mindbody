@@ -38,7 +38,7 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
     { id: 'service-categories', label: 'Service Categories', icon: Grid3x3, color: 'cyan' },
     { id: 'session-types', label: 'Session Types', icon: Tag, color: 'green' },
     { id: 'staff-session-types', label: 'Staff ↔ Session Types', icon: Grid3x3, color: 'teal' },
-    { id: 'pricing-options', label: 'Services', icon: FileJson, color: 'lime' },
+    { id: 'pricing-options', label: 'Services', icon: Package, color: 'lime' },
     { id: 'clients', label: 'Clients', icon: Users, color: 'orange' },
     { id: 'appointments', label: 'Appointments', icon: Calendar, color: 'red' },
     { id: 'sales', label: 'Sales', icon: DollarSign, color: 'emerald' },

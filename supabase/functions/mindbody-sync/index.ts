@@ -1179,6 +1179,17 @@ Deno.serve(async (req: Request) => {
         }
       }
 
+      if (shouldSyncAll || syncType === "retail_products") {
+        try {
+          console.log('\n--- Syncing Retail Products ---');
+          results.retail_products = await syncProducts(supabase, config);
+          console.log(`✅ Retail products synced: ${results.retail_products}`);
+        } catch (e) {
+          console.error('❌ Retail products sync failed:', e);
+          results.retail_products = 0;
+        }
+      }
+
       const totalRecords = Object.values(results).reduce((sum, count) => sum + count, 0);
 
       console.log('\n=== Sync Completed Successfully ===');
