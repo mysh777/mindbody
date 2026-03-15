@@ -243,7 +243,7 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
   let totalSynced = 0;
 
   while (true) {
-    const url = `${MINDBODY_BASE_URL}/appointment/appointments?startDate=${startDate.toISOString().split('T')[0]}&endDate=${endDate.toISOString().split('T')[0]}&limit=${limit}&offset=${offset}`;
+    const url = `${MINDBODY_BASE_URL}/appointment/staffappointments?startDateTime=${startDate.toISOString()}&endDateTime=${endDate.toISOString()}&limit=${limit}&offset=${offset}`;
     const startTime = Date.now();
 
     const response = await fetch(url, {
