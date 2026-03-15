@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { SyncButton } from './SyncButton';
 import { DataTable } from './DataTable';
+import { TableNavigator } from './TableNavigator';
 import { PivotTable } from './PivotTable';
 import { Charts } from './Charts';
 import { SyncHistory } from './SyncHistory';
@@ -27,6 +28,7 @@ export function Dashboard() {
     lastSync: null,
   });
   const [activeTab, setActiveTab] = useState<'overview' | 'activation' | 'data' | 'pivot' | 'charts' | 'history' | 'logs' | 'raw'>('overview');
+  const [selectedTable, setSelectedTable] = useState('sales');
   const [loading, setLoading] = useState(true);
 
   const loadStats = async () => {
@@ -208,7 +210,16 @@ export function Dashboard() {
         )}
 
         {activeTab === 'activation' && <ActivationCode />}
-        {activeTab === 'data' && <DataTable />}
+        {activeTab === 'data' && (
+          <div className="flex gap-6 h-[calc(100vh-300px)]">
+            <div className="w-72 flex-shrink-0">
+              <TableNavigator selectedTable={selectedTable} onTableSelect={setSelectedTable} />
+            </div>
+            <div className="flex-1 overflow-auto">
+              <DataTable selectedTable={selectedTable} />
+            </div>
+          </div>
+        )}
         {activeTab === 'pivot' && <PivotTable />}
         {activeTab === 'charts' && <Charts />}
         {activeTab === 'history' && <SyncHistory />}

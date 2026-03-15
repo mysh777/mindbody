@@ -675,18 +675,23 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
 
     if (offset === 0) {
       await saveRawData(supabase, 'appointments', data, appointments.length, data.PaginationResponse);
+      if (appointments.length > 0) {
+        console.log('Sample appointment data:', JSON.stringify(appointments[0], null, 2));
+      }
     }
 
     if (appointments.length === 0) break;
 
     for (const appt of appointments) {
+      const sessionTypeId = appt.SessionTypeId || appt.SessionType?.Id || null;
+
       const apptData = {
         id: String(appt.Id),
         mindbody_id: String(appt.Id),
         client_id: appt.ClientId ? String(appt.ClientId) : null,
-        staff_id: appt.StaffId ? String(appt.StaffId) : null,
-        location_id: appt.LocationId ? String(appt.LocationId) : null,
-        session_type_id: appt.SessionTypeId ? String(appt.SessionTypeId) : null,
+        staff_id: appt.StaffId || appt.Staff?.Id ? String(appt.StaffId || appt.Staff?.Id) : null,
+        location_id: appt.LocationId || appt.Location?.Id ? String(appt.LocationId || appt.Location?.Id) : null,
+        session_type_id: sessionTypeId ? String(sessionTypeId) : null,
         start_datetime: appt.StartDateTime,
         end_datetime: appt.EndDateTime,
         duration_minutes: appt.Duration,
@@ -697,9 +702,13 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
         synced_at: new Date().toISOString(),
       };
 
-      await supabase.from("appointments").upsert(apptData, {
+      const { error: upsertError } = await supabase.from("appointments").upsert(apptData, {
         onConflict: "mindbody_id",
       });
+
+      if (upsertError) {
+        console.error(`Failed to upsert appointment ${appt.Id}:`, upsertError);
+      }
 
       if (appt.AddOns && appt.AddOns.length > 0) {
         for (const addon of appt.AddOns) {

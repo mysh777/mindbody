@@ -3,7 +3,11 @@ import { supabase } from '../lib/supabase';
 import { Download, Filter, RefreshCw, ChevronDown } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 
-type DataType = 'clients' | 'appointments' | 'session_types' | 'sales' | 'staff' | 'locations' | 'products' | 'pricing_options' | 'sale_items';
+interface DataTableProps {
+  selectedTable?: string;
+}
+
+type DataType = string;
 
 const formatDate = (dateString: string | null | undefined): string => {
   if (!dateString) return '-';
@@ -38,8 +42,8 @@ const getColumnWidth = (columnName: string, values: any[]): string => {
   return 'min-w-[200px]';
 };
 
-export function DataTable() {
-  const [dataType, setDataType] = useState<DataType>('sales');
+export function DataTable({ selectedTable = 'sales' }: DataTableProps) {
+  const [dataType, setDataType] = useState<DataType>(selectedTable);
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -47,36 +51,18 @@ export function DataTable() {
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
   const [showFilters, setShowFilters] = useState(false);
 
-  const dataTypes: { value: DataType; label: string }[] = [
-    { value: 'clients', label: 'Clients' },
-    { value: 'appointments', label: 'Appointments' },
-    { value: 'session_types', label: 'Session Types (Services)' },
-    { value: 'pricing_options', label: 'Pricing Options' },
-    { value: 'products', label: 'Retail Products' },
-    { value: 'sales', label: 'Sales' },
-    { value: 'sale_items', label: 'Sale Items' },
-    { value: 'staff', label: 'Staff' },
-    { value: 'locations', label: 'Locations' },
-  ];
+  useEffect(() => {
+    if (selectedTable) {
+      setDataType(selectedTable);
+    }
+  }, [selectedTable]);
 
   const loadData = async () => {
     setLoading(true);
     setColumnFilters({});
     try {
-      const tableMap: Record<DataType, string> = {
-        'clients': 'clients',
-        'appointments': 'appointments',
-        'session_types': 'session_types',
-        'sales': 'sales',
-        'sale_items': 'sale_items',
-        'staff': 'staff',
-        'locations': 'locations',
-        'products': 'retail_products',
-        'pricing_options': 'pricing_options',
-      };
-
-      const tableName = tableMap[dataType];
-      console.log(`📊 Loading data from table: ${tableName} (${dataType})`);
+      const tableName = dataType;
+      console.log(`📊 Loading data from table: ${tableName}`);
 
       const { data: result, error } = await supabase
         .from(tableName)

@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { RefreshCw, Users, Calendar, DollarSign, MapPin, UserCog, BookOpen, GraduationCap, Package, ShoppingBag } from 'lucide-react';
+import { RefreshCw, Users, Calendar, DollarSign, MapPin, UserCog, Package, Database, Grid3x3, Tag } from 'lucide-react';
 
 interface SyncButtonProps {
   onSyncComplete?: () => void;
 }
 
-type SyncType = 'quick' | 'all' | 'locations' | 'services' | 'products' | 'staff' | 'class_descriptions' | 'classes' | 'clients' | 'appointments' | 'sales';
+type SyncType = 'quick' | 'all' | 'sites' | 'locations' | 'staff' | 'programs' | 'session_types' | 'staff_session_types' | 'pricing_options' | 'clients' | 'appointments' | 'sales';
 
 interface SyncStatus {
   [key: string]: 'idle' | 'syncing' | 'success' | 'error';
@@ -75,12 +75,13 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
   };
 
   const syncButtons = [
+    { type: 'sites' as SyncType, label: 'Sites', icon: Database, color: 'slate' },
     { type: 'locations' as SyncType, label: 'Locations', icon: MapPin, color: 'blue' },
-    { type: 'services' as SyncType, label: 'Services (Pricing)', icon: Package, color: 'cyan' },
-    { type: 'products' as SyncType, label: 'Retail Products', icon: ShoppingBag, color: 'pink' },
     { type: 'staff' as SyncType, label: 'Staff', icon: UserCog, color: 'purple' },
-    { type: 'class_descriptions' as SyncType, label: 'Class Types', icon: BookOpen, color: 'green' },
-    { type: 'classes' as SyncType, label: 'Classes', icon: GraduationCap, color: 'teal' },
+    { type: 'programs' as SyncType, label: 'Service Categories', icon: Grid3x3, color: 'cyan' },
+    { type: 'session_types' as SyncType, label: 'Session Types', icon: Tag, color: 'green' },
+    { type: 'staff_session_types' as SyncType, label: 'Staff ↔ Services', icon: Grid3x3, color: 'teal' },
+    { type: 'pricing_options' as SyncType, label: 'Pricing Options', icon: Package, color: 'pink' },
     { type: 'clients' as SyncType, label: 'Clients', icon: Users, color: 'orange' },
     { type: 'appointments' as SyncType, label: 'Appointments', icon: Calendar, color: 'red' },
     { type: 'sales' as SyncType, label: 'Sales', icon: DollarSign, color: 'emerald' },
@@ -124,7 +125,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
         className={getButtonClass('quick', 'blue')}
       >
         <RefreshCw className={`w-5 h-5 ${syncStatus['quick'] === 'syncing' ? 'animate-spin' : ''}`} />
-        {syncStatus['quick'] === 'syncing' ? 'Quick Syncing...' : 'Quick Sync (Sales)'}
+        {syncStatus['quick'] === 'syncing' ? 'Quick Syncing...' : 'Quick Sync (Main Tables)'}
       </button>
 
       <button
