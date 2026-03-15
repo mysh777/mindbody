@@ -60,7 +60,7 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
   };
 
   return (
-    <div className="w-64 bg-white border-r border-slate-200 h-screen overflow-y-auto">
+    <div className="w-64 bg-white border-r border-slate-200 h-screen overflow-y-auto flex-shrink-0">
       <div className="sticky top-0 bg-white border-b border-slate-200 p-6 z-10">
         <h1 className="text-2xl font-bold text-slate-900">Mindbody</h1>
         <p className="text-sm text-slate-600 mt-1">Analytics Dashboard</p>

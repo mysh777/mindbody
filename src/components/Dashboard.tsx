@@ -81,7 +81,7 @@ export function Dashboard() {
 
     if (activeSection === 'pivot-reports') {
       return (
-        <div className="flex-1 bg-slate-50">
+        <div className="w-full bg-slate-50 min-h-full">
           <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
             <h2 className="text-2xl font-bold text-slate-900">Pivot Reports</h2>
             <p className="text-slate-600 mt-1">Create custom pivot tables and analyze your data</p>
@@ -102,9 +102,11 @@ export function Dashboard() {
   };
 
   return (
-    <div className="flex h-screen bg-slate-50">
+    <div className="flex h-screen bg-slate-50 overflow-hidden">
       <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} />
-      {renderContent()}
+      <div className="flex-1 overflow-auto">
+        {renderContent()}
+      </div>
     </div>
   );
 }

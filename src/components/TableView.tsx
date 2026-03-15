@@ -101,7 +101,7 @@ export function TableView({ tableName, displayName }: TableViewProps) {
   };
 
   return (
-    <div className="flex-1 bg-slate-50">
+    <div className="w-full bg-slate-50 min-h-full">
       <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
         <div className="flex items-center justify-between">
           <div>

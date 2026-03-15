@@ -24,7 +24,7 @@ export function ApiIntegration({ onSyncComplete }: ApiIntegrationProps) {
   ];
 
   return (
-    <div className="flex-1 bg-slate-50">
+    <div className="w-full bg-slate-50 min-h-full">
       <div className="bg-white border-b border-slate-200 shadow-sm">
         <div className="px-6 py-6">
           <h2 className="text-2xl font-bold text-slate-900">API Integration</h2>
