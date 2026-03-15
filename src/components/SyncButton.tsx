@@ -14,14 +14,20 @@ interface SyncStatus {
 export function SyncButton({ onSyncComplete }: SyncButtonProps) {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({});
   const [error, setError] = useState<string | null>(null);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
 
   const handleSync = async (syncType: SyncType) => {
+    console.log(`🔄 Starting sync for: ${syncType}`);
     setSyncStatus(prev => ({ ...prev, [syncType]: 'syncing' }));
     setError(null);
+    setSyncResult(null);
 
     try {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+      console.log(`📡 Calling edge function: ${supabaseUrl}/functions/v1/mindbody-sync`);
+      console.log(`📦 Payload:`, { syncType });
 
       const response = await fetch(`${supabaseUrl}/functions/v1/mindbody-sync`, {
         method: 'POST',
@@ -32,17 +38,25 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
         body: JSON.stringify({ syncType }),
       });
 
+      console.log(`📥 Response status: ${response.status}`);
+
+      const responseText = await response.text();
+      console.log(`📄 Response text:`, responseText);
+
       if (!response.ok) {
-        throw new Error('Sync failed');
+        throw new Error(`Sync failed with status ${response.status}: ${responseText}`);
       }
 
-      const result = await response.json();
+      const result = JSON.parse(responseText);
+      console.log(`✅ Result:`, result);
 
       if (result.error) {
         throw new Error(result.error);
       }
 
       setSyncStatus(prev => ({ ...prev, [syncType]: 'success' }));
+      setSyncResult(JSON.stringify(result, null, 2));
+
       setTimeout(() => {
         setSyncStatus(prev => ({ ...prev, [syncType]: 'idle' }));
       }, 3000);
@@ -51,6 +65,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
         onSyncComplete();
       }
     } catch (err) {
+      console.error(`❌ Sync error:`, err);
       setSyncStatus(prev => ({ ...prev, [syncType]: 'error' }));
       setError(err instanceof Error ? err.message : 'Failed to sync data');
       setTimeout(() => {
@@ -82,7 +97,18 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     if (status === 'error') {
       return `${baseClass} bg-red-500 text-white`;
     }
-    return `${baseClass} bg-${color}-600 text-white hover:bg-${color}-700`;
+
+    const colorClasses: { [key: string]: string } = {
+      blue: 'bg-blue-600 hover:bg-blue-700',
+      purple: 'bg-purple-600 hover:bg-purple-700',
+      green: 'bg-green-600 hover:bg-green-700',
+      teal: 'bg-teal-600 hover:bg-teal-700',
+      orange: 'bg-orange-600 hover:bg-orange-700',
+      red: 'bg-red-600 hover:bg-red-700',
+      emerald: 'bg-emerald-600 hover:bg-emerald-700',
+    };
+
+    return `${baseClass} ${colorClasses[color] || 'bg-gray-600 hover:bg-gray-700'} text-white`;
   };
 
   return (
@@ -116,6 +142,12 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
       {error && (
         <div className="text-sm text-red-600 bg-red-50 px-4 py-2 rounded-lg border border-red-200">
           {error}
+        </div>
+      )}
+
+      {syncResult && (
+        <div className="text-xs text-gray-700 bg-gray-50 px-4 py-2 rounded-lg border border-gray-200 max-h-64 overflow-auto">
+          <pre className="whitespace-pre-wrap">{syncResult}</pre>
         </div>
       )}
     </div>

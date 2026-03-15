@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { RefreshCw, ChevronDown, ChevronUp, Clock, AlertCircle, CheckCircle } from 'lucide-react';
+import { RefreshCw, ChevronDown, ChevronUp, Clock, AlertCircle, CheckCircle, Trash2 } from 'lucide-react';
 
 interface ApiLog {
   id: string;
@@ -17,6 +17,7 @@ interface ApiLog {
 export function ApiLogs() {
   const [logs, setLogs] = useState<ApiLog[]>([]);
   const [loading, setLoading] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
 
   const fetchLogs = async () => {
@@ -31,6 +32,23 @@ export function ApiLogs() {
       setLogs(data);
     }
     setLoading(false);
+  };
+
+  const clearLogs = async () => {
+    if (!confirm('Are you sure you want to clear all API logs?')) {
+      return;
+    }
+
+    setClearing(true);
+    const { error } = await supabase
+      .from('api_logs')
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000');
+
+    if (!error) {
+      setLogs([]);
+    }
+    setClearing(false);
   };
 
   useEffect(() => {
@@ -62,14 +80,24 @@ export function ApiLogs() {
           <h2 className="text-xl font-bold text-slate-900">API Request Logs</h2>
           <p className="text-sm text-slate-600 mt-1">Real-time monitoring of Mindbody API calls</p>
         </div>
-        <button
-          onClick={fetchLogs}
-          disabled={loading}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={clearLogs}
+            disabled={clearing || logs.length === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 font-medium"
+          >
+            <Trash2 className={`w-4 h-4 ${clearing ? 'animate-pulse' : ''}`} />
+            Clear Logs
+          </button>
+          <button
+            onClick={fetchLogs}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {logs.length === 0 ? (
