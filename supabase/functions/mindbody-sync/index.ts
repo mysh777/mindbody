@@ -594,6 +594,23 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
         expiration_days: service.ExpirationDays,
         revenue_category: service.RevenueCategory,
         active: service.Active !== false,
+        product_id: service.ProductId ? String(service.ProductId) : null,
+        program_id: service.ProgramId ? String(service.ProgramId) : null,
+        program_name: service.Program,
+        priority: service.Priority,
+        discontinued: service.Discontinued || false,
+        is_intro_offer: service.IsIntroOffer || false,
+        membership_id: service.MembershipId ? String(service.MembershipId) : null,
+        expiration_type: service.ExpirationType,
+        expiration_unit: service.ExpirationUnit,
+        expiration_length: service.ExpirationLength,
+        intro_offer_type: service.IntroOfferType,
+        use_at_location_ids: service.UseAtLocationIds ? JSON.stringify(service.UseAtLocationIds) : null,
+        sell_at_location_ids: service.SellAtLocationIds ? JSON.stringify(service.SellAtLocationIds) : null,
+        sale_in_contract_only: service.SaleInContractOnly || false,
+        restrict_to_membership_ids: service.RestrictToMembershipIds ? JSON.stringify(service.RestrictToMembershipIds) : null,
+        is_third_party_discount_pricing: service.IsThirdPartyDiscountPricing || false,
+        apply_member_discounts_of_membership_ids: service.ApplyMemberDiscountsOfMembershipIds ? JSON.stringify(service.ApplyMemberDiscountsOfMembershipIds) : null,
         raw_data: service,
         synced_at: new Date().toISOString(),
       };
@@ -873,9 +890,15 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
       const saleData = {
         id: String(sale.Id || sale.SaleId),
         mindbody_id: String(sale.Id || sale.SaleId),
+        mindbody_sale_id: String(sale.Id || sale.SaleId),
+        mindbody_client_id: sale.ClientId ? String(sale.ClientId) : null,
         sale_date: sale.SaleDate,
         sale_time: sale.SaleTime,
         sale_datetime: sale.SaleDateTime,
+        mindbody_location_id: sale.LocationId,
+        sales_rep_id: sale.SalesRepId ? String(sale.SalesRepId) : null,
+        recipient_client_id: sale.RecipientClientId ? String(sale.RecipientClientId) : null,
+        original_sale_datetime: sale.OriginalSaleDateTime,
         client_id: sale.ClientId ? String(sale.ClientId) : null,
         location_id: sale.LocationId ? String(sale.LocationId) : null,
         total: totalItemsAmount,
@@ -888,10 +911,32 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
         onConflict: "mindbody_id",
       }).select().single();
 
+      if (sale.Payments && insertedSale) {
+        for (const payment of sale.Payments) {
+          const paymentData = {
+            mindbody_id: `${sale.Id}-${payment.Id}`,
+            sale_id: insertedSale.id,
+            mindbody_sale_id: String(sale.Id),
+            type: payment.Type,
+            method: payment.Method,
+            amount: payment.Amount,
+            notes: payment.Notes,
+            transaction_id: payment.TransactionId,
+            raw_data: payment,
+            synced_at: new Date().toISOString(),
+          };
+
+          await supabase.from("payments").upsert(paymentData, {
+            onConflict: "mindbody_id",
+          });
+        }
+      }
+
       if (sale.PurchasedItems && insertedSale) {
         for (const item of sale.PurchasedItems) {
           const itemData = {
             sale_id: insertedSale.id,
+            mindbody_id: String(item.Id),
             item_type: item.IsService ? 'Service' : 'Product',
             item_id: String(item.Id),
             item_name: item.Description || item.Name,
@@ -899,10 +944,34 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
             quantity: item.Quantity || 1,
             discount_amount: item.DiscountAmount || 0,
             tax: item.TaxAmount || 0,
+            tax1: item.Tax1 || 0,
+            tax2: item.Tax2 || 0,
+            tax3: item.Tax3 || 0,
+            tax4: item.Tax4 || 0,
+            tax5: item.Tax5 || 0,
+            notes: item.Notes,
+            exp_date: item.ExpDate,
+            returned: item.Returned || false,
+            barcode_id: item.BarcodeId,
+            is_service: item.IsService || false,
+            tax_amount: item.TaxAmount || 0,
+            unit_price: item.UnitPrice,
+            active_date: item.ActiveDate,
+            category_id: item.CategoryId,
+            contract_id: item.ContractId ? String(item.ContractId) : null,
+            total_amount: item.TotalAmount,
+            payment_ref_id: item.PaymentRefId,
+            sale_detail_id: item.SaleDetailId,
+            sub_category_id: item.SubCategoryId,
+            discount_percent: item.DiscountPercent || 0,
+            gift_card_barcode_id: item.GiftCardBarcodeId,
+            recipient_client_id: item.RecipientClientId ? String(item.RecipientClientId) : null,
             raw_data: item,
           };
 
-          await supabase.from("sale_items").insert(itemData);
+          await supabase.from("sale_items").upsert(itemData, {
+            onConflict: "sale_id,mindbody_id",
+          });
         }
       }
     }

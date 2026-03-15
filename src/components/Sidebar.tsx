@@ -1,4 +1,4 @@
-import { Database, Settings, BarChart3, Users, Calendar, DollarSign, MapPin, UserCog, Grid3x3, Tag, Package, ShoppingBag, FileText, FileJson, History } from 'lucide-react';
+import { Database, Settings, BarChart3, Users, Calendar, DollarSign, MapPin, UserCog, Grid3x3, Tag, Package, ShoppingBag, FileText, FileJson, History, CreditCard } from 'lucide-react';
 
 export type MenuSection =
   | 'api-integration'
@@ -13,6 +13,7 @@ export type MenuSection =
   | 'clients'
   | 'appointments'
   | 'sales'
+  | 'payments'
   | 'sale-items'
   | 'retail-products';
 
@@ -42,6 +43,7 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
     { id: 'clients', label: 'Clients', icon: Users, color: 'orange' },
     { id: 'appointments', label: 'Appointments', icon: Calendar, color: 'red' },
     { id: 'sales', label: 'Sales', icon: DollarSign, color: 'emerald' },
+    { id: 'payments', label: 'Payments', icon: CreditCard, color: 'indigo' },
     { id: 'sale-items', label: 'Sale Items', icon: FileText, color: 'amber' },
     { id: 'retail-products', label: 'Retail Products', icon: ShoppingBag, color: 'rose' },
   ];

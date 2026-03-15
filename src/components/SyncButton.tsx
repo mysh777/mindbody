@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { RefreshCw, Users, Calendar, DollarSign, MapPin, UserCog, Package, Database, Grid3x3, Tag } from 'lucide-react';
+import { RefreshCw, Users, Calendar, DollarSign, MapPin, UserCog, Package, Database, Grid3x3, Tag, ShoppingCart } from 'lucide-react';
 
 interface SyncButtonProps {
   onSyncComplete?: () => void;
 }
 
-type SyncType = 'quick' | 'all' | 'sites' | 'locations' | 'staff' | 'programs' | 'session_types' | 'staff_session_types' | 'pricing_options' | 'clients' | 'appointments' | 'sales';
+type SyncType = 'quick' | 'all' | 'sites' | 'locations' | 'staff' | 'programs' | 'session_types' | 'staff_session_types' | 'pricing_options' | 'clients' | 'appointments' | 'sales' | 'retail_products';
 
 interface SyncStatus {
   [key: string]: 'idle' | 'syncing' | 'success' | 'error';
@@ -82,6 +82,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     { type: 'session_types' as SyncType, label: 'Session Types', icon: Tag, color: 'green' },
     { type: 'staff_session_types' as SyncType, label: 'Staff ↔ Services', icon: Grid3x3, color: 'teal' },
     { type: 'pricing_options' as SyncType, label: 'Pricing Options', icon: Package, color: 'pink' },
+    { type: 'retail_products' as SyncType, label: 'Retail Products', icon: ShoppingCart, color: 'indigo' },
     { type: 'clients' as SyncType, label: 'Clients', icon: Users, color: 'orange' },
     { type: 'appointments' as SyncType, label: 'Appointments', icon: Calendar, color: 'red' },
     { type: 'sales' as SyncType, label: 'Sales', icon: DollarSign, color: 'emerald' },
@@ -112,6 +113,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
       orange: 'bg-orange-600 hover:bg-orange-700',
       red: 'bg-red-600 hover:bg-red-700',
       emerald: 'bg-emerald-600 hover:bg-emerald-700',
+      indigo: 'bg-indigo-600 hover:bg-indigo-700',
     };
 
     return `${baseClass} ${colorClasses[color] || 'bg-gray-600 hover:bg-gray-700'} text-white`;

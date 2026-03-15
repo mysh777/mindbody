@@ -26,6 +26,7 @@ const tableNameMap: Record<MenuSection, { tableName: string; displayName: string
   'clients': { tableName: 'clients', displayName: 'Clients' },
   'appointments': { tableName: 'appointments', displayName: 'Appointments' },
   'sales': { tableName: 'sales', displayName: 'Sales' },
+  'payments': { tableName: 'payments', displayName: 'Payments' },
   'sale-items': { tableName: 'sale_items', displayName: 'Sale Items' },
   'retail-products': { tableName: 'retail_products', displayName: 'Retail Products' },
 };
