@@ -444,7 +444,7 @@ async function syncSessionTypes(supabase: any, config: MindbodyConfig) {
         updated_at: new Date().toISOString(),
       };
 
-      await supabase.from("session_types").upsert(sessionTypeData, {
+      await supabase.from("services").upsert(sessionTypeData, {
         onConflict: "mindbody_id",
       });
     }
@@ -456,79 +456,6 @@ async function syncSessionTypes(supabase: any, config: MindbodyConfig) {
   }
 
   return totalSynced;
-}
-
-async function syncServiceCategories(supabase: any, config: MindbodyConfig) {
-  console.log('Syncing service categories and subcategories');
-  const url = `${MINDBODY_BASE_URL}/site/programs`;
-  const startTime = Date.now();
-
-  const response = await fetch(url, {
-    headers: getSourceHeaders(config),
-  });
-
-  const durationMs = Date.now() - startTime;
-  const responseText = await response.text();
-
-  let data;
-  let error = null;
-  try {
-    data = JSON.parse(responseText);
-  } catch (e) {
-    error = `Failed to parse response: ${e.message}`;
-    data = {};
-  }
-
-  await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
-
-  if (!response.ok) {
-    console.error(`Failed to fetch service categories: ${response.status}`);
-    return 0;
-  }
-
-  const programs = data.Programs || [];
-  console.log(`Found ${programs.length} service categories with subcategories`);
-  await saveRawData(supabase, 'service_categories', data, programs.length, null);
-
-  let totalCategories = 0;
-  let totalSubcategories = 0;
-
-  for (const program of programs) {
-    const categoryData = {
-      id: String(program.Id),
-      mindbody_id: String(program.Id),
-      name: program.Name,
-      description: program.Description,
-      active: true,
-    };
-
-    await supabase.from("service_categories").upsert(categoryData, {
-      onConflict: "mindbody_id",
-    });
-    totalCategories++;
-
-    if (program.ScheduleTypes && Array.isArray(program.ScheduleTypes)) {
-      for (const scheduleType of program.ScheduleTypes) {
-        const subcategoryData = {
-          id: String(scheduleType.Id),
-          mindbody_id: String(scheduleType.Id),
-          category_id: String(program.Id),
-          name: scheduleType.Name,
-          description: scheduleType.Description,
-          active: true,
-          raw_data: scheduleType,
-        };
-
-        await supabase.from("service_subcategories").upsert(subcategoryData, {
-          onConflict: "mindbody_id",
-        });
-        totalSubcategories++;
-      }
-    }
-  }
-
-  console.log(`Synced ${totalCategories} categories and ${totalSubcategories} subcategories`);
-  return totalCategories + totalSubcategories;
 }
 
 async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig) {
@@ -575,7 +502,7 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig) {
 
     for (const sst of staffSessionTypes) {
       const { data: sessionType } = await supabase
-        .from("session_types")
+        .from("services")
         .select("id")
         .eq("mindbody_id", String(sst.Id))
         .maybeSingle();
@@ -595,7 +522,7 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig) {
         updated_at: new Date().toISOString(),
       };
 
-      await supabase.from("staff_session_types").upsert(relationData, {
+      await supabase.from("staff_services").upsert(relationData, {
         onConflict: "id",
       });
 
@@ -694,13 +621,13 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
 
       if (insertedPricing && service.ProgramId) {
         const { data: sessionTypesForProgram } = await supabase
-          .from("session_types")
+          .from("services")
           .select("id")
           .eq("program_id", String(service.ProgramId));
 
         if (sessionTypesForProgram && sessionTypesForProgram.length > 0) {
           for (const st of sessionTypesForProgram) {
-            await supabase.from("pricing_option_session_types").upsert({
+            await supabase.from("pricing_option_services").upsert({
               pricing_option_id: insertedPricing.id,
               session_type_id: st.id,
             }, {
@@ -1058,243 +985,6 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
   return totalSynced;
 }
 
-async function syncClientServices(supabase: any, config: MindbodyConfig, userToken: string) {
-  console.log('Syncing client services (client ownership/entitlements)');
-
-  const { data: allClients } = await supabase.from("clients").select("id, mindbody_id").limit(500);
-
-  if (!allClients || allClients.length === 0) {
-    console.warn('No clients found. Run clients sync first.');
-    return 0;
-  }
-
-  let totalSynced = 0;
-
-  for (const client of allClients) {
-    const url = `${MINDBODY_BASE_URL}/client/clientservices?clientId=${client.mindbody_id}`;
-    const startTime = Date.now();
-
-    const response = await fetch(url, {
-      headers: getUserHeaders(config, userToken),
-    });
-
-    const durationMs = Date.now() - startTime;
-    const responseText = await response.text();
-
-    let data;
-    let error = null;
-    try {
-      data = JSON.parse(responseText);
-    } catch (e) {
-      error = `Failed to parse response: ${e.message}`;
-      data = {};
-    }
-
-    await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
-
-    if (!response.ok) {
-      console.error(`Failed to fetch client services for ${client.mindbody_id}: ${response.status}`);
-      continue;
-    }
-
-    const clientServices = data.ClientServices || [];
-    console.log(`Found ${clientServices.length} services for client ${client.mindbody_id}`);
-
-    if (totalSynced === 0 && clientServices.length > 0) {
-      await saveRawData(supabase, 'client_services', data, clientServices.length, null);
-    }
-
-    for (const cs of clientServices) {
-      const { data: pricingOption } = await supabase
-        .from("pricing_options")
-        .select("id")
-        .eq("product_id", String(cs.ProductId || cs.Id))
-        .maybeSingle();
-
-      const clientServiceData = {
-        mindbody_id: String(cs.Id),
-        client_id: String(client.mindbody_id),
-        product_id: String(cs.ProductId || cs.Id),
-        pricing_option_id: pricingOption?.id || null,
-        name: cs.Name,
-        payment_date: cs.PaymentDate,
-        active_date: cs.ActiveDate,
-        expiration_date: cs.ExpirationDate,
-        count: cs.Count,
-        remaining: cs.Remaining,
-        current: cs.Current || false,
-        program_id: cs.ProgramId ? String(cs.ProgramId) : null,
-        program_name: cs.Program,
-        status: cs.Status,
-        activation_type: cs.ActivationType,
-        raw_data: cs,
-        synced_at: new Date().toISOString(),
-      };
-
-      await supabase.from("client_services").upsert(clientServiceData, {
-        onConflict: "mindbody_id",
-      });
-
-      totalSynced++;
-    }
-  }
-
-  return totalSynced;
-}
-
-async function syncClientVisits(supabase: any, config: MindbodyConfig, userToken: string) {
-  console.log('Syncing client visits');
-  const startDate = new Date();
-  startDate.setMonth(startDate.getMonth() - 6);
-  const endDate = new Date();
-
-  let offset = 0;
-  const limit = 100;
-  let totalSynced = 0;
-
-  while (true) {
-    const url = `${MINDBODY_BASE_URL}/client/clientvisits?startDate=${startDate.toISOString().split('T')[0]}&endDate=${endDate.toISOString().split('T')[0]}&limit=${limit}&offset=${offset}`;
-    const startTime = Date.now();
-
-    const response = await fetch(url, {
-      headers: getUserHeaders(config, userToken),
-    });
-
-    const durationMs = Date.now() - startTime;
-    const responseText = await response.text();
-
-    let data;
-    let error = null;
-    try {
-      data = JSON.parse(responseText);
-    } catch (e) {
-      error = `Failed to parse response: ${e.message}`;
-      data = {};
-    }
-
-    await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
-
-    if (!response.ok) {
-      console.error(`Failed to fetch client visits: ${response.status}`);
-      break;
-    }
-
-    const visits = data.Visits || [];
-    console.log(`Found ${visits.length} visits at offset ${offset}`);
-
-    if (offset === 0) {
-      await saveRawData(supabase, 'client_visits', data, visits.length, data.PaginationResponse);
-    }
-
-    if (visits.length === 0) break;
-
-    for (const visit of visits) {
-      const visitData = {
-        mindbody_id: String(visit.Id),
-        visit_id: String(visit.Id),
-        client_id: visit.ClientId ? String(visit.ClientId) : null,
-        class_id: visit.ClassId ? String(visit.ClassId) : null,
-        visit_datetime: visit.StartDateTime,
-        service_id: visit.ServiceId ? String(visit.ServiceId) : null,
-        service_name: visit.ServiceName,
-        session_type_id: visit.SessionTypeId ? String(visit.SessionTypeId) : null,
-        location_id: visit.LocationId ? String(visit.LocationId) : null,
-        staff_id: visit.StaffId ? String(visit.StaffId) : null,
-        signed_in: visit.SignedIn || false,
-        make_up: visit.MakeUp || false,
-        late_cancelled: visit.LateCancelled || false,
-        web_signup: visit.WebSignup || false,
-        appointment_id: visit.AppointmentId ? String(visit.AppointmentId) : null,
-        appointment_status: visit.AppointmentStatus,
-        raw_data: visit,
-        synced_at: new Date().toISOString(),
-      };
-
-      await supabase.from("client_visits").upsert(visitData, {
-        onConflict: "mindbody_id",
-      });
-    }
-
-    totalSynced += visits.length;
-    offset += limit;
-
-    if (visits.length < limit) break;
-  }
-
-  return totalSynced;
-}
-
-async function syncPackages(supabase: any, config: MindbodyConfig, userToken: string) {
-  console.log('Syncing packages');
-
-  let offset = 0;
-  const limit = 100;
-  let totalSynced = 0;
-
-  while (true) {
-    const url = `${MINDBODY_BASE_URL}/sale/packages?limit=${limit}&offset=${offset}`;
-    const startTime = Date.now();
-
-    const response = await fetch(url, {
-      headers: getUserHeaders(config, userToken),
-    });
-
-    const durationMs = Date.now() - startTime;
-    const responseText = await response.text();
-
-    let data;
-    let error = null;
-    try {
-      data = JSON.parse(responseText);
-    } catch (e) {
-      error = `Failed to parse response: ${e.message}`;
-      data = {};
-    }
-
-    await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
-
-    if (!response.ok) {
-      console.error(`Failed to fetch packages: ${response.status}`);
-      break;
-    }
-
-    const packages = data.Packages || [];
-    console.log(`Found ${packages.length} packages at offset ${offset}`);
-
-    if (offset === 0) {
-      await saveRawData(supabase, 'packages', data, packages.length, data.PaginationResponse);
-    }
-
-    if (packages.length === 0) break;
-
-    for (const pkg of packages) {
-      const packageData = {
-        id: String(pkg.Id),
-        mindbody_id: String(pkg.Id),
-        name: pkg.Name,
-        description: pkg.Description,
-        sell_online: pkg.SellOnline || false,
-        price: pkg.Price,
-        online_price: pkg.OnlinePrice,
-        discontinued: pkg.Discontinued || false,
-        raw_data: pkg,
-        synced_at: new Date().toISOString(),
-      };
-
-      await supabase.from("packages").upsert(packageData, {
-        onConflict: "mindbody_id",
-      });
-    }
-
-    totalSynced += packages.length;
-    offset += limit;
-
-    if (packages.length < limit) break;
-  }
-
-  return totalSynced;
-}
-
 async function syncProducts(supabase: any, config: MindbodyConfig) {
   console.log('Syncing retail products');
 
@@ -1474,34 +1164,34 @@ Deno.serve(async (req: Request) => {
 
       if (shouldSyncAll || syncType === "programs" || syncType === "services" || isQuickMode) {
         try {
-          console.log('\n--- Syncing Programs (Service Categories with Subcategories) ---');
-          results.service_categories = await syncServiceCategories(supabase, config);
-          console.log(`✅ Service categories synced: ${results.service_categories}`);
+          console.log('\n--- Syncing Programs (Service Categories) ---');
+          results.programs = await syncPrograms(supabase, config);
+          console.log(`✅ Programs synced: ${results.programs}`);
         } catch (e) {
-          console.error('❌ Service categories sync failed:', e);
-          results.service_categories = 0;
+          console.error('❌ Programs sync failed:', e);
+          results.programs = 0;
         }
       }
 
       if (shouldSyncAll || syncType === "services" || isQuickMode) {
         try {
-          console.log('\n--- Syncing Session Types (Bookable Services) ---');
-          results.session_types = await syncSessionTypes(supabase, config);
-          console.log(`✅ Session types synced: ${results.session_types}`);
+          console.log('\n--- Syncing Session Types ---');
+          results.services = await syncSessionTypes(supabase, config);
+          console.log(`✅ Session types synced: ${results.services}`);
         } catch (e) {
           console.error('❌ Session types sync failed:', e);
-          results.session_types = 0;
+          results.services = 0;
         }
       }
 
       if (shouldSyncAll || syncType === "staff_services" || isQuickMode) {
         try {
           console.log('\n--- Syncing Staff-Session Type Relationships ---');
-          results.staff_session_types = await syncStaffSessionTypes(supabase, config);
-          console.log(`✅ Staff-Session relationships synced: ${results.staff_session_types}`);
+          results.staff_services = await syncStaffSessionTypes(supabase, config);
+          console.log(`✅ Staff-Session relationships synced: ${results.staff_services}`);
         } catch (e) {
           console.error('❌ Staff-Session relationships sync failed:', e);
-          results.staff_session_types = 0;
+          results.staff_services = 0;
         }
       }
 
@@ -1555,39 +1245,6 @@ Deno.serve(async (req: Request) => {
         } catch (e) {
           console.error('❌ Sales sync failed:', e);
           results.sales = 0;
-        }
-      }
-
-      if (userToken && (shouldSyncAll || syncType === "client_services")) {
-        try {
-          console.log('\n--- Syncing Client Services (Ownership/Entitlements) ---');
-          results.client_services = await syncClientServices(supabase, config, userToken);
-          console.log(`✅ Client services synced: ${results.client_services}`);
-        } catch (e) {
-          console.error('❌ Client services sync failed:', e);
-          results.client_services = 0;
-        }
-      }
-
-      if (userToken && (shouldSyncAll || syncType === "client_visits")) {
-        try {
-          console.log('\n--- Syncing Client Visits ---');
-          results.client_visits = await syncClientVisits(supabase, config, userToken);
-          console.log(`✅ Client visits synced: ${results.client_visits}`);
-        } catch (e) {
-          console.error('❌ Client visits sync failed:', e);
-          results.client_visits = 0;
-        }
-      }
-
-      if (userToken && (shouldSyncAll || syncType === "packages")) {
-        try {
-          console.log('\n--- Syncing Packages ---');
-          results.packages = await syncPackages(supabase, config, userToken);
-          console.log(`✅ Packages synced: ${results.packages}`);
-        } catch (e) {
-          console.error('❌ Packages sync failed:', e);
-          results.packages = 0;
         }
       }
 
