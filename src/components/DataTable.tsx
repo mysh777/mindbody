@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { Download, Filter, RefreshCw, ChevronDown } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 
-type DataType = 'clients' | 'appointments' | 'classes' | 'sales' | 'staff' | 'locations' | 'class_descriptions' | 'products' | 'services' | 'sale_items' | 'class_visits';
+type DataType = 'clients' | 'appointments' | 'session_types' | 'sales' | 'staff' | 'locations' | 'products' | 'pricing_options' | 'sale_items';
 
 const formatDate = (dateString: string | null | undefined): string => {
   if (!dateString) return '-';
@@ -50,15 +50,13 @@ export function DataTable() {
   const dataTypes: { value: DataType; label: string }[] = [
     { value: 'clients', label: 'Clients' },
     { value: 'appointments', label: 'Appointments' },
-    { value: 'services', label: 'Services (Pricing Options)' },
+    { value: 'session_types', label: 'Session Types (Services)' },
+    { value: 'pricing_options', label: 'Pricing Options' },
     { value: 'products', label: 'Retail Products' },
     { value: 'sales', label: 'Sales' },
     { value: 'sale_items', label: 'Sale Items' },
     { value: 'staff', label: 'Staff' },
     { value: 'locations', label: 'Locations' },
-    { value: 'classes', label: 'Classes' },
-    { value: 'class_descriptions', label: 'Class Descriptions' },
-    { value: 'class_visits', label: 'Class Visits' },
   ];
 
   const loadData = async () => {
@@ -68,15 +66,13 @@ export function DataTable() {
       const tableMap: Record<DataType, string> = {
         'clients': 'clients',
         'appointments': 'appointments',
-        'classes': 'classes',
+        'session_types': 'session_types',
         'sales': 'sales',
         'sale_items': 'sale_items',
         'staff': 'staff',
         'locations': 'locations',
-        'class_descriptions': 'class_descriptions',
-        'class_visits': 'class_visits',
         'products': 'retail_products',
-        'services': 'pricing_options',
+        'pricing_options': 'pricing_options',
       };
 
       const tableName = tableMap[dataType];
