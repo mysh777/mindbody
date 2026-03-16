@@ -1403,19 +1403,20 @@ async function syncPackages(supabase: any, config: MindbodyConfig, userToken: st
   return totalSynced;
 }
 
-async function syncProducts(supabase: any, config: MindbodyConfig) {
+async function syncProducts(supabase: any, config: MindbodyConfig, userToken?: string) {
   console.log('Syncing retail products');
 
   let offset = 0;
-  const limit = 100;
+  const limit = 200;
   let totalSynced = 0;
+  let totalResults = 0;
 
   while (true) {
     const url = `${MINDBODY_BASE_URL}/sale/products?limit=${limit}&offset=${offset}`;
     const startTime = Date.now();
 
     const response = await fetch(url, {
-      headers: getSourceHeaders(config),
+      headers: userToken ? getUserHeaders(config, userToken) : getSourceHeaders(config),
     });
 
     const durationMs = Date.now() - startTime;
@@ -1434,14 +1435,23 @@ async function syncProducts(supabase: any, config: MindbodyConfig) {
 
     if (!response.ok) {
       console.error(`Failed to fetch products: ${response.status}`);
+      console.error(`Response: ${responseText}`);
       break;
     }
 
     const products = data.Products || [];
+    const pagination = data.PaginationResponse;
 
     if (offset === 0) {
-      await saveRawData(supabase, 'products', data, products.length, data.PaginationResponse);
+      await saveRawData(supabase, 'products', data, products.length, pagination);
+      totalResults = pagination?.TotalResults || 0;
+      console.log(`Total products in Mindbody: ${totalResults}`);
+      if (products.length > 0) {
+        console.log('Sample product data:', JSON.stringify(products[0], null, 2));
+      }
     }
+
+    console.log(`Fetched ${products.length} products at offset ${offset} (total so far: ${totalSynced + products.length}/${totalResults})`);
 
     if (products.length === 0) break;
 
@@ -1474,8 +1484,10 @@ async function syncProducts(supabase: any, config: MindbodyConfig) {
     offset += limit;
 
     if (products.length < limit) break;
+    if (totalResults > 0 && totalSynced >= totalResults) break;
   }
 
+  console.log(`Total retail products synced: ${totalSynced}`);
   return totalSynced;
 }
 
@@ -1702,7 +1714,7 @@ Deno.serve(async (req: Request) => {
       if (shouldSyncAll || syncType === "retail_products" || isQuickMode) {
         try {
           console.log('\n--- Syncing Retail Products ---');
-          results.retail_products = await syncProducts(supabase, config);
+          results.retail_products = await syncProducts(supabase, config, userToken || undefined);
           console.log(`✅ Retail products synced: ${results.retail_products}`);
         } catch (e) {
           console.error('❌ Retail products sync failed:', e);

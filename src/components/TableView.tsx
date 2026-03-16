@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { Download, RefreshCw, Filter, ChevronDown } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
@@ -8,6 +8,15 @@ interface TableViewProps {
   displayName: string;
   onNavigate?: (tableName: string, id: string) => void;
   selectedId?: string | null;
+}
+
+interface RelatedDataCache {
+  clients: Record<string, string>;
+  staff: Record<string, string>;
+  locations: Record<string, string>;
+  session_types: Record<string, string>;
+  service_categories: Record<string, string>;
+  pricing_options: Record<string, string>;
 }
 
 const formatDate = (dateString: string | null | undefined): string => {
@@ -34,7 +43,7 @@ const isNumericColumn = (columnName: string, value: any): boolean => {
 };
 
 const getColumnWidth = (columnName: string, values: any[]): string => {
-  if (columnName === 'id' || columnName.includes('_id')) return 'w-24';
+  if (columnName === 'id' || columnName.includes('_id')) return 'w-32';
   if (isDateColumn(columnName)) return 'w-28';
 
   const sample = values.find(v => v !== null && v !== undefined);
@@ -54,6 +63,7 @@ const getRelatedTable = (columnName: string): string | null => {
     'service_id': 'session_types',
     'program_id': 'service_categories',
     'category_id': 'service_categories',
+    'service_category_id': 'service_categories',
     'subcategory_id': 'service_subcategories',
     'pricing_option_id': 'pricing_options',
     'product_id': 'products',
@@ -71,12 +81,98 @@ export function TableView({ tableName, displayName, onNavigate, selectedId }: Ta
   const [limit, setLimit] = useState(100);
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
   const [showFilters, setShowFilters] = useState(false);
+  const [relatedCache, setRelatedCache] = useState<RelatedDataCache>({
+    clients: {},
+    staff: {},
+    locations: {},
+    session_types: {},
+    service_categories: {},
+    pricing_options: {},
+  });
+
+  const loadRelatedData = useCallback(async () => {
+    const cache: RelatedDataCache = {
+      clients: {},
+      staff: {},
+      locations: {},
+      session_types: {},
+      service_categories: {},
+      pricing_options: {},
+    };
+
+    const [clientsRes, staffRes, locationsRes, sessionTypesRes, categoriesRes, pricingRes] = await Promise.all([
+      supabase.from('clients').select('id, first_name, last_name'),
+      supabase.from('staff').select('id, first_name, last_name'),
+      supabase.from('locations').select('id, name'),
+      supabase.from('session_types').select('id, name'),
+      supabase.from('service_categories').select('id, name'),
+      supabase.from('pricing_options').select('id, name'),
+    ]);
+
+    if (clientsRes.data) {
+      clientsRes.data.forEach((c: any) => {
+        cache.clients[c.id] = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id;
+      });
+    }
+    if (staffRes.data) {
+      staffRes.data.forEach((s: any) => {
+        cache.staff[s.id] = `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.id;
+      });
+    }
+    if (locationsRes.data) {
+      locationsRes.data.forEach((l: any) => {
+        cache.locations[l.id] = l.name || l.id;
+      });
+    }
+    if (sessionTypesRes.data) {
+      sessionTypesRes.data.forEach((st: any) => {
+        cache.session_types[st.id] = st.name || st.id;
+      });
+    }
+    if (categoriesRes.data) {
+      categoriesRes.data.forEach((c: any) => {
+        cache.service_categories[c.id] = c.name || c.id;
+      });
+    }
+    if (pricingRes.data) {
+      pricingRes.data.forEach((p: any) => {
+        cache.pricing_options[p.id] = p.name || p.id;
+      });
+    }
+
+    setRelatedCache(cache);
+  }, []);
+
+  const getDisplayValue = useCallback((columnName: string, value: string | null): string => {
+    if (!value) return '-';
+
+    if (columnName === 'client_id') {
+      return relatedCache.clients[value] || value;
+    }
+    if (columnName === 'staff_id') {
+      return relatedCache.staff[value] || value;
+    }
+    if (columnName === 'location_id') {
+      return relatedCache.locations[value] || value;
+    }
+    if (columnName === 'session_type_id' || columnName === 'service_id') {
+      return relatedCache.session_types[value] || value;
+    }
+    if (columnName === 'program_id' || columnName === 'category_id' || columnName === 'service_category_id') {
+      return relatedCache.service_categories[value] || value;
+    }
+    if (columnName === 'pricing_option_id') {
+      return relatedCache.pricing_options[value] || value;
+    }
+
+    return value;
+  }, [relatedCache]);
 
   const loadData = async () => {
     setLoading(true);
     setColumnFilters({});
     try {
-      console.log(`📊 Loading data from table: ${tableName}`);
+      console.log(`Loading data from table: ${tableName}`);
 
       const { count } = await supabase
         .from(tableName)
@@ -105,10 +201,10 @@ export function TableView({ tableName, displayName, onNavigate, selectedId }: Ta
       const { data: result, error } = await query;
 
       if (error) {
-        console.error('❌ Error loading data:', error);
+        console.error('Error loading data:', error);
         throw error;
       }
-      console.log(`✅ Loaded ${result?.length || 0} rows from ${tableName}`);
+      console.log(`Loaded ${result?.length || 0} rows from ${tableName}`);
       setData(result || []);
     } catch (error) {
       console.error('Error loading data:', error);
@@ -119,7 +215,8 @@ export function TableView({ tableName, displayName, onNavigate, selectedId }: Ta
 
   useEffect(() => {
     loadData();
-  }, [tableName, limit]);
+    loadRelatedData();
+  }, [tableName, limit, loadRelatedData]);
 
   useEffect(() => {
     if (selectedId) {
@@ -284,23 +381,24 @@ export function TableView({ tableName, displayName, onNavigate, selectedId }: Ta
                         const isDate = isDateColumn(col);
                         const relatedTable = getRelatedTable(col);
                         const isClickable = relatedTable && value && onNavigate;
+                        const displayValue = relatedTable ? getDisplayValue(col, value) : (value !== null && value !== undefined ? String(value) : '-');
 
                         return (
                           <td
                             key={col}
                             className={`px-3 py-2 text-slate-700 text-xs ${widthClass} ${isNumeric ? 'text-right font-mono' : ''} ${isDate ? 'font-mono' : ''}`}
-                            title={value !== null && value !== undefined ? String(value) : ''}
+                            title={value !== null && value !== undefined ? `${displayValue} (ID: ${value})` : ''}
                           >
                             {isClickable ? (
                               <button
                                 onClick={() => onNavigate(relatedTable, String(value))}
-                                className="text-blue-600 hover:text-blue-800 hover:underline font-medium"
+                                className="text-blue-600 hover:text-blue-800 hover:underline font-medium text-left"
                               >
-                                {String(value)}
+                                {displayValue}
                               </button>
                             ) : (
                               value !== null && value !== undefined
-                                ? (isDate ? formatDate(String(value)) : String(value))
+                                ? (isDate ? formatDate(String(value)) : (relatedTable ? displayValue : String(value)))
                                 : '-'
                             )}
                           </td>
