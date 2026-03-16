@@ -723,18 +723,136 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
 }
 
 async function syncAppointments(supabase: any, config: MindbodyConfig, userToken: string) {
-  console.log('Syncing appointments');
+  console.log('Syncing appointments (using staffappointments endpoint)');
   const startDate = new Date();
-  startDate.setMonth(startDate.getMonth() - 3);
+  startDate.setMonth(startDate.getMonth() - 6);
   const endDate = new Date();
-  endDate.setMonth(endDate.getMonth() + 1);
+  endDate.setMonth(endDate.getMonth() + 3);
+
+  const startDateStr = startDate.toISOString().split('T')[0];
+  const endDateStr = endDate.toISOString().split('T')[0];
+
+  let totalSynced = 0;
+
+  const { data: allStaff } = await supabase.from("staff").select("id, mindbody_id");
+
+  if (!allStaff || allStaff.length === 0) {
+    console.warn('No staff found. Trying direct appointments endpoint...');
+    return await syncAppointmentsDirect(supabase, config, userToken, startDateStr, endDateStr);
+  }
+
+  console.log(`Fetching appointments for ${allStaff.length} staff members from ${startDateStr} to ${endDateStr}`);
+
+  for (const staff of allStaff) {
+    let offset = 0;
+    const limit = 200;
+
+    while (true) {
+      const url = `${MINDBODY_BASE_URL}/appointment/staffappointments?staffIds=${staff.mindbody_id}&startDate=${startDateStr}&endDate=${endDateStr}&limit=${limit}&offset=${offset}`;
+      const startTime = Date.now();
+
+      const response = await fetch(url, {
+        headers: getUserHeaders(config, userToken),
+      });
+
+      const durationMs = Date.now() - startTime;
+      const responseText = await response.text();
+
+      let data;
+      let error = null;
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        error = `Failed to parse response: ${e.message}`;
+        data = {};
+      }
+
+      await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
+
+      if (!response.ok) {
+        console.error(`Failed to fetch appointments for staff ${staff.mindbody_id}: ${response.status}`);
+        break;
+      }
+
+      const appointments = data.Appointments || [];
+
+      if (offset === 0 && totalSynced === 0 && appointments.length > 0) {
+        await saveRawData(supabase, 'appointments', data, appointments.length, data.PaginationResponse);
+        console.log('Sample appointment data:', JSON.stringify(appointments[0], null, 2));
+      }
+
+      if (appointments.length === 0) break;
+
+      console.log(`Found ${appointments.length} appointments for staff ${staff.mindbody_id} at offset ${offset}`);
+
+      for (const appt of appointments) {
+        const sessionTypeId = appt.SessionTypeId || appt.SessionType?.Id || null;
+        const clientId = appt.ClientId || appt.Client?.Id || null;
+        const staffId = appt.StaffId || appt.Staff?.Id || staff.mindbody_id;
+        const locationId = appt.LocationId || appt.Location?.Id || null;
+
+        const apptData = {
+          id: String(appt.Id),
+          mindbody_id: String(appt.Id),
+          client_id: clientId ? String(clientId) : null,
+          staff_id: staffId ? String(staffId) : null,
+          location_id: locationId ? String(locationId) : null,
+          session_type_id: sessionTypeId ? String(sessionTypeId) : null,
+          start_datetime: appt.StartDateTime,
+          end_datetime: appt.EndDateTime,
+          duration_minutes: appt.Duration,
+          status: appt.Status,
+          notes: appt.Notes,
+          first_appointment: appt.FirstAppointment || false,
+          raw_data: appt,
+          synced_at: new Date().toISOString(),
+        };
+
+        const { error: upsertError } = await supabase.from("appointments").upsert(apptData, {
+          onConflict: "mindbody_id",
+        });
+
+        if (upsertError) {
+          console.error(`Failed to upsert appointment ${appt.Id}:`, upsertError);
+        }
+
+        if (appt.AddOns && appt.AddOns.length > 0) {
+          for (const addon of appt.AddOns) {
+            const addonData = {
+              appointment_id: String(appt.Id),
+              addon_id: addon.Id ? String(addon.Id) : null,
+              addon_name: addon.Name,
+              addon_price: addon.Price,
+            };
+
+            await supabase.from("appointment_addons").upsert(addonData, {
+              onConflict: "appointment_id,addon_id",
+              ignoreDuplicates: true,
+            });
+          }
+        }
+      }
+
+      totalSynced += appointments.length;
+      offset += limit;
+
+      if (appointments.length < limit) break;
+    }
+  }
+
+  console.log(`Total appointments synced: ${totalSynced}`);
+  return totalSynced;
+}
+
+async function syncAppointmentsDirect(supabase: any, config: MindbodyConfig, userToken: string, startDateStr: string, endDateStr: string) {
+  console.log('Trying direct appointments endpoint...');
 
   let offset = 0;
-  const limit = 100;
+  const limit = 200;
   let totalSynced = 0;
 
   while (true) {
-    const url = `${MINDBODY_BASE_URL}/appointment/appointments?startDateTime=${startDate.toISOString()}&endDateTime=${endDate.toISOString()}&limit=${limit}&offset=${offset}`;
+    const url = `${MINDBODY_BASE_URL}/appointment/appointments?startDate=${startDateStr}&endDate=${endDateStr}&limit=${limit}&offset=${offset}`;
     const startTime = Date.now();
 
     const response = await fetch(url, {
@@ -761,16 +879,14 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
     }
 
     const appointments = data.Appointments || [];
-    console.log(`Found ${appointments.length} appointments at offset ${offset}`);
 
     if (offset === 0) {
       await saveRawData(supabase, 'appointments', data, appointments.length, data.PaginationResponse);
-      if (appointments.length > 0) {
-        console.log('Sample appointment data:', JSON.stringify(appointments[0], null, 2));
-      }
     }
 
     if (appointments.length === 0) break;
+
+    console.log(`Found ${appointments.length} appointments at offset ${offset}`);
 
     for (const appt of appointments) {
       const sessionTypeId = appt.SessionTypeId || appt.SessionType?.Id || null;
@@ -792,26 +908,9 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
         synced_at: new Date().toISOString(),
       };
 
-      const { error: upsertError } = await supabase.from("appointments").upsert(apptData, {
+      await supabase.from("appointments").upsert(apptData, {
         onConflict: "mindbody_id",
       });
-
-      if (upsertError) {
-        console.error(`Failed to upsert appointment ${appt.Id}:`, upsertError);
-      }
-
-      if (appt.AddOns && appt.AddOns.length > 0) {
-        for (const addon of appt.AddOns) {
-          const addonData = {
-            appointment_id: String(appt.Id),
-            addon_id: addon.Id ? String(addon.Id) : null,
-            addon_name: addon.Name,
-            addon_price: addon.Price,
-          };
-
-          await supabase.from("appointment_addons").insert(addonData);
-        }
-      }
     }
 
     totalSynced += appointments.length;
@@ -826,11 +925,12 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
 async function syncClients(supabase: any, config: MindbodyConfig, userToken?: string) {
   console.log('Syncing clients');
   let offset = 0;
-  const limit = 100;
+  const limit = 200;
   let totalSynced = 0;
+  let totalResults = 0;
 
   while (true) {
-    const url = `${MINDBODY_BASE_URL}/client/clients?limit=${limit}&offset=${offset}`;
+    const url = `${MINDBODY_BASE_URL}/client/clients?limit=${limit}&offset=${offset}&searchText=`;
     const startTime = Date.now();
 
     const response = await fetch(url, {
@@ -853,14 +953,20 @@ async function syncClients(supabase: any, config: MindbodyConfig, userToken?: st
 
     if (!response.ok) {
       console.error(`Failed to fetch clients: ${response.status}`);
+      console.error(`Response: ${responseText}`);
       break;
     }
 
     const clients = data.Clients || [];
+    const pagination = data.PaginationResponse;
 
     if (offset === 0) {
-      await saveRawData(supabase, 'clients', data, clients.length, data.PaginationResponse);
+      await saveRawData(supabase, 'clients', data, clients.length, pagination);
+      totalResults = pagination?.TotalResults || 0;
+      console.log(`Total clients in Mindbody: ${totalResults}`);
     }
+
+    console.log(`Fetched ${clients.length} clients at offset ${offset} (total so far: ${totalSynced + clients.length}/${totalResults})`);
 
     if (clients.length === 0) break;
 
@@ -901,8 +1007,10 @@ async function syncClients(supabase: any, config: MindbodyConfig, userToken?: st
     offset += limit;
 
     if (clients.length < limit) break;
+    if (totalResults > 0 && totalSynced >= totalResults) break;
   }
 
+  console.log(`Total clients synced: ${totalSynced}`);
   return totalSynced;
 }
 
@@ -1525,7 +1633,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      if (userToken && (shouldSyncAll || syncType === "clients")) {
+      if (userToken && (shouldSyncAll || syncType === "clients" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Clients ---');
           results.clients = await syncClients(supabase, config, userToken);
@@ -1591,7 +1699,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      if (shouldSyncAll || syncType === "retail_products") {
+      if (shouldSyncAll || syncType === "retail_products" || isQuickMode) {
         try {
           console.log('\n--- Syncing Retail Products ---');
           results.retail_products = await syncProducts(supabase, config);
