@@ -1403,6 +1403,141 @@ async function syncPackages(supabase: any, config: MindbodyConfig, userToken: st
   return totalSynced;
 }
 
+async function buildPricingSessionTypeLinks(supabase: any, config: MindbodyConfig, userToken: string) {
+  console.log('Building accurate pricing_option ↔ session_type links via API');
+
+  const { data: sessionTypes } = await supabase
+    .from("session_types")
+    .select("id, mindbody_id, name")
+    .order("id");
+
+  if (!sessionTypes || sessionTypes.length === 0) {
+    console.warn('No session types found. Run session types sync first.');
+    return 0;
+  }
+
+  console.log(`Processing ${sessionTypes.length} session types to build pricing links`);
+
+  let totalLinksCreated = 0;
+  let processedCount = 0;
+
+  await supabase.from("pricing_option_session_types").delete().neq("pricing_option_id", "00000000-0000-0000-0000-000000000000");
+  console.log('Cleared existing pricing_option_session_types links');
+
+  for (const sessionType of sessionTypes) {
+    processedCount++;
+
+    const url = `${MINDBODY_BASE_URL}/sale/services?request.sessionTypeIds[]=${sessionType.mindbody_id}&request.limit=200`;
+    const startTime = Date.now();
+
+    try {
+      const response = await fetch(url, {
+        headers: getUserHeaders(config, userToken),
+      });
+
+      const durationMs = Date.now() - startTime;
+      const responseText = await response.text();
+
+      let data;
+      let error = null;
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        error = `Failed to parse response: ${e.message}`;
+        data = {};
+      }
+
+      if (processedCount <= 5 || processedCount % 20 === 0) {
+        await logApiCall(supabase, url, "GET", { sessionTypeId: sessionType.mindbody_id }, response.status, data, error, durationMs);
+      }
+
+      if (!response.ok) {
+        console.error(`Failed to fetch services for session type ${sessionType.mindbody_id}: ${response.status}`);
+        continue;
+      }
+
+      const services = data.Services || [];
+
+      if (services.length > 0) {
+        console.log(`Session type "${sessionType.name}" (${sessionType.mindbody_id}): ${services.length} pricing options`);
+
+        for (const service of services) {
+          const { data: pricingOption } = await supabase
+            .from("pricing_options")
+            .select("id")
+            .eq("mindbody_id", String(service.Id))
+            .maybeSingle();
+
+          if (pricingOption) {
+            const { error: linkError } = await supabase.from("pricing_option_session_types").upsert({
+              pricing_option_id: pricingOption.id,
+              session_type_id: sessionType.id,
+            }, {
+              onConflict: "pricing_option_id,session_type_id",
+              ignoreDuplicates: true,
+            });
+
+            if (!linkError) {
+              totalLinksCreated++;
+            }
+          } else {
+            const pricingData = {
+              mindbody_id: String(service.Id),
+              name: service.Name,
+              service_type: service.Type,
+              service_category: service.ProgramName || service.CategoryName,
+              price: service.Price || service.OnlinePrice,
+              online_price: service.OnlinePrice,
+              duration: service.DefaultTimeLength,
+              tax_included: service.TaxIncluded || false,
+              tax_rate: service.TaxRate,
+              sold_online: service.SellOnline || false,
+              bookable_online: service.BookableOnline || false,
+              is_introductory: service.IsIntro || false,
+              session_count: service.Count || null,
+              expiration_days: service.ExpirationDays,
+              revenue_category: service.RevenueCategory,
+              active: service.Active !== false,
+              product_id: service.ProductId ? String(service.ProductId) : null,
+              program_id: service.ProgramId ? String(service.ProgramId) : null,
+              program_name: service.Program,
+              raw_data: service,
+              synced_at: new Date().toISOString(),
+            };
+
+            const { data: newPricing, error: insertError } = await supabase
+              .from("pricing_options")
+              .upsert(pricingData, { onConflict: "mindbody_id" })
+              .select()
+              .single();
+
+            if (newPricing && !insertError) {
+              await supabase.from("pricing_option_session_types").upsert({
+                pricing_option_id: newPricing.id,
+                session_type_id: sessionType.id,
+              }, {
+                onConflict: "pricing_option_id,session_type_id",
+                ignoreDuplicates: true,
+              });
+              totalLinksCreated++;
+            }
+          }
+        }
+      }
+
+      if (processedCount % 10 === 0) {
+        console.log(`Progress: ${processedCount}/${sessionTypes.length} session types processed, ${totalLinksCreated} links created`);
+      }
+
+    } catch (err) {
+      console.error(`Error processing session type ${sessionType.mindbody_id}:`, err);
+    }
+  }
+
+  console.log(`✅ Completed: ${totalLinksCreated} pricing-session links created for ${sessionTypes.length} session types`);
+  return totalLinksCreated;
+}
+
 async function syncProducts(supabase: any, config: MindbodyConfig, userToken?: string) {
   console.log('Syncing retail products');
 
@@ -1719,6 +1854,17 @@ Deno.serve(async (req: Request) => {
         } catch (e) {
           console.error('❌ Retail products sync failed:', e);
           results.retail_products = 0;
+        }
+      }
+
+      if (userToken && syncType === "build_pricing_links") {
+        try {
+          console.log('\n--- Building Pricing ↔ Session Type Links ---');
+          results.pricing_links = await buildPricingSessionTypeLinks(supabase, config, userToken);
+          console.log(`✅ Pricing links built: ${results.pricing_links}`);
+        } catch (e) {
+          console.error('❌ Pricing links building failed:', e);
+          results.pricing_links = 0;
         }
       }
 

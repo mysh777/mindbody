@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { RefreshCw, Users, Calendar, DollarSign, MapPin, UserCog, Package, Database, Grid3x3, Tag, ShoppingCart } from 'lucide-react';
+import { RefreshCw, Users, Calendar, DollarSign, MapPin, UserCog, Package, Database, Grid3x3, Tag, ShoppingCart, Link2 } from 'lucide-react';
 
 interface SyncButtonProps {
   onSyncComplete?: () => void;
 }
 
-type SyncType = 'quick' | 'all' | 'sites' | 'locations' | 'staff' | 'programs' | 'services' | 'staff_services' | 'pricing_options' | 'clients' | 'appointments' | 'sales' | 'retail_products';
+type SyncType = 'quick' | 'all' | 'sites' | 'locations' | 'staff' | 'programs' | 'services' | 'staff_services' | 'pricing_options' | 'clients' | 'appointments' | 'sales' | 'retail_products' | 'build_pricing_links';
 
 interface SyncStatus {
   [key: string]: 'idle' | 'syncing' | 'success' | 'error';
@@ -82,6 +82,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     { type: 'services' as SyncType, label: 'Services', icon: Tag, color: 'green' },
     { type: 'staff_services' as SyncType, label: 'Staff ↔ Services', icon: Grid3x3, color: 'teal' },
     { type: 'pricing_options' as SyncType, label: 'Pricing Options', icon: Package, color: 'pink' },
+    { type: 'build_pricing_links' as SyncType, label: 'Build Price ↔ Service Links', icon: Link2, color: 'amber' },
     { type: 'retail_products' as SyncType, label: 'Retail Products', icon: ShoppingCart, color: 'slate' },
     { type: 'clients' as SyncType, label: 'Clients', icon: Users, color: 'orange' },
     { type: 'appointments' as SyncType, label: 'Appointments', icon: Calendar, color: 'red' },
@@ -114,6 +115,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
       red: 'bg-red-600 hover:bg-red-700',
       emerald: 'bg-emerald-600 hover:bg-emerald-700',
       indigo: 'bg-indigo-600 hover:bg-indigo-700',
+      amber: 'bg-amber-600 hover:bg-amber-700',
     };
 
     return `${baseClass} ${colorClasses[color] || 'bg-gray-600 hover:bg-gray-700'} text-white`;
