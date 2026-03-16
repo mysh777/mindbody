@@ -32,6 +32,24 @@ const tableNameMap: Record<MenuSection, { tableName: string; displayName: string
   'retail-products': { tableName: 'retail_products', displayName: 'Retail Products' },
 };
 
+const tableSectionMap: Record<string, MenuSection> = {
+  'clients': 'clients',
+  'staff': 'staff',
+  'locations': 'locations',
+  'sales': 'sales',
+  'appointments': 'appointments',
+  'session_types': 'services',
+  'service_categories': 'service-categories',
+  'service_subcategories': 'service-categories',
+  'pricing_options': 'pricing-options',
+  'products': 'retail-products',
+  'sites': 'sites',
+  'sale_items': 'sale-items',
+  'payments': 'payments',
+  'retail_products': 'retail-products',
+  'staff_session_types': 'staff-services',
+};
+
 export function Dashboard() {
   const [activeSection, setActiveSection] = useState<MenuSection>('api-integration');
   const [stats, setStats] = useState<Stats>({
@@ -42,6 +60,7 @@ export function Dashboard() {
     lastSync: null,
   });
   const [loading, setLoading] = useState(true);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const loadStats = async () => {
     setLoading(true);
@@ -74,6 +93,18 @@ export function Dashboard() {
     loadStats();
   }, []);
 
+  useEffect(() => {
+    setSelectedId(null);
+  }, [activeSection]);
+
+  const handleNavigate = (tableName: string, id: string) => {
+    const section = tableSectionMap[tableName];
+    if (section) {
+      setActiveSection(section);
+      setTimeout(() => setSelectedId(id), 100);
+    }
+  };
+
   const renderContent = () => {
     if (activeSection === 'api-integration') {
       return <ApiIntegration onSyncComplete={loadStats} />;
@@ -99,7 +130,14 @@ export function Dashboard() {
 
     const tableConfig = tableNameMap[activeSection];
     if (tableConfig) {
-      return <TableView tableName={tableConfig.tableName} displayName={tableConfig.displayName} />;
+      return (
+        <TableView
+          tableName={tableConfig.tableName}
+          displayName={tableConfig.displayName}
+          onNavigate={handleNavigate}
+          selectedId={selectedId}
+        />
+      );
     }
 
     return null;

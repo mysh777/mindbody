@@ -6,6 +6,8 @@ import { exportToExcel } from '../utils/exportExcel';
 interface TableViewProps {
   tableName: string;
   displayName: string;
+  onNavigate?: (tableName: string, id: string) => void;
+  selectedId?: string | null;
 }
 
 const formatDate = (dateString: string | null | undefined): string => {
@@ -41,8 +43,29 @@ const getColumnWidth = (columnName: string, values: any[]): string => {
   return 'min-w-[200px]';
 };
 
-export function TableView({ tableName, displayName }: TableViewProps) {
+const getRelatedTable = (columnName: string): string | null => {
+  const relationshipMap: Record<string, string> = {
+    'client_id': 'clients',
+    'staff_id': 'staff',
+    'location_id': 'locations',
+    'sale_id': 'sales',
+    'appointment_id': 'appointments',
+    'session_type_id': 'session_types',
+    'service_id': 'session_types',
+    'program_id': 'service_categories',
+    'category_id': 'service_categories',
+    'subcategory_id': 'service_subcategories',
+    'pricing_option_id': 'pricing_options',
+    'product_id': 'products',
+    'site_id': 'sites',
+  };
+
+  return relationshipMap[columnName] || null;
+};
+
+export function TableView({ tableName, displayName, onNavigate, selectedId }: TableViewProps) {
   const [data, setData] = useState<any[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [limit, setLimit] = useState(100);
@@ -54,6 +77,12 @@ export function TableView({ tableName, displayName }: TableViewProps) {
     setColumnFilters({});
     try {
       console.log(`📊 Loading data from table: ${tableName}`);
+
+      const { count } = await supabase
+        .from(tableName)
+        .select('*', { count: 'exact', head: true });
+
+      setTotalCount(count || 0);
 
       let query = supabase.from(tableName).select('*').limit(limit);
 
@@ -92,6 +121,12 @@ export function TableView({ tableName, displayName }: TableViewProps) {
     loadData();
   }, [tableName, limit]);
 
+  useEffect(() => {
+    if (selectedId) {
+      setSearch(selectedId);
+    }
+  }, [selectedId]);
+
   const columns = data.length > 0 ? Object.keys(data[0]) : [];
 
   const filteredData = data.filter((row) => {
@@ -121,7 +156,7 @@ export function TableView({ tableName, displayName }: TableViewProps) {
           <div>
             <h2 className="text-2xl font-bold text-slate-900">{displayName}</h2>
             <p className="text-slate-600 mt-1">
-              {loading ? 'Loading...' : `${filteredData.length} of ${data.length} records`}
+              {loading ? 'Loading...' : `Showing ${filteredData.length} of ${data.length} loaded records (${totalCount} total in table)`}
             </p>
           </div>
           <div className="flex gap-2">
@@ -247,6 +282,8 @@ export function TableView({ tableName, displayName }: TableViewProps) {
                         const widthClass = getColumnWidth(col, colValues);
                         const isNumeric = value !== null && value !== undefined && isNumericColumn(col, value);
                         const isDate = isDateColumn(col);
+                        const relatedTable = getRelatedTable(col);
+                        const isClickable = relatedTable && value && onNavigate;
 
                         return (
                           <td
@@ -254,9 +291,18 @@ export function TableView({ tableName, displayName }: TableViewProps) {
                             className={`px-3 py-2 text-slate-700 text-xs ${widthClass} ${isNumeric ? 'text-right font-mono' : ''} ${isDate ? 'font-mono' : ''}`}
                             title={value !== null && value !== undefined ? String(value) : ''}
                           >
-                            {value !== null && value !== undefined
-                              ? (isDate ? formatDate(String(value)) : String(value))
-                              : '-'}
+                            {isClickable ? (
+                              <button
+                                onClick={() => onNavigate(relatedTable, String(value))}
+                                className="text-blue-600 hover:text-blue-800 hover:underline font-medium"
+                              >
+                                {String(value)}
+                              </button>
+                            ) : (
+                              value !== null && value !== undefined
+                                ? (isDate ? formatDate(String(value)) : String(value))
+                                : '-'
+                            )}
                           </td>
                         );
                       })}
