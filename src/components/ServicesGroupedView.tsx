@@ -7,6 +7,7 @@ interface Service {
   id: string;
   mindbody_id: string;
   name: string;
+  service_category_id: string | null;
   program_id: string | null;
   default_duration_minutes: number | null;
   description: string | null;
@@ -143,19 +144,19 @@ export function ServicesGroupedView() {
   const getPricingOptionsForService = (service: Service): PricingOption[] => {
     const linkedPricingIds = pricingServiceLinks
       .filter(link => link.session_type_id === service.id)
-      .map(link => link.pricing_option_id);
+      .map(link => String(link.pricing_option_id));
 
-    return pricingOptions.filter(po => linkedPricingIds.includes(po.id));
+    return pricingOptions.filter(po => linkedPricingIds.includes(String(po.id)));
   };
 
   const groupedData: GroupedServices[] = [
     ...categories.map(category => ({
       category,
-      services: services.filter(s => s.program_id === category.id),
+      services: services.filter(s => s.service_category_id === category.id || s.program_id === category.id),
     })),
     {
       category: null,
-      services: services.filter(s => !s.program_id),
+      services: services.filter(s => !s.service_category_id && !s.program_id),
     },
   ].filter(group => group.services.length > 0);
 
