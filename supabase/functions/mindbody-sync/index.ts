@@ -722,12 +722,14 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
   return totalSynced;
 }
 
-async function syncAppointments(supabase: any, config: MindbodyConfig, userToken: string) {
-  console.log('Syncing appointments (using staffappointments endpoint)');
-  const startDate = new Date();
-  startDate.setMonth(startDate.getMonth() - 6);
-  const endDate = new Date();
-  endDate.setMonth(endDate.getMonth() + 3);
+async function syncAppointments(supabase: any, config: MindbodyConfig, userToken: string, year?: number) {
+  const targetYear = year || new Date().getFullYear();
+  console.log(`=== APPOINTMENTS SYNC START for year ${targetYear} ===`);
+
+  const startDate = new Date(targetYear, 0, 1);
+  const endDate = targetYear === new Date().getFullYear()
+    ? new Date(new Date().getFullYear(), new Date().getMonth() + 3, 0)
+    : new Date(targetYear, 11, 31);
 
   const startDateStr = startDate.toISOString().split('T')[0];
   const endDateStr = endDate.toISOString().split('T')[0];
@@ -741,11 +743,12 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
     return await syncAppointmentsDirect(supabase, config, userToken, startDateStr, endDateStr);
   }
 
-  console.log(`Fetching appointments for ${allStaff.length} staff members from ${startDateStr} to ${endDateStr}`);
+  console.log(`[APPOINTMENTS] Fetching for ${allStaff.length} staff from ${startDateStr} to ${endDateStr}`);
 
   for (const staff of allStaff) {
     let offset = 0;
     const limit = 200;
+    let staffTotal = 0;
 
     while (true) {
       const url = `${MINDBODY_BASE_URL}/appointment/staffappointments?staffIds=${staff.mindbody_id}&startDate=${startDateStr}&endDate=${endDateStr}&limit=${limit}&offset=${offset}`;
@@ -767,10 +770,12 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
         data = {};
       }
 
-      await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
+      if (staffTotal === 0 && totalSynced === 0) {
+        await logApiCall(supabase, url, "GET", { staffId: staff.mindbody_id, year: targetYear }, response.status, data, error, durationMs);
+      }
 
       if (!response.ok) {
-        console.error(`Failed to fetch appointments for staff ${staff.mindbody_id}: ${response.status}`);
+        console.error(`[APPOINTMENTS] Failed for staff ${staff.mindbody_id}: ${response.status}`);
         break;
       }
 
@@ -778,22 +783,19 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
 
       if (offset === 0 && totalSynced === 0 && appointments.length > 0) {
         await saveRawData(supabase, 'appointments', data, appointments.length, data.PaginationResponse);
-        console.log('Sample appointment data:', JSON.stringify(appointments[0], null, 2));
       }
 
       if (appointments.length === 0) break;
 
-      console.log(`Found ${appointments.length} appointments for staff ${staff.mindbody_id} at offset ${offset}`);
-
-      for (const appt of appointments) {
+      const syncedAt = new Date().toISOString();
+      const appointmentsData = appointments.map((appt: any) => {
         const sessionTypeId = appt.SessionTypeId || appt.SessionType?.Id || null;
         const clientId = appt.ClientId || appt.Client?.Id || null;
         const staffId = appt.StaffId || appt.Staff?.Id || staff.mindbody_id;
         const locationId = appt.LocationId || appt.Location?.Id || null;
-
         const clientServiceId = appt.ClientServiceId || null;
 
-        const apptData = {
+        return {
           id: String(appt.Id),
           mindbody_id: String(appt.Id),
           client_id: clientId ? String(clientId) : null,
@@ -808,42 +810,31 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
           notes: appt.Notes,
           first_appointment: appt.FirstAppointment || false,
           raw_data: appt,
-          synced_at: new Date().toISOString(),
+          synced_at: syncedAt,
         };
+      });
 
-        const { error: upsertError } = await supabase.from("appointments").upsert(apptData, {
-          onConflict: "mindbody_id",
-        });
+      const { error: upsertError } = await supabase.from("appointments").upsert(appointmentsData, {
+        onConflict: "mindbody_id",
+      });
 
-        if (upsertError) {
-          console.error(`Failed to upsert appointment ${appt.Id}:`, upsertError);
-        }
-
-        if (appt.AddOns && appt.AddOns.length > 0) {
-          for (const addon of appt.AddOns) {
-            const addonData = {
-              appointment_id: String(appt.Id),
-              addon_id: addon.Id ? String(addon.Id) : null,
-              addon_name: addon.Name,
-              addon_price: addon.Price,
-            };
-
-            await supabase.from("appointment_addons").upsert(addonData, {
-              onConflict: "appointment_id,addon_id",
-              ignoreDuplicates: true,
-            });
-          }
-        }
+      if (upsertError) {
+        console.error(`[APPOINTMENTS] Batch upsert error:`, upsertError.message);
       }
 
+      staffTotal += appointments.length;
       totalSynced += appointments.length;
       offset += limit;
 
       if (appointments.length < limit) break;
     }
+
+    if (staffTotal > 0) {
+      console.log(`[APPOINTMENTS] Staff ${staff.mindbody_id}: ${staffTotal} appointments`);
+    }
   }
 
-  console.log(`Total appointments synced: ${totalSynced}`);
+  console.log(`=== APPOINTMENTS SYNC COMPLETE: ${totalSynced} records for year ${targetYear} ===`);
   return totalSynced;
 }
 
@@ -2013,7 +2004,7 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "appointments" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Appointments ---');
-          results.appointments = await syncAppointments(supabase, config, userToken);
+          results.appointments = await syncAppointments(supabase, config, userToken, targetYear);
           console.log(`✅ Appointments synced: ${results.appointments}`);
         } catch (e) {
           console.error('❌ Appointments sync failed:', e);

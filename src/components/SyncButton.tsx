@@ -22,6 +22,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     sales: currentYear,
     client_services: currentYear,
     transactions: currentYear,
+    appointments: currentYear,
   });
 
   const handleYearChange = (syncType: string, year: number) => {
@@ -101,10 +102,10 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     { type: 'build_pricing_links' as SyncType, label: 'Price - Service Links', icon: Link2, color: 'amber' },
     { type: 'retail_products' as SyncType, label: 'Retail Products', icon: ShoppingCart, color: 'slate' },
     { type: 'clients' as SyncType, label: 'Clients', icon: Users, color: 'orange' },
-    { type: 'appointments' as SyncType, label: 'Appointments', icon: Calendar, color: 'red' },
   ];
 
   const yearBasedButtons = [
+    { type: 'appointments' as SyncType, label: 'Appointments', icon: Calendar, color: 'red', description: 'All appointments for the year' },
     { type: 'sales' as SyncType, label: 'Sales', icon: DollarSign, color: 'emerald', description: 'Sales + Payments + Items' },
     { type: 'client_services' as SyncType, label: 'Client Services', icon: FileText, color: 'blue', description: 'Purchased packages/memberships' },
     { type: 'transactions' as SyncType, label: 'Transactions', icon: CreditCard, color: 'violet', description: 'Payment transactions detail' },
@@ -165,8 +166,8 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
       </div>
 
       <div className="border-t pt-4">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Year-Based Sync (Sales, Services, Transactions):</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Year-Based Sync:</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
           {yearBasedButtons.map(({ type, label, icon: Icon, color, description }) => (
             <div key={type} className="flex flex-col gap-2 p-3 bg-gray-50 rounded-lg border border-gray-200">
               <div className="flex items-center justify-between">
