@@ -13,8 +13,7 @@ import {
   Pie,
   Cell,
   Legend,
-  LineChart,
-  Line,
+  LabelList,
 } from 'recharts';
 
 interface SalesReportPageProps {
@@ -70,6 +69,7 @@ interface MonthStat {
   month: string;
   revenue: number;
   count: number;
+  [key: string]: string | number;
 }
 
 interface ClientStat {
@@ -245,25 +245,32 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
       const monthlyStats: MonthStat[] = [];
 
       for (const m of last12) {
-        let query = supabase
+        const { data, error } = await supabase
           .from('sales')
-          .select('total')
+          .select('total, location_id')
           .gte('sale_datetime', m.start)
           .lte('sale_datetime', m.end + 'T23:59:59');
 
-        if (selectedLocation !== 'all') {
-          query = query.eq('location_id', selectedLocation);
-        }
-
-        const { data, error } = await query;
         if (error) throw error;
 
-        const revenue = (data || []).reduce((sum, s) => sum + (s.total || 0), 0);
-        monthlyStats.push({
+        const statEntry: MonthStat = {
           month: m.month,
-          revenue,
+          revenue: 0,
           count: data?.length || 0,
+        };
+
+        const locationRevenues: Record<string, number> = {};
+        (data || []).forEach(s => {
+          const locId = s.location_id || 'unknown';
+          locationRevenues[locId] = (locationRevenues[locId] || 0) + (s.total || 0);
+          statEntry.revenue += s.total || 0;
         });
+
+        locations.forEach(loc => {
+          statEntry[`loc_${loc.id}`] = locationRevenues[loc.id] || 0;
+        });
+
+        monthlyStats.push(statEntry);
       }
 
       setMonthlyData(monthlyStats);
@@ -272,7 +279,7 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
     } finally {
       setLoadingMonthly(false);
     }
-  }, [selectedLocation]);
+  }, [locations]);
 
   useEffect(() => {
     loadLocations();
@@ -643,27 +650,61 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
         </div>
 
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-          <h3 className="text-lg font-semibold text-slate-900 mb-4">Monthly Revenue (Last 12 Months)</h3>
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">Monthly Revenue by Location (Last 12 Months)</h3>
           {loadingMonthly ? (
             <div className="h-80 flex items-center justify-center text-slate-500">Loading...</div>
           ) : monthlyData.length === 0 ? (
             <div className="h-80 flex items-center justify-center text-slate-500">No data available</div>
           ) : (
-            <ResponsiveContainer width="100%" height={350}>
-              <BarChart data={monthlyData} margin={{ top: 30, right: 30, left: 20, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-                <Tooltip content={<CustomTooltip />} />
-                <Bar
-                  dataKey="revenue"
-                  fill="#3B82F6"
-                  radius={[4, 4, 0, 0]}
-                  name="Revenue"
-                  label={{ position: 'top', formatter: (v: number) => v > 0 ? `${(v / 1000).toFixed(1)}k` : '', fontSize: 10, fill: '#64748b' }}
-                />
-              </BarChart>
-            </ResponsiveContainer>
+            <>
+              <ResponsiveContainer width="100%" height={400}>
+                <BarChart data={monthlyData} margin={{ top: 30, right: 30, left: 20, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                  <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                  <Tooltip
+                    formatter={(value: number, name: string) => [formatCurrency(value), name === 'revenue' ? 'Total' : locations.find(l => `loc_${l.id}` === name)?.name || name]}
+                    labelFormatter={(label) => `Month: ${label}`}
+                  />
+                  <Legend formatter={(value) => value === 'revenue' ? 'Total' : locations.find(l => `loc_${l.id}` === value)?.name || value} />
+                  {locations.map((loc, index) => (
+                    <Bar
+                      key={loc.id}
+                      dataKey={`loc_${loc.id}`}
+                      fill={CHART_COLORS[index % CHART_COLORS.length]}
+                      radius={[2, 2, 0, 0]}
+                      name={`loc_${loc.id}`}
+                    >
+                      <LabelList
+                        dataKey={`loc_${loc.id}`}
+                        position="top"
+                        formatter={(v: number) => v > 0 ? `${(v / 1000).toFixed(1)}k` : ''}
+                        fontSize={9}
+                        fill="#64748b"
+                      />
+                    </Bar>
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+              <div className="mt-4 pt-4 border-t border-slate-200">
+                <div className="flex flex-wrap gap-4 justify-center">
+                  {monthlyData.length > 0 && locations.map((loc, index) => {
+                    const total = monthlyData.reduce((sum, m) => sum + (Number(m[`loc_${loc.id}`]) || 0), 0);
+                    return (
+                      <div key={loc.id} className="flex items-center gap-2 px-3 py-2 bg-slate-50 rounded-lg">
+                        <div className="w-3 h-3 rounded" style={{ backgroundColor: CHART_COLORS[index % CHART_COLORS.length] }}></div>
+                        <span className="text-sm text-slate-600">{loc.name}:</span>
+                        <span className="text-sm font-semibold text-slate-900">{formatCurrency(total)}</span>
+                      </div>
+                    );
+                  })}
+                  <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 rounded-lg border border-blue-200">
+                    <span className="text-sm font-medium text-blue-700">Total:</span>
+                    <span className="text-sm font-bold text-blue-900">{formatCurrency(monthlyData.reduce((sum, m) => sum + m.revenue, 0))}</span>
+                  </div>
+                </div>
+              </div>
+            </>
           )}
         </div>
 
