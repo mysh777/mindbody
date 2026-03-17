@@ -5,6 +5,7 @@ import { ApiIntegration } from './ApiIntegration';
 import { PivotTable } from './PivotTable';
 import { TableView } from './TableView';
 import { ServicesGroupedView } from './ServicesGroupedView';
+import { SalesExpandableView } from './SalesExpandableView';
 
 interface Stats {
   clients: number;
@@ -134,6 +135,10 @@ export function Dashboard() {
 
     if (activeSection === 'services') {
       return <ServicesGroupedView />;
+    }
+
+    if (activeSection === 'sales') {
+      return <SalesExpandableView onNavigate={handleNavigate} />;
     }
 
     const tableConfig = tableNameMap[activeSection];
