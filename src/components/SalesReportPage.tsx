@@ -184,8 +184,34 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
   }, []);
 
   const loadPricingOptions = useCallback(async () => {
-    const { data } = await supabase.from('pricing_options').select('name, program_name');
-    setPricingOptions(data || []);
+    const { data } = await supabase
+      .from('pricing_options')
+      .select(`
+        name,
+        pricing_option_session_types (
+          session_types (
+            service_categories (
+              name
+            )
+          )
+        )
+      `);
+
+    const result: { name: string; program_name: string | null }[] = [];
+    if (data) {
+      data.forEach((po: {
+        name: string;
+        pricing_option_session_types: {
+          session_types: {
+            service_categories: { name: string } | null
+          } | null
+        }[]
+      }) => {
+        const categoryName = po.pricing_option_session_types?.[0]?.session_types?.service_categories?.name || null;
+        result.push({ name: po.name, program_name: categoryName });
+      });
+    }
+    setPricingOptions(result);
   }, []);
 
   const loadClients = useCallback(async () => {
