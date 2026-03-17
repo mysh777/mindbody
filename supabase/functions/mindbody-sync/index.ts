@@ -1099,7 +1099,7 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
     const saleItemsData: any[] = [];
 
     for (const sale of sales) {
-      const saleId = String(sale.Id || sale.SaleId);
+      const saleId = String(sale.Id);
 
       const totalPaymentAmount = sale.Payments?.reduce((sum: number, payment: any) => sum + (payment.Amount || 0), 0) || 0;
       const totalItemsAmount = sale.PurchasedItems?.reduce((sum: number, item: any) => sum + (item.TotalAmount || 0), 0) || 0;
@@ -1124,57 +1124,65 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
         synced_at: syncedAt,
       });
 
-      if (sale.Payments) {
+      if (sale.Payments && Array.isArray(sale.Payments)) {
         for (const payment of sale.Payments) {
+          const paymentId = String(payment.Id);
           paymentsData.push({
-            mindbody_id: `${sale.Id}-${payment.Id}`,
+            mindbody_id: `${saleId}-${paymentId}`,
             sale_id: saleId,
             mindbody_sale_id: saleId,
             type: payment.Type,
             method: payment.Method,
-            amount: payment.Amount,
-            notes: payment.Notes,
-            transaction_id: payment.TransactionId,
+            amount: payment.Amount || 0,
+            notes: payment.Notes || null,
+            transaction_id: payment.TransactionId ? String(payment.TransactionId) : null,
             raw_data: payment,
             synced_at: syncedAt,
           });
         }
       }
 
-      if (sale.PurchasedItems) {
+      if (sale.PurchasedItems && Array.isArray(sale.PurchasedItems)) {
         for (const item of sale.PurchasedItems) {
+          const saleDetailId = item.SaleDetailId;
+          if (!saleDetailId) {
+            console.warn(`[SALE_ITEMS] Missing SaleDetailId for item in sale ${saleId}`);
+            continue;
+          }
+
           saleItemsData.push({
             sale_id: saleId,
+            sale_detail_id: saleDetailId,
             mindbody_id: String(item.Id),
-            item_type: item.IsService ? 'Service' : 'Product',
             item_id: String(item.Id),
-            item_name: item.Description || item.Name,
-            amount: item.TotalAmount || 0,
+            description: item.Description || item.Name || null,
+            item_name: item.Description || item.Name || null,
+            item_type: item.IsService ? 'Service' : 'Product',
             quantity: item.Quantity || 1,
+            unit_price: item.UnitPrice || 0,
+            total_amount: item.TotalAmount || 0,
+            amount: item.TotalAmount || 0,
             discount_amount: item.DiscountAmount || 0,
+            discount_percent: item.DiscountPercent || 0,
+            tax_amount: item.TaxAmount || 0,
             tax: item.TaxAmount || 0,
             tax1: item.Tax1 || 0,
             tax2: item.Tax2 || 0,
             tax3: item.Tax3 || 0,
             tax4: item.Tax4 || 0,
             tax5: item.Tax5 || 0,
-            notes: item.Notes,
-            exp_date: item.ExpDate,
-            returned: item.Returned || false,
-            barcode_id: item.BarcodeId,
             is_service: item.IsService || false,
-            tax_amount: item.TaxAmount || 0,
-            unit_price: item.UnitPrice,
-            active_date: item.ActiveDate,
-            category_id: item.CategoryId,
-            contract_id: item.ContractId ? String(item.ContractId) : null,
-            total_amount: item.TotalAmount,
-            payment_ref_id: item.PaymentRefId,
-            sale_detail_id: item.SaleDetailId,
-            sub_category_id: item.SubCategoryId,
-            discount_percent: item.DiscountPercent || 0,
-            gift_card_barcode_id: item.GiftCardBarcodeId,
+            payment_ref_id: item.PaymentRefId || null,
             recipient_client_id: item.RecipientClientId ? String(item.RecipientClientId) : null,
+            notes: item.Notes || null,
+            exp_date: item.ExpDate && item.ExpDate !== '0001-01-01T00:00:00' ? item.ExpDate : null,
+            active_date: item.ActiveDate && item.ActiveDate !== '0001-01-01T00:00:00' ? item.ActiveDate : null,
+            returned: item.Returned || false,
+            barcode_id: item.BarcodeId || null,
+            category_id: item.CategoryId || null,
+            sub_category_id: item.SubCategoryId || null,
+            contract_id: item.ContractId ? String(item.ContractId) : null,
+            gift_card_barcode_id: item.GiftCardBarcodeId || null,
             raw_data: item,
           });
         }
@@ -1192,8 +1200,15 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
     }
 
     if (saleItemsData.length > 0) {
-      const { error: itemsError } = await supabase.from("sale_items").upsert(saleItemsData, { onConflict: "sale_id,mindbody_id" });
-      if (itemsError) console.error(`[SALE_ITEMS] Batch upsert error:`, itemsError);
+      for (const item of saleItemsData) {
+        const { error: itemError } = await supabase.from("sale_items").upsert(item, {
+          onConflict: "sale_detail_id",
+          ignoreDuplicates: false
+        });
+        if (itemError) {
+          console.error(`[SALE_ITEMS] Upsert error for sale_detail_id ${item.sale_detail_id}:`, itemError.message);
+        }
+      }
     }
 
     const upsertMs = Date.now() - upsertStart;
@@ -1383,17 +1398,25 @@ async function syncTransactions(supabase: any, config: MindbodyConfig, userToken
     const transactionsData: any[] = [];
 
     for (const sale of sales) {
-      if (sale.Payments) {
+      if (sale.Payments && Array.isArray(sale.Payments)) {
         for (const payment of sale.Payments) {
+          const paymentId = String(payment.Id);
           transactionsData.push({
-            mindbody_id: `${sale.Id}-${payment.Id}`,
-            transaction_id: payment.TransactionId || `${sale.Id}-${payment.Id}`,
+            mindbody_id: `${sale.Id}-${paymentId}`,
+            transaction_id: payment.TransactionId ? String(payment.TransactionId) : `${sale.Id}-${paymentId}`,
             sale_id: String(sale.Id),
             payment_processor: payment.Type || 'Unknown',
             transaction_status: 'Completed',
             amount: payment.Amount || 0,
             transaction_date: sale.SaleDateTime,
-            raw_data: { sale_id: sale.Id, payment },
+            raw_data: {
+              sale_id: sale.Id,
+              sale_datetime: sale.SaleDateTime,
+              client_id: sale.ClientId,
+              location_id: sale.LocationId,
+              payment: payment,
+              purchased_items: sale.PurchasedItems || []
+            },
             synced_at: syncedAt,
           });
         }
