@@ -184,34 +184,13 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
   }, []);
 
   const loadPricingOptions = useCallback(async () => {
-    const { data } = await supabase
-      .from('pricing_options')
-      .select(`
-        name,
-        pricing_option_session_types (
-          session_types (
-            service_categories (
-              name
-            )
-          )
-        )
-      `);
-
-    const result: { name: string; program_name: string | null }[] = [];
-    if (data) {
-      data.forEach((po: {
-        name: string;
-        pricing_option_session_types: {
-          session_types: {
-            service_categories: { name: string } | null
-          } | null
-        }[]
-      }) => {
-        const categoryName = po.pricing_option_session_types?.[0]?.session_types?.service_categories?.name || null;
-        result.push({ name: po.name, program_name: categoryName });
-      });
+    const { data, error } = await supabase.from('pricing_options').select('name, program_name');
+    if (error) {
+      console.error('Error loading pricing options:', error);
     }
-    setPricingOptions(result);
+    console.log('Pricing options loaded:', data?.length, 'items');
+    console.log('With program_name:', data?.filter(p => p.program_name).length);
+    setPricingOptions(data || []);
   }, []);
 
   const loadClients = useCallback(async () => {
@@ -367,11 +346,22 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
       }
     });
 
+    console.log('Lookup map size:', Object.keys(itemToCategoryLookup).length);
+    console.log('Sample lookup entries:', Object.entries(itemToCategoryLookup).slice(0, 5));
+
+    const serviceItems = saleItems.filter(item => item.is_service);
+    console.log('Service items:', serviceItems.length);
+    console.log('Sample service items:', serviceItems.slice(0, 3).map(i => ({ item_name: i.item_name, description: i.description })));
+
     saleItems.forEach(item => {
       if (!item.is_service) return;
 
       const itemName = item.item_name || item.description || '';
       const categoryName = itemToCategoryLookup[itemName] || 'Other Services';
+
+      if (categoryName === 'Other Services' && itemName) {
+        console.log('Unmatched item:', itemName);
+      }
 
       if (!statsMap[categoryName]) {
         statsMap[categoryName] = { count: 0, revenue: 0 };
