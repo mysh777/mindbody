@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { Download, RefreshCw, ChevronDown, ChevronRight, CreditCard, Package } from 'lucide-react';
+import { Download, RefreshCw, ChevronDown, ChevronRight, CreditCard, Package, Filter, Building2 } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 
 interface SalesExpandableViewProps {
@@ -54,6 +54,8 @@ interface RelatedDataCache {
   locations: Record<string, string>;
 }
 
+type FilterPreset = 'today' | 'this_week' | 'this_month' | 'last_month' | 'this_year' | 'custom';
+
 const formatDate = (dateString: string | null | undefined): string => {
   if (!dateString) return '-';
   try {
@@ -90,21 +92,84 @@ const getPaymentMethodName = (method: number | null): string => {
   return method !== null ? (methods[method] || `Method ${method}`) : '-';
 };
 
+function getFilterPresetDates(preset: FilterPreset): { start: string; end: string } {
+  const today = new Date();
+  const todayStr = today.toISOString().split('T')[0];
+
+  switch (preset) {
+    case 'today':
+      return { start: todayStr, end: todayStr };
+    case 'this_week': {
+      const dayOfWeek = today.getDay();
+      const monday = new Date(today);
+      monday.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+      return { start: monday.toISOString().split('T')[0], end: todayStr };
+    }
+    case 'this_month': {
+      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+      return { start: firstDay.toISOString().split('T')[0], end: todayStr };
+    }
+    case 'last_month': {
+      const firstDay = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const lastDay = new Date(today.getFullYear(), today.getMonth(), 0);
+      return { start: firstDay.toISOString().split('T')[0], end: lastDay.toISOString().split('T')[0] };
+    }
+    case 'this_year': {
+      const firstDay = new Date(today.getFullYear(), 0, 1);
+      return { start: firstDay.toISOString().split('T')[0], end: todayStr };
+    }
+    default:
+      return { start: todayStr, end: todayStr };
+  }
+}
+
+function getMonthsForTimeline(): { label: string; start: string; end: string }[] {
+  const months: { label: string; start: string; end: string }[] = [];
+  const today = new Date();
+
+  for (let i = 11; i >= 0; i--) {
+    const date = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+    months.push({
+      label: date.toLocaleString('en-US', { month: 'short', year: '2-digit' }),
+      start: date.toISOString().split('T')[0],
+      end: lastDay.toISOString().split('T')[0],
+    });
+  }
+
+  return months;
+}
+
 export function SalesExpandableView({ onNavigate }: SalesExpandableViewProps) {
   const [sales, setSales] = useState<Sale[]>([]);
   const [totalCount, setTotalCount] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
-  const [limit, setLimit] = useState(100);
   const [expandedSales, setExpandedSales] = useState<Set<string>>(new Set());
   const [saleItems, setSaleItems] = useState<Record<string, SaleItem[]>>({});
   const [payments, setPayments] = useState<Record<string, Payment[]>>({});
   const [loadingDetails, setLoadingDetails] = useState<Set<string>>(new Set());
+  const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState<string>('all');
   const [relatedCache, setRelatedCache] = useState<RelatedDataCache>({
     clients: {},
     staff: {},
     locations: {},
   });
+
+  const [filterPreset, setFilterPreset] = useState<FilterPreset>('this_month');
+  const [dateRange, setDateRange] = useState(getFilterPresetDates('this_month'));
+  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+
+  const months = getMonthsForTimeline();
+
+  const loadLocations = useCallback(async () => {
+    const { data } = await supabase
+      .from('locations')
+      .select('id, name')
+      .order('name');
+    setLocations(data || []);
+  }, []);
 
   const loadRelatedData = useCallback(async () => {
     const cache: RelatedDataCache = {
@@ -138,29 +203,31 @@ export function SalesExpandableView({ onNavigate }: SalesExpandableViewProps) {
     setRelatedCache(cache);
   }, []);
 
-  const loadSales = async () => {
+  const loadSales = useCallback(async () => {
     setLoading(true);
     try {
-      const { count } = await supabase
-        .from('sales')
-        .select('*', { count: 'exact', head: true });
-
-      setTotalCount(count || 0);
-
-      const { data, error } = await supabase
+      let query = supabase
         .from('sales')
         .select('id, mindbody_id, client_id, sale_datetime, location_id, sales_rep_id, recipient_client_id, total, payment_amount, raw_data')
-        .order('sale_datetime', { ascending: false })
-        .limit(limit);
+        .gte('sale_datetime', dateRange.start)
+        .lte('sale_datetime', dateRange.end + 'T23:59:59')
+        .order('sale_datetime', { ascending: false });
+
+      if (selectedLocation !== 'all') {
+        query = query.eq('location_id', selectedLocation);
+      }
+
+      const { data, error, count } = await query;
 
       if (error) throw error;
       setSales(data || []);
+      setTotalCount(count || data?.length || 0);
     } catch (error) {
       console.error('Error loading sales:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [dateRange, selectedLocation]);
 
   const loadSaleDetails = async (saleId: string) => {
     if (saleItems[saleId] && payments[saleId]) return;
@@ -212,9 +279,33 @@ export function SalesExpandableView({ onNavigate }: SalesExpandableViewProps) {
   };
 
   useEffect(() => {
-    loadSales();
+    loadLocations();
     loadRelatedData();
-  }, [limit, loadRelatedData]);
+  }, [loadLocations, loadRelatedData]);
+
+  useEffect(() => {
+    loadSales();
+  }, [loadSales]);
+
+  const handlePresetChange = (preset: FilterPreset) => {
+    setFilterPreset(preset);
+    setSelectedMonth(null);
+    if (preset !== 'custom') {
+      setDateRange(getFilterPresetDates(preset));
+    }
+  };
+
+  const handleMonthSelect = (month: { start: string; end: string; label: string }) => {
+    setSelectedMonth(month.label);
+    setFilterPreset('custom');
+    setDateRange({ start: month.start, end: month.end });
+  };
+
+  const handleDateChange = (field: 'start' | 'end', value: string) => {
+    setFilterPreset('custom');
+    setSelectedMonth(null);
+    setDateRange(prev => ({ ...prev, [field]: value }));
+  };
 
   const filteredSales = sales.filter(sale => {
     if (!search) return true;
@@ -226,6 +317,12 @@ export function SalesExpandableView({ onNavigate }: SalesExpandableViewProps) {
       (sale.location_id && relatedCache.locations[sale.location_id]?.toLowerCase().includes(searchLower))
     );
   });
+
+  const totals = {
+    count: filteredSales.length,
+    total: filteredSales.reduce((sum, s) => sum + (s.total || 0), 0),
+    paid: filteredSales.reduce((sum, s) => sum + (s.payment_amount || 0), 0),
+  };
 
   const handleExport = () => {
     const exportData: any[] = [];
@@ -273,7 +370,7 @@ export function SalesExpandableView({ onNavigate }: SalesExpandableViewProps) {
           <div>
             <h2 className="text-2xl font-bold text-slate-900">Sales</h2>
             <p className="text-slate-600 mt-1">
-              {loading ? 'Loading...' : `Showing ${filteredSales.length} of ${sales.length} loaded records (${totalCount} total)`}
+              {loading ? 'Loading...' : `Showing ${filteredSales.length} sales (${totalCount} in period)`}
             </p>
           </div>
           <div className="flex gap-2">
@@ -310,9 +407,81 @@ export function SalesExpandableView({ onNavigate }: SalesExpandableViewProps) {
       </div>
 
       <div className="p-6 space-y-4">
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-          <div className="flex gap-4 items-center">
-            <div className="flex-1">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+            <div className="text-sm text-slate-600">Total Sales</div>
+            <div className="text-2xl font-bold text-blue-600 mt-1">{totals.count}</div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+            <div className="text-sm text-slate-600">Total Amount</div>
+            <div className="text-2xl font-bold text-slate-900 mt-1">{formatCurrency(totals.total)}</div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+            <div className="text-sm text-slate-600">Total Paid</div>
+            <div className="text-2xl font-bold text-green-600 mt-1">{formatCurrency(totals.paid)}</div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-4">
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={() => handlePresetChange('today')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                filterPreset === 'today' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              Today
+            </button>
+            <button
+              onClick={() => handlePresetChange('this_week')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                filterPreset === 'this_week' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              This Week
+            </button>
+            <button
+              onClick={() => handlePresetChange('this_month')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                filterPreset === 'this_month' && !selectedMonth ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              This Month
+            </button>
+            <button
+              onClick={() => handlePresetChange('last_month')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                filterPreset === 'last_month' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              Last Month
+            </button>
+            <button
+              onClick={() => handlePresetChange('this_year')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                filterPreset === 'this_year' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+              }`}
+            >
+              This Year
+            </button>
+          </div>
+
+          <div className="flex gap-1 overflow-x-auto pb-2">
+            {months.map((month) => (
+              <button
+                key={month.label}
+                onClick={() => handleMonthSelect(month)}
+                className={`px-3 py-1.5 rounded text-xs font-medium whitespace-nowrap transition-colors ${
+                  selectedMonth === month.label ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {month.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex gap-4 items-center flex-wrap">
+            <div className="flex-1 min-w-[200px]">
               <input
                 type="text"
                 placeholder="Search by ID, client, location..."
@@ -321,16 +490,48 @@ export function SalesExpandableView({ onNavigate }: SalesExpandableViewProps) {
                 className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
+
+            <div className="flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-slate-500" />
+            </div>
             <select
-              value={limit}
-              onChange={(e) => setLimit(Number(e.target.value))}
-              className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              value={selectedLocation}
+              onChange={(e) => setSelectedLocation(e.target.value)}
+              className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
             >
-              <option value={50}>50 rows</option>
-              <option value={100}>100 rows</option>
-              <option value={200}>200 rows</option>
-              <option value={500}>500 rows</option>
+              <option value="all">All Locations</option>
+              {locations.map((loc) => (
+                <option key={loc.id} value={loc.id}>{loc.name}</option>
+              ))}
             </select>
+
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-slate-500" />
+              <span className="text-sm text-slate-600">Custom:</span>
+            </div>
+
+            <input
+              type="date"
+              value={dateRange.start}
+              onChange={(e) => handleDateChange('start', e.target.value)}
+              className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+            />
+
+            <span className="text-slate-400">to</span>
+
+            <input
+              type="date"
+              value={dateRange.end}
+              onChange={(e) => handleDateChange('end', e.target.value)}
+              className="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+            />
+
+            <button
+              onClick={loadSales}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+            >
+              Apply
+            </button>
           </div>
         </div>
 
@@ -340,7 +541,7 @@ export function SalesExpandableView({ onNavigate }: SalesExpandableViewProps) {
           </div>
         ) : filteredSales.length === 0 ? (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center text-slate-600">
-            No sales found
+            No sales found for selected period
           </div>
         ) : (
           <div className="space-y-2">
