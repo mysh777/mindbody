@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { Sidebar, MenuSection } from './Sidebar';
 import { ApiIntegration } from './ApiIntegration';
@@ -22,13 +22,14 @@ const tableNameMap: Record<MenuSection, { tableName: string; displayName: string
   'staff': { tableName: 'staff', displayName: 'Staff' },
   'service-categories': { tableName: 'service_categories', displayName: 'Service Categories' },
   'services': { tableName: 'session_types', displayName: 'Session Types' },
-  'staff-services': { tableName: 'staff_session_types', displayName: 'Staff ↔ Session Types' },
+  'staff-services': { tableName: 'staff_session_types', displayName: 'Staff - Session Types' },
   'pricing-options': { tableName: 'pricing_options', displayName: 'Pricing Options' },
   'clients': { tableName: 'clients', displayName: 'Clients' },
   'appointments': { tableName: 'appointments', displayName: 'Appointments' },
   'sales': { tableName: 'sales', displayName: 'Sales' },
-  'payments': { tableName: 'payments', displayName: 'Payments' },
+  'transactions': { tableName: 'transactions', displayName: 'Transactions' },
   'sale-items': { tableName: 'sale_items', displayName: 'Sale Items' },
+  'client-services': { tableName: 'client_services', displayName: 'Client Services' },
   'retail-products': { tableName: 'retail_products', displayName: 'Retail Products' },
 };
 
@@ -45,7 +46,8 @@ const tableSectionMap: Record<string, MenuSection> = {
   'products': 'retail-products',
   'sites': 'sites',
   'sale_items': 'sale-items',
-  'payments': 'payments',
+  'transactions': 'transactions',
+  'client_services': 'client-services',
   'retail_products': 'retail-products',
   'staff_session_types': 'staff-services',
 };
@@ -61,8 +63,9 @@ export function Dashboard() {
   });
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  const loadStats = async () => {
+  const loadStats = useCallback(async () => {
     setLoading(true);
     try {
       const [clientsRes, appointmentsRes, salesRes, syncRes] = await Promise.all([
@@ -87,11 +90,16 @@ export function Dashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  const handleSyncComplete = useCallback(() => {
+    loadStats();
+    setRefreshTrigger(prev => prev + 1);
+  }, [loadStats]);
 
   useEffect(() => {
     loadStats();
-  }, []);
+  }, [loadStats]);
 
   useEffect(() => {
     setSelectedId(null);
@@ -107,7 +115,7 @@ export function Dashboard() {
 
   const renderContent = () => {
     if (activeSection === 'api-integration') {
-      return <ApiIntegration onSyncComplete={loadStats} />;
+      return <ApiIntegration onSyncComplete={handleSyncComplete} />;
     }
 
     if (activeSection === 'pivot-reports') {
@@ -145,7 +153,11 @@ export function Dashboard() {
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden">
-      <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} />
+      <Sidebar
+        activeSection={activeSection}
+        onSectionChange={setActiveSection}
+        refreshTrigger={refreshTrigger}
+      />
       <div className="flex-1 overflow-auto">
         {renderContent()}
       </div>

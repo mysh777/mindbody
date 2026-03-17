@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Database, Settings, BarChart3, Users, Calendar, DollarSign, MapPin, UserCog, Grid3x3, Tag, Package, ShoppingBag, FileText, FileJson, History, CreditCard } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Database, Settings, BarChart3, Users, Calendar, DollarSign, MapPin, UserCog, Grid3x3, Tag, Package, ShoppingBag, FileText, CreditCard, Wallet } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export type MenuSection =
@@ -15,13 +15,15 @@ export type MenuSection =
   | 'clients'
   | 'appointments'
   | 'sales'
-  | 'payments'
+  | 'transactions'
   | 'sale-items'
+  | 'client-services'
   | 'retail-products';
 
 interface SidebarProps {
   activeSection: MenuSection;
   onSectionChange: (section: MenuSection) => void;
+  refreshTrigger?: number;
 }
 
 interface MenuItem {
@@ -45,12 +47,13 @@ const tableNameMap: Record<MenuSection, string | null> = {
   'clients': 'clients',
   'appointments': 'appointments',
   'sales': 'sales',
-  'payments': 'payments',
+  'transactions': 'transactions',
   'sale-items': 'sale_items',
+  'client-services': 'client_services',
   'retail-products': 'retail_products',
 };
 
-export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
+export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: SidebarProps) {
   const [counts, setCounts] = useState<Record<string, number>>({});
 
   const menuItems: MenuItem[] = [
@@ -61,39 +64,51 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
     { id: 'staff', label: 'Staff', icon: UserCog, color: 'violet' },
     { id: 'service-categories', label: 'Service Categories', icon: Grid3x3, color: 'cyan' },
     { id: 'services', label: 'Services', icon: Tag, color: 'green' },
-    { id: 'staff-services', label: 'Staff ↔ Services', icon: Grid3x3, color: 'teal' },
+    { id: 'staff-services', label: 'Staff - Services', icon: Grid3x3, color: 'teal' },
     { id: 'pricing-options', label: 'Pricing Options', icon: Package, color: 'lime' },
     { id: 'clients', label: 'Clients', icon: Users, color: 'orange' },
     { id: 'appointments', label: 'Appointments', icon: Calendar, color: 'red' },
     { id: 'sales', label: 'Sales', icon: DollarSign, color: 'emerald' },
-    { id: 'payments', label: 'Payments', icon: CreditCard, color: 'sky' },
+    { id: 'transactions', label: 'Transactions', icon: CreditCard, color: 'sky' },
     { id: 'sale-items', label: 'Sale Items', icon: FileText, color: 'amber' },
+    { id: 'client-services', label: 'Client Services', icon: Wallet, color: 'pink' },
     { id: 'retail-products', label: 'Retail Products', icon: ShoppingBag, color: 'rose' },
   ];
 
-  useEffect(() => {
-    const loadCounts = async () => {
-      const newCounts: Record<string, number> = {};
+  const loadCounts = useCallback(async () => {
+    const newCounts: Record<string, number> = {};
 
-      for (const [section, tableName] of Object.entries(tableNameMap)) {
-        if (tableName) {
-          try {
-            const { count } = await supabase
-              .from(tableName)
-              .select('*', { count: 'exact', head: true });
-            newCounts[section] = count || 0;
-          } catch (error) {
-            console.error(`Error loading count for ${tableName}:`, error);
-            newCounts[section] = 0;
-          }
+    const promises = Object.entries(tableNameMap).map(async ([section, tableName]) => {
+      if (tableName) {
+        try {
+          const { count } = await supabase
+            .from(tableName)
+            .select('*', { count: 'exact', head: true });
+          newCounts[section] = count || 0;
+        } catch (error) {
+          console.error(`Error loading count for ${tableName}:`, error);
+          newCounts[section] = 0;
         }
       }
+    });
 
-      setCounts(newCounts);
-    };
-
-    loadCounts();
+    await Promise.all(promises);
+    setCounts(newCounts);
   }, []);
+
+  useEffect(() => {
+    loadCounts();
+  }, [loadCounts, refreshTrigger]);
+
+  const formatCount = (count: number) => {
+    if (count >= 1000000) {
+      return `${(count / 1000000).toFixed(1)}M`;
+    }
+    if (count >= 1000) {
+      return `${(count / 1000).toFixed(1)}K`;
+    }
+    return count.toString();
+  };
 
   const getItemClass = (itemId: MenuSection) => {
     const isActive = activeSection === itemId;
@@ -126,7 +141,7 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
               <span className="text-sm flex-1 text-left">{item.label}</span>
               {hasCount && (
                 <span className="ml-auto text-xs font-semibold px-2 py-0.5 bg-slate-200 text-slate-700 rounded-full">
-                  {count}
+                  {formatCount(count)}
                 </span>
               )}
             </button>
