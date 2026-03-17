@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Database, Settings, BarChart3, Users, Calendar, DollarSign, MapPin, UserCog, Grid3x3, Tag, Package, ShoppingBag, FileText, CreditCard, Wallet } from 'lucide-react';
+import { Database, Settings, BarChart3, Users, Calendar, DollarSign, MapPin, UserCog, Grid3x3, Tag, Package, ShoppingBag, FileText, CreditCard, Wallet, ClipboardList } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export type MenuSection =
@@ -8,11 +8,13 @@ export type MenuSection =
   | 'sites'
   | 'locations'
   | 'staff'
+  | 'staff-report'
   | 'service-categories'
   | 'services'
   | 'staff-services'
   | 'pricing-options'
   | 'clients'
+  | 'clients-report'
   | 'appointments'
   | 'sales'
   | 'transactions'
@@ -40,11 +42,13 @@ const tableNameMap: Record<MenuSection, string | null> = {
   'sites': 'sites',
   'locations': 'locations',
   'staff': 'staff',
+  'staff-report': null,
   'service-categories': 'service_categories',
   'services': 'session_types',
   'staff-services': 'staff_session_types',
   'pricing-options': 'pricing_options',
   'clients': 'clients',
+  'clients-report': null,
   'appointments': 'appointments',
   'sales': 'sales',
   'transactions': 'transactions',
@@ -61,12 +65,14 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
     { id: 'pivot-reports', label: 'Pivot Reports', icon: BarChart3, color: 'blue' },
     { id: 'sites', label: 'Sites', icon: Database, color: 'slate' },
     { id: 'locations', label: 'Locations', icon: MapPin, color: 'blue' },
-    { id: 'staff', label: 'Staff', icon: UserCog, color: 'violet' },
+    { id: 'staff', label: 'Staff', icon: UserCog, color: 'sky' },
+    { id: 'staff-report', label: 'Staff Report', icon: ClipboardList, color: 'sky' },
     { id: 'service-categories', label: 'Service Categories', icon: Grid3x3, color: 'cyan' },
     { id: 'services', label: 'Services', icon: Tag, color: 'green' },
     { id: 'staff-services', label: 'Staff - Services', icon: Grid3x3, color: 'teal' },
     { id: 'pricing-options', label: 'Pricing Options', icon: Package, color: 'lime' },
     { id: 'clients', label: 'Clients', icon: Users, color: 'orange' },
+    { id: 'clients-report', label: 'Clients Report', icon: ClipboardList, color: 'orange' },
     { id: 'appointments', label: 'Appointments', icon: Calendar, color: 'red' },
     { id: 'sales', label: 'Sales', icon: DollarSign, color: 'emerald' },
     { id: 'transactions', label: 'Transactions', icon: CreditCard, color: 'sky' },

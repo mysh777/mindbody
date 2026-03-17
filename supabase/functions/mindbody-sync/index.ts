@@ -791,6 +791,8 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
         const staffId = appt.StaffId || appt.Staff?.Id || staff.mindbody_id;
         const locationId = appt.LocationId || appt.Location?.Id || null;
 
+        const clientServiceId = appt.ClientServiceId || null;
+
         const apptData = {
           id: String(appt.Id),
           mindbody_id: String(appt.Id),
@@ -798,6 +800,7 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
           staff_id: staffId ? String(staffId) : null,
           location_id: locationId ? String(locationId) : null,
           session_type_id: sessionTypeId ? String(sessionTypeId) : null,
+          client_service_id: clientServiceId ? String(clientServiceId) : null,
           start_datetime: appt.StartDateTime,
           end_datetime: appt.EndDateTime,
           duration_minutes: appt.Duration,
@@ -891,6 +894,8 @@ async function syncAppointmentsDirect(supabase: any, config: MindbodyConfig, use
     for (const appt of appointments) {
       const sessionTypeId = appt.SessionTypeId || appt.SessionType?.Id || null;
 
+      const clientServiceId = appt.ClientServiceId || null;
+
       const apptData = {
         id: String(appt.Id),
         mindbody_id: String(appt.Id),
@@ -898,6 +903,7 @@ async function syncAppointmentsDirect(supabase: any, config: MindbodyConfig, use
         staff_id: appt.StaffId || appt.Staff?.Id ? String(appt.StaffId || appt.Staff?.Id) : null,
         location_id: appt.LocationId || appt.Location?.Id ? String(appt.LocationId || appt.Location?.Id) : null,
         session_type_id: sessionTypeId ? String(sessionTypeId) : null,
+        client_service_id: clientServiceId ? String(clientServiceId) : null,
         start_datetime: appt.StartDateTime,
         end_datetime: appt.EndDateTime,
         duration_minutes: appt.Duration,
@@ -1229,110 +1235,119 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
 }
 
 async function syncClientServices(supabase: any, config: MindbodyConfig, userToken: string, year?: number) {
-  const targetYear = year || new Date().getFullYear();
-  console.log(`=== CLIENT SERVICES SYNC START for year ${targetYear} ===`);
+  console.log(`=== CLIENT SERVICES SYNC START ===`);
 
-  const startDate = new Date(targetYear, 0, 1);
-  const endDate = targetYear === new Date().getFullYear()
-    ? new Date()
-    : new Date(targetYear, 11, 31, 23, 59, 59);
+  const { data: clientsWithAppointments } = await supabase
+    .from("appointments")
+    .select("client_id")
+    .not("client_id", "is", null)
+    .not("client_service_id", "is", null);
 
-  let offset = 0;
-  const limit = 200;
-  let totalSynced = 0;
-  let totalResults = 0;
-  let pageNumber = 1;
+  const uniqueClientIds = [...new Set((clientsWithAppointments || []).map((a: any) => a.client_id))];
+  console.log(`[CLIENT_SERVICES] Found ${uniqueClientIds.length} unique clients with pricing option appointments`);
 
-  while (true) {
-    const url = `${MINDBODY_BASE_URL}/client/clientservices?limit=${limit}&offset=${offset}&startDate=${startDate.toISOString().split('T')[0]}&endDate=${endDate.toISOString().split('T')[0]}`;
-    const startTime = Date.now();
+  if (uniqueClientIds.length === 0) {
+    console.log(`[CLIENT_SERVICES] No clients with client_service_id in appointments. Trying full client list...`);
 
-    console.log(`[CLIENT_SERVICES] Page ${pageNumber} | Offset: ${offset} | Year: ${targetYear}`);
+    const { data: allClients } = await supabase
+      .from("clients")
+      .select("id")
+      .limit(500);
 
-    const response = await fetch(url, {
-      headers: getUserHeaders(config, userToken),
-    });
-
-    const durationMs = Date.now() - startTime;
-    const responseText = await response.text();
-
-    let data;
-    let error = null;
-    try {
-      data = JSON.parse(responseText);
-    } catch (e) {
-      error = `Failed to parse response: ${e.message}`;
-      data = {};
-    }
-
-    await logApiCall(supabase, url, "GET", { offset, limit, year: targetYear, page: pageNumber }, response.status, data, error, durationMs);
-
-    if (!response.ok) {
-      console.error(`[CLIENT_SERVICES] ERROR: Failed at offset ${offset} - Status: ${response.status}`);
-      break;
-    }
-
-    const clientServices = data.ClientServices || [];
-    const pagination = data.PaginationResponse;
-    const returnedCount = clientServices.length;
-
-    if (offset === 0) {
-      await saveRawData(supabase, 'client_services', data, returnedCount, pagination);
-      totalResults = pagination?.TotalResults || 0;
-      console.log(`[CLIENT_SERVICES] API reports TotalResults: ${totalResults} for year ${targetYear}`);
-    }
-
-    console.log(`[CLIENT_SERVICES] Page ${pageNumber} | Returned: ${returnedCount} | Accumulated: ${totalSynced + returnedCount}${totalResults > 0 ? ` / ${totalResults}` : ''} | API: ${durationMs}ms`);
-
-    if (returnedCount === 0) {
-      console.log(`[CLIENT_SERVICES] Empty page received - sync complete`);
-      break;
-    }
-
-    const syncedAt = new Date().toISOString();
-    const clientServicesData = clientServices.map((cs: any) => ({
-      mindbody_id: String(cs.Id),
-      client_id: cs.ClientId ? String(cs.ClientId) : null,
-      product_id: String(cs.ProductId || cs.Id),
-      pricing_option_id: null,
-      name: cs.Name,
-      payment_date: cs.PaymentDate,
-      active_date: cs.ActiveDate,
-      expiration_date: cs.ExpirationDate,
-      count: cs.Count,
-      remaining: cs.Remaining,
-      current: cs.Current || false,
-      program_id: cs.ProgramId ? String(cs.ProgramId) : null,
-      program_name: cs.Program,
-      status: cs.Status,
-      activation_type: cs.ActivationType,
-      raw_data: cs,
-      synced_at: syncedAt,
-    }));
-
-    const upsertStart = Date.now();
-    const { error: upsertError } = await supabase.from("client_services").upsert(clientServicesData, {
-      onConflict: "mindbody_id",
-    });
-
-    if (upsertError) {
-      console.error(`[CLIENT_SERVICES] Batch upsert error:`, upsertError);
-    }
-
-    const upsertMs = Date.now() - upsertStart;
-    console.log(`[CLIENT_SERVICES] Batch upsert: ${returnedCount} records in ${upsertMs}ms`);
-
-    totalSynced += returnedCount;
-    offset += limit;
-    pageNumber++;
-
-    if (returnedCount < limit) {
-      console.log(`[CLIENT_SERVICES] Partial page (${returnedCount} < ${limit}) - sync complete`);
-      break;
+    if (allClients && allClients.length > 0) {
+      uniqueClientIds.push(...allClients.map((c: any) => c.id));
     }
   }
 
-  console.log(`=== CLIENT_SERVICES SYNC COMPLETE: ${totalSynced} records for year ${targetYear} ===`);
+  let totalSynced = 0;
+  let processedClients = 0;
+
+  for (const clientId of uniqueClientIds) {
+    processedClients++;
+
+    const url = `${MINDBODY_BASE_URL}/client/clientservices?clientId=${clientId}`;
+    const startTime = Date.now();
+
+    try {
+      const response = await fetch(url, {
+        headers: getUserHeaders(config, userToken),
+      });
+
+      const durationMs = Date.now() - startTime;
+      const responseText = await response.text();
+
+      let data;
+      let error = null;
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        error = `Failed to parse response: ${e.message}`;
+        data = {};
+      }
+
+      if (processedClients <= 5 || processedClients % 50 === 0) {
+        await logApiCall(supabase, url, "GET", { clientId }, response.status, data, error, durationMs);
+      }
+
+      if (!response.ok) {
+        if (response.status !== 404) {
+          console.error(`[CLIENT_SERVICES] Failed for client ${clientId}: ${response.status}`);
+        }
+        continue;
+      }
+
+      const clientServices = data.ClientServices || [];
+
+      if (clientServices.length === 0) continue;
+
+      if (totalSynced === 0) {
+        await saveRawData(supabase, 'client_services', data, clientServices.length, null);
+        console.log('Sample ClientService:', JSON.stringify(clientServices[0], null, 2));
+      }
+
+      const syncedAt = new Date().toISOString();
+
+      for (const cs of clientServices) {
+        const csData = {
+          mindbody_id: String(cs.Id),
+          client_id: clientId,
+          product_id: cs.ProductId ? String(cs.ProductId) : String(cs.Id),
+          name: cs.Name,
+          payment_date: cs.PaymentDate,
+          active_date: cs.ActiveDate,
+          expiration_date: cs.ExpirationDate,
+          count: cs.Count,
+          remaining: cs.Remaining,
+          current: cs.Current || false,
+          program_id: cs.Program?.Id ? String(cs.Program.Id) : null,
+          program_name: cs.Program?.Name || cs.Program,
+          status: cs.Active ? 'Active' : 'Inactive',
+          activation_type: cs.ActivationType,
+          raw_data: cs,
+          synced_at: syncedAt,
+        };
+
+        const { error: upsertError } = await supabase.from("client_services").upsert(csData, {
+          onConflict: "mindbody_id",
+        });
+
+        if (upsertError) {
+          console.error(`[CLIENT_SERVICES] Upsert error for ${cs.Id}:`, upsertError.message);
+        } else {
+          totalSynced++;
+        }
+      }
+
+      if (processedClients % 50 === 0) {
+        console.log(`[CLIENT_SERVICES] Progress: ${processedClients}/${uniqueClientIds.length} clients, ${totalSynced} services synced`);
+      }
+
+    } catch (err) {
+      console.error(`[CLIENT_SERVICES] Exception for client ${clientId}:`, err);
+    }
+  }
+
+  console.log(`=== CLIENT_SERVICES SYNC COMPLETE: ${totalSynced} records from ${processedClients} clients ===`);
   return totalSynced;
 }
 
@@ -2017,7 +2032,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      if (userToken && (shouldSyncAll || syncType === "client_services")) {
+      if (userToken && (shouldSyncAll || syncType === "client_services" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Client Services (Ownership/Entitlements) ---');
           results.client_services = await syncClientServices(supabase, config, userToken, targetYear);

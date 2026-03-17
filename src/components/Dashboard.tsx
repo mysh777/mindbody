@@ -6,6 +6,8 @@ import { PivotTable } from './PivotTable';
 import { TableView } from './TableView';
 import { ServicesGroupedView } from './ServicesGroupedView';
 import { SalesExpandableView } from './SalesExpandableView';
+import { ClientExpandableView } from './ClientExpandableView';
+import { StaffExpandableView } from './StaffExpandableView';
 
 interface Stats {
   clients: number;
@@ -21,11 +23,13 @@ const tableNameMap: Record<MenuSection, { tableName: string; displayName: string
   'sites': { tableName: 'sites', displayName: 'Sites' },
   'locations': { tableName: 'locations', displayName: 'Locations' },
   'staff': { tableName: 'staff', displayName: 'Staff' },
+  'staff-report': null,
   'service-categories': { tableName: 'service_categories', displayName: 'Service Categories' },
   'services': { tableName: 'session_types', displayName: 'Session Types' },
   'staff-services': { tableName: 'staff_session_types', displayName: 'Staff - Session Types' },
   'pricing-options': { tableName: 'pricing_options', displayName: 'Pricing Options' },
   'clients': { tableName: 'clients', displayName: 'Clients' },
+  'clients-report': null,
   'appointments': { tableName: 'appointments', displayName: 'Appointments' },
   'sales': { tableName: 'sales', displayName: 'Sales' },
   'transactions': { tableName: 'transactions', displayName: 'Transactions' },
@@ -139,6 +143,14 @@ export function Dashboard() {
 
     if (activeSection === 'sales') {
       return <SalesExpandableView onNavigate={handleNavigate} />;
+    }
+
+    if (activeSection === 'clients-report') {
+      return <ClientExpandableView />;
+    }
+
+    if (activeSection === 'staff-report') {
+      return <StaffExpandableView />;
     }
 
     const tableConfig = tableNameMap[activeSection];
