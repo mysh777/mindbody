@@ -392,25 +392,25 @@ export function StaffExpandableView() {
       if (clientServiceIds.length > 0) {
         const { data: clientServices } = await supabase
           .from('client_services')
-          .select('mindbody_id, pricing_option_id')
+          .select('mindbody_id, product_id')
           .in('mindbody_id', clientServiceIds);
 
-        const pricingOptionIds = [...new Set((clientServices || []).map((cs: any) => cs.pricing_option_id).filter(Boolean))];
+        const productIds = [...new Set((clientServices || []).map((cs: any) => cs.product_id).filter(Boolean))];
 
         let pricingOptionPrices: Record<string, number> = {};
-        if (pricingOptionIds.length > 0) {
+        if (productIds.length > 0) {
           const { data: pricingOpts } = await supabase
             .from('pricing_options')
-            .select('id, price')
-            .in('id', pricingOptionIds);
+            .select('mindbody_id, price')
+            .in('mindbody_id', productIds);
 
           (pricingOpts || []).forEach((po: any) => {
-            pricingOptionPrices[po.id] = po.price || 0;
+            pricingOptionPrices[po.mindbody_id] = po.price || 0;
           });
         }
 
         (clientServices || []).forEach((cs: any) => {
-          const price = cs.pricing_option_id ? (pricingOptionPrices[cs.pricing_option_id] || 0) : 0;
+          const price = cs.product_id ? (pricingOptionPrices[cs.product_id] || 0) : 0;
           clientServicePrices[cs.mindbody_id] = price;
         });
       }
@@ -478,32 +478,32 @@ export function StaffExpandableView() {
 
       const clientServiceIds = [...new Set((appointments || []).map((a: any) => a.client_service_id).filter(Boolean))];
 
-      let clientServicesMap: Record<string, { name: string; pricing_option_id: string | null }> = {};
-      let pricingOptionPrices: Record<string, { name: string; price: number }> = {};
+      let clientServicesMap: Record<string, { name: string; product_id: string | null }> = {};
+      let pricingOptionData: Record<string, { name: string; price: number }> = {};
 
       if (clientServiceIds.length > 0) {
         const { data: clientServices } = await supabase
           .from('client_services')
-          .select('mindbody_id, name, pricing_option_id')
+          .select('mindbody_id, name, product_id')
           .in('mindbody_id', clientServiceIds);
 
-        const pricingOptionIds = [...new Set((clientServices || []).map((cs: any) => cs.pricing_option_id).filter(Boolean))];
+        const productIds = [...new Set((clientServices || []).map((cs: any) => cs.product_id).filter(Boolean))];
 
-        if (pricingOptionIds.length > 0) {
+        if (productIds.length > 0) {
           const { data: pricingOpts } = await supabase
             .from('pricing_options')
-            .select('id, name, price')
-            .in('id', pricingOptionIds);
+            .select('mindbody_id, name, price')
+            .in('mindbody_id', productIds);
 
           (pricingOpts || []).forEach((po: any) => {
-            pricingOptionPrices[po.id] = { name: po.name || 'Unknown', price: po.price || 0 };
+            pricingOptionData[po.mindbody_id] = { name: po.name || 'Unknown', price: po.price || 0 };
           });
         }
 
         (clientServices || []).forEach((cs: any) => {
           clientServicesMap[cs.mindbody_id] = {
             name: cs.name,
-            pricing_option_id: cs.pricing_option_id,
+            product_id: cs.product_id,
           };
         });
       }
@@ -531,13 +531,13 @@ export function StaffExpandableView() {
         }
 
         const csData = clientServicesMap[a.client_service_id];
-        const poId = csData?.pricing_option_id || 'no_pricing';
-        const poData = pricingOptionPrices[poId];
+        const productId = csData?.product_id || 'no_pricing';
+        const poData = pricingOptionData[productId];
         const poName = poData?.name || csData?.name || 'No Pricing Option';
         const poPrice = poData?.price || 0;
 
-        if (!serviceMap[stId].pricing_options[poId]) {
-          serviceMap[stId].pricing_options[poId] = {
+        if (!serviceMap[stId].pricing_options[productId]) {
+          serviceMap[stId].pricing_options[productId] = {
             pricing_option_name: poName,
             price: poPrice,
             clients: {},
@@ -549,10 +549,10 @@ export function StaffExpandableView() {
           ? `${a.client.first_name || ''} ${a.client.last_name || ''}`.trim()
           : 'Unknown Client';
 
-        if (!serviceMap[stId].pricing_options[poId].clients[clientId]) {
-          serviceMap[stId].pricing_options[poId].clients[clientId] = { name: clientName, count: 0 };
+        if (!serviceMap[stId].pricing_options[productId].clients[clientId]) {
+          serviceMap[stId].pricing_options[productId].clients[clientId] = { name: clientName, count: 0 };
         }
-        serviceMap[stId].pricing_options[poId].clients[clientId].count++;
+        serviceMap[stId].pricing_options[productId].clients[clientId].count++;
       });
 
       const services_provided: StaffServiceStat[] = Object.entries(serviceMap).map(([stId, data]) => {
