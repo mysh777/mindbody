@@ -569,29 +569,60 @@ export function StaffExpandableView() {
     revenue: filteredStaff.reduce((sum, s) => sum + s.total_revenue, 0),
   };
 
-  const handleExport = () => {
-    const exportData = filteredStaff.flatMap(s =>
-      s.services_provided.length > 0
-        ? s.services_provided.map(svc => ({
-            staff_name: `${s.first_name} ${s.last_name}`,
-            staff_email: s.email,
-            location: locations.find(l => l.id === staffLocations[s.id])?.name || 'Unknown',
-            service: svc.session_type_name,
-            client_service: svc.client_service_name,
-            appointments: svc.appointment_count,
-            clients: svc.client_count,
-            price: svc.price,
-            revenue: svc.total_revenue,
-          }))
-        : [{
-            staff_name: `${s.first_name} ${s.last_name}`,
-            staff_email: s.email,
-            location: locations.find(l => l.id === staffLocations[s.id])?.name || 'Unknown',
-            total_appointments: s.total_appointments,
-            unique_clients: s.unique_clients,
-            total_revenue: s.total_revenue,
-          }]
-    );
+  const handleExport = async () => {
+    const { data: appointments } = await supabase
+      .from('appointments')
+      .select(`
+        id,
+        start_datetime,
+        status,
+        staff_id,
+        client_id,
+        location_id,
+        session_type_id,
+        client_service_id,
+        staff:staff_id (first_name, last_name),
+        client:client_id (first_name, last_name),
+        location:location_id (name),
+        session_type:session_type_id (name)
+      `)
+      .eq('status', 'Completed')
+      .gte('start_datetime', dateRange.start)
+      .lte('start_datetime', dateRange.end + 'T23:59:59')
+      .order('start_datetime', { ascending: true });
+
+    if (!appointments || appointments.length === 0) {
+      alert('No appointments found for selected period');
+      return;
+    }
+
+    const clientServiceIds = [...new Set(appointments.map((a: any) => a.client_service_id).filter(Boolean))];
+    let clientServicesMap: Record<string, { name: string; pricing_option_name: string }> = {};
+
+    if (clientServiceIds.length > 0) {
+      const { data: clientServices } = await supabase
+        .from('client_services')
+        .select('mindbody_id, name')
+        .in('mindbody_id', clientServiceIds);
+
+      (clientServices || []).forEach((cs: any) => {
+        clientServicesMap[cs.mindbody_id] = { name: cs.name, pricing_option_name: cs.name };
+      });
+    }
+
+    const staffFilter = filteredStaff.map(s => s.id);
+    const filteredAppointments = appointments.filter((a: any) => staffFilter.includes(a.staff_id));
+
+    const exportData = filteredAppointments.map((a: any) => ({
+      date: new Date(a.start_datetime).toLocaleDateString('lv-LV'),
+      time: new Date(a.start_datetime).toLocaleTimeString('lv-LV', { hour: '2-digit', minute: '2-digit' }),
+      staff: a.staff ? `${a.staff.first_name || ''} ${a.staff.last_name || ''}`.trim() : 'Unknown',
+      location: a.location?.name || 'Unknown',
+      client: a.client ? `${a.client.first_name || ''} ${a.client.last_name || ''}`.trim() : 'Unknown',
+      service: a.session_type?.name || 'Unknown',
+      pricing_option: clientServicesMap[a.client_service_id]?.name || '-',
+      price: pricingOptions[`session_${a.session_type_id}`] || 0,
+    }));
 
     exportToExcel(exportData, 'staff_services_report');
   };
