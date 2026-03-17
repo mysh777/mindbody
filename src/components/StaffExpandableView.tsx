@@ -597,16 +597,31 @@ export function StaffExpandableView() {
     }
 
     const clientServiceIds = [...new Set(appointments.map((a: any) => a.client_service_id).filter(Boolean))];
-    let clientServicesMap: Record<string, { name: string; pricing_option_name: string }> = {};
+    let clientServicesMap: Record<string, { name: string; price: number }> = {};
 
     if (clientServiceIds.length > 0) {
       const { data: clientServices } = await supabase
         .from('client_services')
-        .select('mindbody_id, name')
+        .select('mindbody_id, name, pricing_option_id')
         .in('mindbody_id', clientServiceIds);
 
+      const pricingOptionIds = [...new Set((clientServices || []).map((cs: any) => cs.pricing_option_id).filter(Boolean))];
+
+      let pricingOptionPrices: Record<string, number> = {};
+      if (pricingOptionIds.length > 0) {
+        const { data: pricingOpts } = await supabase
+          .from('pricing_options')
+          .select('id, price')
+          .in('id', pricingOptionIds);
+
+        (pricingOpts || []).forEach((po: any) => {
+          pricingOptionPrices[po.id] = po.price || 0;
+        });
+      }
+
       (clientServices || []).forEach((cs: any) => {
-        clientServicesMap[cs.mindbody_id] = { name: cs.name, pricing_option_name: cs.name };
+        const price = cs.pricing_option_id ? (pricingOptionPrices[cs.pricing_option_id] || 0) : 0;
+        clientServicesMap[cs.mindbody_id] = { name: cs.name, price };
       });
     }
 
@@ -621,7 +636,7 @@ export function StaffExpandableView() {
       client: a.client ? `${a.client.first_name || ''} ${a.client.last_name || ''}`.trim() : 'Unknown',
       service: a.session_type?.name || 'Unknown',
       pricing_option: clientServicesMap[a.client_service_id]?.name || '-',
-      price: pricingOptions[`session_${a.session_type_id}`] || 0,
+      price: clientServicesMap[a.client_service_id]?.price || 0,
     }));
 
     exportToExcel(exportData, 'staff_services_report');
