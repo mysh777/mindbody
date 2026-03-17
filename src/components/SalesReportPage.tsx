@@ -162,6 +162,7 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
   const [saleItems, setSaleItems] = useState<SaleItem[]>([]);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [serviceCategories, setServiceCategories] = useState<ServiceCategory[]>([]);
+  const [pricingOptions, setPricingOptions] = useState<{ name: string; program_name: string | null }[]>([]);
   const [clients, setClients] = useState<Record<string, string>>({});
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
   const [filterPreset, setFilterPreset] = useState<FilterPreset>('this_month');
@@ -182,14 +183,34 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
     setServiceCategories(data || []);
   }, []);
 
+  const loadPricingOptions = useCallback(async () => {
+    const { data } = await supabase.from('pricing_options').select('name, program_name');
+    setPricingOptions(data || []);
+  }, []);
+
   const loadClients = useCallback(async () => {
-    const { data } = await supabase.from('clients').select('id, first_name, last_name');
     const clientMap: Record<string, string> = {};
-    if (data) {
-      data.forEach((c: { id: string; first_name: string | null; last_name: string | null }) => {
-        clientMap[c.id] = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id;
-      });
+    let offset = 0;
+    const batchSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data } = await supabase
+        .from('clients')
+        .select('id, first_name, last_name')
+        .range(offset, offset + batchSize - 1);
+
+      if (data && data.length > 0) {
+        data.forEach((c: { id: string; first_name: string | null; last_name: string | null }) => {
+          clientMap[c.id] = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id;
+        });
+        offset += batchSize;
+        hasMore = data.length === batchSize;
+      } else {
+        hasMore = false;
+      }
     }
+
     setClients(clientMap);
   }, []);
 
@@ -285,7 +306,8 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
     loadLocations();
     loadClients();
     loadServiceCategories();
-  }, [loadLocations, loadClients, loadServiceCategories]);
+    loadPricingOptions();
+  }, [loadLocations, loadClients, loadServiceCategories, loadPricingOptions]);
 
   useEffect(() => {
     loadSalesData();
@@ -311,35 +333,37 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
 
   const serviceCategoryStats: ServiceCategoryStat[] = useMemo(() => {
     const statsMap: Record<string, { count: number; revenue: number }> = {};
-    const categoryLookup: Record<string, string> = {};
+    const itemToCategoryLookup: Record<string, string> = {};
 
-    serviceCategories.forEach(cat => {
-      categoryLookup[cat.mindbody_id] = cat.name;
+    pricingOptions.forEach(po => {
+      if (po.program_name) {
+        itemToCategoryLookup[po.name] = po.program_name;
+      }
     });
 
     saleItems.forEach(item => {
-      if (!item.is_service || item.category_id === null) return;
+      if (!item.is_service) return;
 
-      const categoryId = String(item.category_id);
-      const categoryName = categoryLookup[categoryId] || `Category ${categoryId}`;
+      const itemName = item.item_name || item.description || '';
+      const categoryName = itemToCategoryLookup[itemName] || 'Other Services';
 
-      if (!statsMap[categoryId]) {
-        statsMap[categoryId] = { count: 0, revenue: 0 };
+      if (!statsMap[categoryName]) {
+        statsMap[categoryName] = { count: 0, revenue: 0 };
       }
-      statsMap[categoryId].count += item.quantity;
-      statsMap[categoryId].revenue += item.total_amount;
+      statsMap[categoryName].count += item.quantity;
+      statsMap[categoryName].revenue += item.total_amount;
     });
 
     return Object.entries(statsMap)
-      .map(([id, data]) => ({
-        id,
-        name: categoryLookup[id] || `Category ${id}`,
+      .map(([name, data]) => ({
+        id: name,
+        name,
         count: data.count,
         revenue: data.revenue,
       }))
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 15);
-  }, [saleItems, serviceCategories]);
+  }, [saleItems, pricingOptions]);
 
   const pricingOptionStats: PricingOptionStat[] = useMemo(() => {
     const statsMap: Record<string, { count: number; revenue: number }> = {};
