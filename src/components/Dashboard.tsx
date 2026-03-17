@@ -6,6 +6,7 @@ import { PivotTable } from './PivotTable';
 import { TableView } from './TableView';
 import { ServicesGroupedView } from './ServicesGroupedView';
 import { SalesExpandableView } from './SalesExpandableView';
+import { SalesReportPage } from './SalesReportPage';
 import { ClientExpandableView } from './ClientExpandableView';
 import { StaffExpandableView } from './StaffExpandableView';
 
@@ -32,6 +33,7 @@ const tableNameMap: Record<MenuSection, { tableName: string; displayName: string
   'clients-report': null,
   'appointments': { tableName: 'appointments', displayName: 'Appointments' },
   'sales': { tableName: 'sales', displayName: 'Sales' },
+  'sales-report': null,
   'transactions': { tableName: 'transactions', displayName: 'Transactions' },
   'sale-items': { tableName: 'sale_items', displayName: 'Sale Items' },
   'client-services': { tableName: 'client_services', displayName: 'Client Services' },
@@ -151,6 +153,10 @@ export function Dashboard() {
 
     if (activeSection === 'staff-report') {
       return <StaffExpandableView />;
+    }
+
+    if (activeSection === 'sales-report') {
+      return <SalesReportPage onNavigate={handleNavigate} />;
     }
 
     const tableConfig = tableNameMap[activeSection];

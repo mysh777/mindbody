@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Database, Settings, BarChart3, Users, Calendar, DollarSign, MapPin, UserCog, Grid3x3, Tag, Package, ShoppingBag, FileText, CreditCard, Wallet, ClipboardList } from 'lucide-react';
+import { Database, Settings, BarChart3, Users, Calendar, DollarSign, MapPin, UserCog, Grid3x3, Tag, Package, ShoppingBag, FileText, CreditCard, Wallet, ClipboardList, PieChart } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export type MenuSection =
@@ -17,6 +17,7 @@ export type MenuSection =
   | 'clients-report'
   | 'appointments'
   | 'sales'
+  | 'sales-report'
   | 'transactions'
   | 'sale-items'
   | 'client-services'
@@ -51,6 +52,7 @@ const tableNameMap: Record<MenuSection, string | null> = {
   'clients-report': null,
   'appointments': 'appointments',
   'sales': 'sales',
+  'sales-report': null,
   'transactions': 'transactions',
   'sale-items': 'sale_items',
   'client-services': 'client_services',
@@ -75,6 +77,7 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
     { id: 'clients-report', label: 'Clients Report', icon: ClipboardList, color: 'orange' },
     { id: 'appointments', label: 'Appointments', icon: Calendar, color: 'red' },
     { id: 'sales', label: 'Sales', icon: DollarSign, color: 'emerald' },
+    { id: 'sales-report', label: 'Sales Report', icon: PieChart, color: 'emerald' },
     { id: 'transactions', label: 'Transactions', icon: CreditCard, color: 'sky' },
     { id: 'sale-items', label: 'Sale Items', icon: FileText, color: 'amber' },
     { id: 'client-services', label: 'Client Services', icon: Wallet, color: 'pink' },
