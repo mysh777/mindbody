@@ -29,6 +29,7 @@ interface SaleItem {
   quantity: number;
   total_amount: number;
   is_service: boolean;
+  category_id: number | null;
 }
 
 interface Sale {
@@ -39,9 +40,21 @@ interface Sale {
   total: number | null;
 }
 
-interface CategoryStat {
+interface ServiceCategory {
+  id: string;
+  mindbody_id: string;
   name: string;
-  type: 'service' | 'product';
+}
+
+interface ServiceCategoryStat {
+  id: string;
+  name: string;
+  count: number;
+  revenue: number;
+}
+
+interface PricingOptionStat {
+  name: string;
   count: number;
   revenue: number;
 }
@@ -148,6 +161,7 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
   const [sales, setSales] = useState<Sale[]>([]);
   const [saleItems, setSaleItems] = useState<SaleItem[]>([]);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
+  const [serviceCategories, setServiceCategories] = useState<ServiceCategory[]>([]);
   const [clients, setClients] = useState<Record<string, string>>({});
   const [selectedLocation, setSelectedLocation] = useState<string>('all');
   const [filterPreset, setFilterPreset] = useState<FilterPreset>('this_month');
@@ -161,6 +175,11 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
   const loadLocations = useCallback(async () => {
     const { data } = await supabase.from('locations').select('id, name').order('name');
     setLocations(data || []);
+  }, []);
+
+  const loadServiceCategories = useCallback(async () => {
+    const { data } = await supabase.from('service_categories').select('id, mindbody_id, name').order('name');
+    setServiceCategories(data || []);
   }, []);
 
   const loadClients = useCallback(async () => {
@@ -201,7 +220,7 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
           const batch = saleIds.slice(i, i + batchSize);
           const { data: itemsData, error: itemsError } = await supabase
             .from('sale_items')
-            .select('id, sale_id, description, item_name, quantity, total_amount, is_service')
+            .select('id, sale_id, description, item_name, quantity, total_amount, is_service, category_id')
             .in('sale_id', batch);
 
           if (itemsError) throw itemsError;
@@ -258,7 +277,8 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
   useEffect(() => {
     loadLocations();
     loadClients();
-  }, [loadLocations, loadClients]);
+    loadServiceCategories();
+  }, [loadLocations, loadClients, loadServiceCategories]);
 
   useEffect(() => {
     loadSalesData();
@@ -282,31 +302,59 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
     setDateRange({ start: month.start, end: month.end });
   };
 
-  const categoryStats: CategoryStat[] = useMemo(() => {
-    const statsMap: Record<string, { count: number; revenue: number; isService: boolean }> = {};
+  const serviceCategoryStats: ServiceCategoryStat[] = useMemo(() => {
+    const statsMap: Record<string, { count: number; revenue: number }> = {};
+    const categoryLookup: Record<string, string> = {};
+
+    serviceCategories.forEach(cat => {
+      categoryLookup[cat.mindbody_id] = cat.name;
+    });
 
     saleItems.forEach(item => {
-      const categoryName = item.description || item.item_name || 'Unknown';
-      if (!statsMap[categoryName]) {
-        statsMap[categoryName] = { count: 0, revenue: 0, isService: item.is_service };
+      if (!item.is_service || item.category_id === null) return;
+
+      const categoryId = String(item.category_id);
+      const categoryName = categoryLookup[categoryId] || `Category ${categoryId}`;
+
+      if (!statsMap[categoryId]) {
+        statsMap[categoryId] = { count: 0, revenue: 0 };
       }
-      statsMap[categoryName].count += item.quantity;
-      statsMap[categoryName].revenue += item.total_amount;
+      statsMap[categoryId].count += item.quantity;
+      statsMap[categoryId].revenue += item.total_amount;
     });
 
     return Object.entries(statsMap)
-      .map(([name, data]) => ({
-        name,
-        type: data.isService ? 'service' as const : 'product' as const,
+      .map(([id, data]) => ({
+        id,
+        name: categoryLookup[id] || `Category ${id}`,
         count: data.count,
         revenue: data.revenue,
       }))
       .sort((a, b) => b.revenue - a.revenue)
       .slice(0, 15);
-  }, [saleItems]);
+  }, [saleItems, serviceCategories]);
 
-  const serviceCategories = useMemo(() => categoryStats.filter(c => c.type === 'service'), [categoryStats]);
-  const productCategories = useMemo(() => categoryStats.filter(c => c.type === 'product'), [categoryStats]);
+  const pricingOptionStats: PricingOptionStat[] = useMemo(() => {
+    const statsMap: Record<string, { count: number; revenue: number }> = {};
+
+    saleItems.forEach(item => {
+      const itemName = item.item_name || item.description || 'Unknown';
+      if (!statsMap[itemName]) {
+        statsMap[itemName] = { count: 0, revenue: 0 };
+      }
+      statsMap[itemName].count += item.quantity;
+      statsMap[itemName].revenue += item.total_amount;
+    });
+
+    return Object.entries(statsMap)
+      .map(([name, data]) => ({
+        name,
+        count: data.count,
+        revenue: data.revenue,
+      }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 10);
+  }, [saleItems]);
 
   const locationStats: LocationStat[] = useMemo(() => {
     const statsMap: Record<string, { revenue: number; count: number }> = {};
@@ -474,36 +522,41 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
         </div>
 
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-          <h3 className="text-lg font-semibold text-slate-900 mb-4">Revenue by Category</h3>
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">Revenue by Service Category</h3>
           {loading ? (
             <div className="h-80 flex items-center justify-center text-slate-500">Loading...</div>
-          ) : categoryStats.length === 0 ? (
+          ) : serviceCategoryStats.length === 0 ? (
             <div className="h-80 flex items-center justify-center text-slate-500">No data available</div>
           ) : (
-            <ResponsiveContainer width="100%" height={400}>
-              <BarChart data={categoryStats} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+            <ResponsiveContainer width="100%" height={Math.max(300, serviceCategoryStats.length * 40)}>
+              <BarChart data={serviceCategoryStats} layout="vertical" margin={{ top: 5, right: 80, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis type="number" tickFormatter={(v) => formatCurrency(v)} />
-                <YAxis type="category" dataKey="name" width={150} tick={{ fontSize: 12 }} />
+                <YAxis type="category" dataKey="name" width={180} tick={{ fontSize: 12 }} />
                 <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="revenue" radius={[0, 4, 4, 0]}>
-                  {categoryStats.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.type === 'service' ? '#3B82F6' : '#F59E0B'} />
-                  ))}
-                </Bar>
+                <Bar dataKey="revenue" fill="#3B82F6" radius={[0, 4, 4, 0]} label={{ position: 'right', formatter: (v: number) => formatCurrency(v), fontSize: 11, fill: '#64748b' }} />
               </BarChart>
             </ResponsiveContainer>
           )}
-          <div className="mt-4 flex gap-4 justify-center">
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded bg-blue-500"></div>
-              <span className="text-sm text-slate-600">Services</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded bg-amber-500"></div>
-              <span className="text-sm text-slate-600">Products</span>
-            </div>
-          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">Top 10 Pricing Options</h3>
+          {loading ? (
+            <div className="h-80 flex items-center justify-center text-slate-500">Loading...</div>
+          ) : pricingOptionStats.length === 0 ? (
+            <div className="h-80 flex items-center justify-center text-slate-500">No data available</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={Math.max(300, pricingOptionStats.length * 45)}>
+              <BarChart data={pricingOptionStats} layout="vertical" margin={{ top: 5, right: 80, left: 20, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis type="number" tickFormatter={(v) => formatCurrency(v)} />
+                <YAxis type="category" dataKey="name" width={220} tick={{ fontSize: 11 }} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="revenue" fill="#10B981" radius={[0, 4, 4, 0]} label={{ position: 'right', formatter: (v: number) => formatCurrency(v), fontSize: 11, fill: '#64748b' }} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
         </div>
 
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
@@ -514,12 +567,12 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
             <div className="h-80 flex items-center justify-center text-slate-500">No data available</div>
           ) : (
             <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={locationStats} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+              <BarChart data={locationStats} margin={{ top: 30, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis dataKey="name" tick={{ fontSize: 12 }} />
                 <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
                 <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="revenue" fill="#10B981" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="revenue" fill="#F59E0B" radius={[4, 4, 0, 0]} label={{ position: 'top', formatter: (v: number) => formatCurrency(v), fontSize: 11, fill: '#64748b' }} />
               </BarChart>
             </ResponsiveContainer>
           )}
@@ -527,60 +580,62 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">Services Distribution</h3>
+            <h3 className="text-lg font-semibold text-slate-900 mb-4">Service Categories Distribution</h3>
             {loading ? (
               <div className="h-80 flex items-center justify-center text-slate-500">Loading...</div>
-            ) : serviceCategories.length === 0 ? (
+            ) : serviceCategoryStats.length === 0 ? (
               <div className="h-80 flex items-center justify-center text-slate-500">No services data</div>
             ) : (
-              <ResponsiveContainer width="100%" height={300}>
+              <ResponsiveContainer width="100%" height={350}>
                 <PieChart>
                   <Pie
-                    data={serviceCategories}
+                    data={serviceCategoryStats}
                     cx="50%"
-                    cy="50%"
-                    labelLine={false}
+                    cy="45%"
+                    labelLine={true}
                     outerRadius={100}
                     fill="#8884d8"
                     dataKey="revenue"
                     nameKey="name"
-                    label={({ name, percent }) => `${name.substring(0, 15)}${name.length > 15 ? '...' : ''} ${(percent * 100).toFixed(0)}%`}
+                    label={({ name, percent }) => `${name.substring(0, 12)}${name.length > 12 ? '...' : ''} ${(percent * 100).toFixed(0)}%`}
                   >
-                    {serviceCategories.map((_, index) => (
+                    {serviceCategoryStats.map((_, index) => (
                       <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                     ))}
                   </Pie>
                   <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                  <Legend />
                 </PieChart>
               </ResponsiveContainer>
             )}
           </div>
 
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">Products Distribution</h3>
+            <h3 className="text-lg font-semibold text-slate-900 mb-4">Top Pricing Options Distribution</h3>
             {loading ? (
               <div className="h-80 flex items-center justify-center text-slate-500">Loading...</div>
-            ) : productCategories.length === 0 ? (
-              <div className="h-80 flex items-center justify-center text-slate-500">No products data</div>
+            ) : pricingOptionStats.length === 0 ? (
+              <div className="h-80 flex items-center justify-center text-slate-500">No pricing data</div>
             ) : (
-              <ResponsiveContainer width="100%" height={300}>
+              <ResponsiveContainer width="100%" height={350}>
                 <PieChart>
                   <Pie
-                    data={productCategories}
+                    data={pricingOptionStats.slice(0, 8)}
                     cx="50%"
-                    cy="50%"
-                    labelLine={false}
+                    cy="45%"
+                    labelLine={true}
                     outerRadius={100}
                     fill="#8884d8"
                     dataKey="revenue"
                     nameKey="name"
-                    label={({ name, percent }) => `${name.substring(0, 15)}${name.length > 15 ? '...' : ''} ${(percent * 100).toFixed(0)}%`}
+                    label={({ name, percent }) => `${name.substring(0, 12)}${name.length > 12 ? '...' : ''} ${(percent * 100).toFixed(0)}%`}
                   >
-                    {productCategories.map((_, index) => (
+                    {pricingOptionStats.slice(0, 8).map((_, index) => (
                       <Cell key={`cell-${index}`} fill={CHART_COLORS[(index + 5) % CHART_COLORS.length]} />
                     ))}
                   </Pie>
                   <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                  <Legend />
                 </PieChart>
               </ResponsiveContainer>
             )}
@@ -594,23 +649,20 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
           ) : monthlyData.length === 0 ? (
             <div className="h-80 flex items-center justify-center text-slate-500">No data available</div>
           ) : (
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={monthlyData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+            <ResponsiveContainer width="100%" height={350}>
+              <BarChart data={monthlyData} margin={{ top: 30, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                 <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
                 <Tooltip content={<CustomTooltip />} />
-                <Legend />
-                <Line
-                  type="monotone"
+                <Bar
                   dataKey="revenue"
-                  stroke="#3B82F6"
-                  strokeWidth={2}
-                  dot={{ fill: '#3B82F6', strokeWidth: 2 }}
-                  activeDot={{ r: 6 }}
+                  fill="#3B82F6"
+                  radius={[4, 4, 0, 0]}
                   name="Revenue"
+                  label={{ position: 'top', formatter: (v: number) => v > 0 ? `${(v / 1000).toFixed(1)}k` : '', fontSize: 10, fill: '#64748b' }}
                 />
-              </LineChart>
+              </BarChart>
             </ResponsiveContainer>
           )}
         </div>
