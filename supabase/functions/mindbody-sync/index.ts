@@ -1242,11 +1242,11 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
 
     const { data: allClients } = await supabase
       .from("clients")
-      .select("id")
+      .select("mindbody_id")
       .limit(500);
 
     if (allClients && allClients.length > 0) {
-      uniqueClientIds.push(...allClients.map((c: any) => c.id));
+      uniqueClientIds.push(...allClients.map((c: any) => c.mindbody_id));
     }
   }
 

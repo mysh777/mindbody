@@ -531,9 +531,9 @@ export function StaffExpandableView() {
         }
 
         const csData = clientServicesMap[a.client_service_id];
-        const productId = csData?.product_id || 'no_pricing';
+        const productId = csData?.product_id || 'unknown';
         const poData = pricingOptionData[productId];
-        const poName = poData?.name || csData?.name || 'No Pricing Option';
+        const poName = poData?.name || csData?.name || (csData ? 'Unknown Package' : 'Data Not Synced');
         const poPrice = poData?.price || 0;
 
         if (!serviceMap[stId].pricing_options[productId]) {
