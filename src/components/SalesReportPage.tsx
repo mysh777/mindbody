@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
-import { RefreshCw, Building2, TrendingUp, Users, ShoppingBag } from 'lucide-react';
+import { RefreshCw, Building2, TrendingUp, Users, ShoppingBag, Download } from 'lucide-react';
+import { exportToExcel } from '../utils/exportExcel';
 import {
   BarChart,
   Bar,
@@ -170,8 +171,21 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [monthlyData, setMonthlyData] = useState<MonthStat[]>([]);
   const [loadingMonthly, setLoadingMonthly] = useState(false);
+  const [exportingSales, setExportingSales] = useState(false);
+  const [exportingStaff, setExportingStaff] = useState(false);
 
   const months = getMonthsForTimeline();
+
+  const PAYMENT_METHODS: Record<number, string> = {
+    1: 'Cash',
+    2: 'Credit Card',
+    3: 'Check',
+    4: 'Gift Card',
+    7: 'Account',
+    9: 'Comp',
+    16: 'Bank Transfer',
+    98: 'Other',
+  };
 
   const loadLocations = useCallback(async () => {
     const { data } = await supabase.from('locations').select('id, name').order('name');
@@ -184,12 +198,7 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
   }, []);
 
   const loadPricingOptions = useCallback(async () => {
-    const { data, error } = await supabase.from('pricing_options').select('name, program_name');
-    if (error) {
-      console.error('Error loading pricing options:', error);
-    }
-    console.log('Pricing options loaded:', data?.length, 'items');
-    console.log('With program_name:', data?.filter(p => p.program_name).length);
+    const { data } = await supabase.from('pricing_options').select('name, program_name');
     setPricingOptions(data || []);
   }, []);
 
@@ -319,8 +328,10 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
   }, [loadSalesData]);
 
   useEffect(() => {
-    loadMonthlyData();
-  }, [loadMonthlyData]);
+    if (locations.length > 0) {
+      loadMonthlyData();
+    }
+  }, [loadMonthlyData, locations.length]);
 
   const handlePresetChange = (preset: FilterPreset) => {
     setFilterPreset(preset);
@@ -346,22 +357,11 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
       }
     });
 
-    console.log('Lookup map size:', Object.keys(itemToCategoryLookup).length);
-    console.log('Sample lookup entries:', Object.entries(itemToCategoryLookup).slice(0, 5));
-
-    const serviceItems = saleItems.filter(item => item.is_service);
-    console.log('Service items:', serviceItems.length);
-    console.log('Sample service items:', serviceItems.slice(0, 3).map(i => ({ item_name: i.item_name, description: i.description })));
-
     saleItems.forEach(item => {
       if (!item.is_service) return;
 
       const itemName = item.item_name || item.description || '';
       const categoryName = itemToCategoryLookup[itemName] || 'Other Services';
-
-      if (categoryName === 'Other Services' && itemName) {
-        console.log('Unmatched item:', itemName);
-      }
 
       if (!statsMap[categoryName]) {
         statsMap[categoryName] = { count: 0, revenue: 0 };
@@ -476,6 +476,168 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
     return null;
   };
 
+  const exportSalesData = async () => {
+    setExportingSales(true);
+    try {
+      let salesQuery = supabase
+        .from('sales')
+        .select('id, client_id, sale_datetime, location_id, total, mindbody_client_id')
+        .gte('sale_datetime', dateRange.start)
+        .lte('sale_datetime', dateRange.end + 'T23:59:59');
+
+      if (selectedLocation !== 'all') {
+        salesQuery = salesQuery.eq('location_id', selectedLocation);
+      }
+
+      const { data: salesData, error: salesError } = await salesQuery;
+      if (salesError) throw salesError;
+      if (!salesData || salesData.length === 0) {
+        alert('No sales data to export');
+        return;
+      }
+
+      const saleIds = salesData.map(s => s.id);
+      const allItems: { sale_id: string; item_name: string | null; description: string | null; total_amount: number; is_service: boolean }[] = [];
+      for (let i = 0; i < saleIds.length; i += 500) {
+        const batch = saleIds.slice(i, i + 500);
+        const { data: itemsData } = await supabase
+          .from('sale_items')
+          .select('sale_id, item_name, description, total_amount, is_service')
+          .in('sale_id', batch);
+        if (itemsData) allItems.push(...itemsData);
+      }
+
+      const { data: paymentsData } = await supabase
+        .from('payments')
+        .select('sale_id, method, amount')
+        .in('sale_id', saleIds);
+
+      const paymentsBySale: Record<string, string[]> = {};
+      (paymentsData || []).forEach(p => {
+        if (!paymentsBySale[p.sale_id]) paymentsBySale[p.sale_id] = [];
+        const methodName = PAYMENT_METHODS[p.method] || `Method ${p.method}`;
+        if (!paymentsBySale[p.sale_id].includes(methodName)) {
+          paymentsBySale[p.sale_id].push(methodName);
+        }
+      });
+
+      const itemToCategoryLookup: Record<string, string> = {};
+      pricingOptions.forEach(po => {
+        if (po.program_name) itemToCategoryLookup[po.name] = po.program_name;
+      });
+
+      const exportData: Record<string, string | number>[] = [];
+
+      salesData.forEach(sale => {
+        const saleItemsList = allItems.filter(i => i.sale_id === sale.id);
+        const clientName = sale.client_id ? clients[sale.client_id] || sale.client_id : 'Unknown';
+        const locationName = locations.find(l => l.id === sale.location_id)?.name || sale.location_id || 'Unknown';
+        const paymentMethod = paymentsBySale[sale.id]?.join(', ') || 'Unknown';
+
+        if (saleItemsList.length === 0) {
+          exportData.push({
+            'Date': sale.sale_datetime ? new Date(sale.sale_datetime).toLocaleDateString('en-GB') : '',
+            'Client': clientName,
+            'Location': locationName,
+            'Amount': sale.total || 0,
+            'Category': '',
+            'Service': '',
+            'Pricing Option': '',
+            'Payment Method': paymentMethod,
+          });
+        } else {
+          saleItemsList.forEach(item => {
+            const itemName = item.item_name || item.description || 'Unknown';
+            const categoryName = itemToCategoryLookup[itemName] || (item.is_service ? 'Other Services' : 'Product');
+            exportData.push({
+              'Date': sale.sale_datetime ? new Date(sale.sale_datetime).toLocaleDateString('en-GB') : '',
+              'Client': clientName,
+              'Location': locationName,
+              'Amount': item.total_amount,
+              'Category': categoryName,
+              'Service': item.is_service ? itemName : '',
+              'Pricing Option': itemName,
+              'Payment Method': paymentMethod,
+            });
+          });
+        }
+      });
+
+      exportToExcel(exportData, `sales_${dateRange.start}_to_${dateRange.end}`);
+    } catch (error) {
+      console.error('Error exporting sales:', error);
+      alert('Error exporting sales data');
+    } finally {
+      setExportingSales(false);
+    }
+  };
+
+  const exportStaffData = async () => {
+    setExportingStaff(true);
+    try {
+      let query = supabase
+        .from('appointments')
+        .select('id, client_id, staff_id, session_type_id, start_datetime, status')
+        .gte('start_datetime', dateRange.start)
+        .lte('start_datetime', dateRange.end + 'T23:59:59')
+        .neq('status', 'Cancelled');
+
+      if (selectedLocation !== 'all') {
+        query = query.eq('location_id', selectedLocation);
+      }
+
+      const { data: apptData, error: apptError } = await query;
+      if (apptError) throw apptError;
+      if (!apptData || apptData.length === 0) {
+        alert('No appointment data to export');
+        return;
+      }
+
+      const { data: staffData } = await supabase.from('staff').select('id, first_name, last_name');
+      const staffMap: Record<string, string> = {};
+      (staffData || []).forEach(s => {
+        staffMap[s.id] = `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.id;
+      });
+
+      const { data: sessionTypesData } = await supabase.from('session_types').select('id, name, service_category_id, default_price');
+      const sessionTypeMap: Record<string, { name: string; category_id: string | null; price: number }> = {};
+      (sessionTypesData || []).forEach(st => {
+        sessionTypeMap[st.id] = { name: st.name, category_id: st.service_category_id, price: st.default_price || 0 };
+      });
+
+      const categoryMap: Record<string, string> = {};
+      serviceCategories.forEach(c => {
+        categoryMap[c.id] = c.name;
+      });
+
+      const exportData: Record<string, string | number>[] = [];
+
+      apptData.forEach(appt => {
+        const clientName = appt.client_id ? clients[appt.client_id] || appt.client_id : 'Unknown';
+        const staffName = appt.staff_id ? staffMap[appt.staff_id] || appt.staff_id : 'Unknown';
+        const sessionType = appt.session_type_id ? sessionTypeMap[appt.session_type_id] : null;
+        const categoryName = sessionType?.category_id ? categoryMap[sessionType.category_id] || '' : '';
+
+        exportData.push({
+          'Date': appt.start_datetime ? new Date(appt.start_datetime).toLocaleDateString('en-GB') : '',
+          'Category': categoryName,
+          'Service': sessionType?.name || 'Unknown',
+          'Pricing Option': sessionType?.name || '',
+          'Staff': staffName,
+          'Client': clientName,
+          'Price': sessionType?.price || 0,
+        });
+      });
+
+      exportToExcel(exportData, `staff_report_${dateRange.start}_to_${dateRange.end}`);
+    } catch (error) {
+      console.error('Error exporting staff data:', error);
+      alert('Error exporting staff data');
+    } finally {
+      setExportingStaff(false);
+    }
+  };
+
   return (
     <div className="w-full bg-slate-50 min-h-full">
       <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
@@ -486,14 +648,32 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
               {loading ? 'Loading...' : `${totals.count} sales, ${formatCurrency(totals.revenue)} total`}
             </p>
           </div>
-          <button
-            onClick={() => { loadSalesData(); loadMonthlyData(); }}
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 disabled:opacity-50 transition-colors"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={exportSalesData}
+              disabled={exportingSales || loading}
+              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+            >
+              <Download className={`w-4 h-4 ${exportingSales ? 'animate-pulse' : ''}`} />
+              {exportingSales ? 'Exporting...' : 'Export Sales'}
+            </button>
+            <button
+              onClick={exportStaffData}
+              disabled={exportingStaff || loading}
+              className="flex items-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 disabled:opacity-50 transition-colors"
+            >
+              <Download className={`w-4 h-4 ${exportingStaff ? 'animate-pulse' : ''}`} />
+              {exportingStaff ? 'Exporting...' : 'Export Staff'}
+            </button>
+            <button
+              onClick={() => { loadSalesData(); loadMonthlyData(); }}
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
         </div>
       </div>
 
