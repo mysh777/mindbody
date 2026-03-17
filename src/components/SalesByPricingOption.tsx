@@ -118,7 +118,8 @@ export function SalesByPricingOption({ onNavigate }: SalesByPricingOptionProps) 
         const { data: itemsData } = await supabase
           .from('sale_items')
           .select('sale_id, item_name, description, total_amount')
-          .in('sale_id', batch);
+          .in('sale_id', batch)
+          .gt('total_amount', 0);
         if (itemsData) allItems.push(...itemsData);
       }
 
