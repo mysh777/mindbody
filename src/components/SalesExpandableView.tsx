@@ -74,7 +74,7 @@ const formatDate = (dateString: string | null | undefined): string => {
 
 const formatCurrency = (value: number | null | undefined): string => {
   if (value === null || value === undefined) return '-';
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+  return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(value);
 };
 
 const getPaymentMethodName = (method: number | null): string => {

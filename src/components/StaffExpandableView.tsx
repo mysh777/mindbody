@@ -96,7 +96,7 @@ function StaffRow({ staff, expanded, onToggle, onLoadDetails, loading, dateRange
             <div className="text-xs text-slate-500">Services</div>
           </div>
           <div className="text-center min-w-[80px]">
-            <div className="font-semibold text-green-600">{staff.total_revenue > 0 ? `$${staff.total_revenue.toFixed(0)}` : '-'}</div>
+            <div className="font-semibold text-green-600">{staff.total_revenue > 0 ? `€${staff.total_revenue.toFixed(0)}` : '-'}</div>
             <div className="text-xs text-slate-500">Revenue</div>
           </div>
         </div>
@@ -159,13 +159,13 @@ function ServiceStatCard({ stat }: ServiceStatCardProps) {
           </div>
           {stat.price > 0 && (
             <div className="text-center">
-              <div className="font-semibold text-amber-600">${stat.price}</div>
+              <div className="font-semibold text-amber-600">€{stat.price}</div>
               <div className="text-xs text-slate-500">price</div>
             </div>
           )}
           {stat.total_revenue > 0 && (
             <div className="text-center min-w-[70px]">
-              <div className="font-semibold text-green-600">${stat.total_revenue.toFixed(0)}</div>
+              <div className="font-semibold text-green-600">€{stat.total_revenue.toFixed(0)}</div>
               <div className="text-xs text-slate-500">revenue</div>
             </div>
           )}
@@ -633,7 +633,7 @@ export function StaffExpandableView() {
           </div>
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
             <div className="text-sm text-slate-600">Est. Revenue</div>
-            <div className="text-2xl font-bold text-green-600 mt-1">${totals.revenue.toLocaleString()}</div>
+            <div className="text-2xl font-bold text-green-600 mt-1">€{totals.revenue.toLocaleString()}</div>
           </div>
         </div>
 
