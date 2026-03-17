@@ -923,91 +923,128 @@ async function syncAppointmentsDirect(supabase: any, config: MindbodyConfig, use
 }
 
 async function syncClients(supabase: any, config: MindbodyConfig, userToken?: string) {
-  console.log('Syncing clients');
-  let offset = 0;
+  console.log('Syncing clients - using date ranges to bypass offset limit');
+
   const limit = 200;
   let totalSynced = 0;
   let totalResults = 0;
 
-  while (true) {
-    const url = `${MINDBODY_BASE_URL}/client/clients?limit=${limit}&offset=${offset}&searchText=`;
-    const startTime = Date.now();
+  const startYear = 2010;
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().getMonth();
 
-    const response = await fetch(url, {
-      headers: userToken ? getUserHeaders(config, userToken) : getSourceHeaders(config),
-    });
+  const dateRanges: { start: string; end: string }[] = [];
 
-    const durationMs = Date.now() - startTime;
-    const responseText = await response.text();
+  for (let year = startYear; year <= currentYear; year++) {
+    for (let quarter = 0; quarter < 4; quarter++) {
+      const startMonth = quarter * 3;
+      const endMonth = startMonth + 2;
 
-    let data;
-    let error = null;
-    try {
-      data = JSON.parse(responseText);
-    } catch (e) {
-      error = `Failed to parse response: ${e.message}`;
-      data = {};
-    }
+      if (year === currentYear && startMonth > currentMonth) break;
 
-    await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
+      const startDate = new Date(year, startMonth, 1);
+      const endDate = new Date(year, endMonth + 1, 0);
 
-    if (!response.ok) {
-      console.error(`Failed to fetch clients: ${response.status}`);
-      console.error(`Response: ${responseText}`);
-      break;
-    }
+      if (endDate > new Date()) {
+        endDate.setTime(Date.now());
+      }
 
-    const clients = data.Clients || [];
-    const pagination = data.PaginationResponse;
-
-    if (offset === 0) {
-      await saveRawData(supabase, 'clients', data, clients.length, pagination);
-      totalResults = pagination?.TotalResults || 0;
-      console.log(`Total clients in Mindbody: ${totalResults}`);
-    }
-
-    console.log(`Fetched ${clients.length} clients at offset ${offset} (total so far: ${totalSynced + clients.length}/${totalResults})`);
-
-    if (clients.length === 0) break;
-
-    for (const client of clients) {
-      const clientData = {
-        id: String(client.Id || client.UniqueId),
-        mindbody_id: String(client.Id || client.UniqueId),
-        first_name: client.FirstName,
-        last_name: client.LastName,
-        email: client.Email,
-        mobile_phone: client.MobilePhone,
-        home_phone: client.HomePhone,
-        address_line1: client.AddressLine1,
-        address_line2: client.AddressLine2,
-        city: client.City,
-        state: client.State,
-        postal_code: client.PostalCode,
-        country: client.Country,
-        birth_date: client.BirthDate,
-        gender: client.Gender,
-        status: client.Status,
-        is_company: client.IsCompany || false,
-        liability_release: client.LiabilityRelease || false,
-        emergency_contact_name: client.EmergencyContactName,
-        emergency_contact_phone: client.EmergencyContactPhone,
-        creation_date: client.CreationDate,
-        last_modified_date: client.LastModifiedDateTime,
-        raw_data: client,
-        synced_at: new Date().toISOString(),
-      };
-
-      await supabase.from("clients").upsert(clientData, {
-        onConflict: "mindbody_id",
+      dateRanges.push({
+        start: startDate.toISOString().split('T')[0],
+        end: endDate.toISOString().split('T')[0],
       });
     }
+  }
 
-    totalSynced += clients.length;
-    offset += limit;
+  console.log(`Processing ${dateRanges.length} date ranges from ${startYear} to ${currentYear}`);
 
-    if (clients.length < limit) break;
-    if (totalResults > 0 && totalSynced >= totalResults) break;
+  for (const range of dateRanges) {
+    let offset = 0;
+    let rangeCount = 0;
+
+    while (true) {
+      const url = `${MINDBODY_BASE_URL}/client/clients?limit=${limit}&offset=${offset}&searchText=&CreatedDateStart=${range.start}&CreatedDateEnd=${range.end}`;
+      const startTime = Date.now();
+
+      const response = await fetch(url, {
+        headers: userToken ? getUserHeaders(config, userToken) : getSourceHeaders(config),
+      });
+
+      const durationMs = Date.now() - startTime;
+      const responseText = await response.text();
+
+      let data;
+      let error = null;
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        error = `Failed to parse response: ${e.message}`;
+        data = {};
+      }
+
+      if (totalSynced === 0 && offset === 0) {
+        await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
+      }
+
+      if (!response.ok) {
+        console.error(`Failed to fetch clients for ${range.start} - ${range.end}: ${response.status}`);
+        break;
+      }
+
+      const clients = data.Clients || [];
+      const pagination = data.PaginationResponse;
+
+      if (totalSynced === 0 && offset === 0) {
+        await saveRawData(supabase, 'clients', data, clients.length, pagination);
+        totalResults = pagination?.TotalResults || 0;
+        console.log(`Total clients in Mindbody (first range estimate): ${totalResults}`);
+      }
+
+      if (clients.length === 0) break;
+
+      for (const client of clients) {
+        const clientData = {
+          id: String(client.Id || client.UniqueId),
+          mindbody_id: String(client.Id || client.UniqueId),
+          first_name: client.FirstName,
+          last_name: client.LastName,
+          email: client.Email,
+          mobile_phone: client.MobilePhone,
+          home_phone: client.HomePhone,
+          address_line1: client.AddressLine1,
+          address_line2: client.AddressLine2,
+          city: client.City,
+          state: client.State,
+          postal_code: client.PostalCode,
+          country: client.Country,
+          birth_date: client.BirthDate,
+          gender: client.Gender,
+          status: client.Status,
+          is_company: client.IsCompany || false,
+          liability_release: client.LiabilityRelease || false,
+          emergency_contact_name: client.EmergencyContactName,
+          emergency_contact_phone: client.EmergencyContactPhone,
+          creation_date: client.CreationDate,
+          last_modified_date: client.LastModifiedDateTime,
+          raw_data: client,
+          synced_at: new Date().toISOString(),
+        };
+
+        await supabase.from("clients").upsert(clientData, {
+          onConflict: "mindbody_id",
+        });
+      }
+
+      rangeCount += clients.length;
+      totalSynced += clients.length;
+      offset += limit;
+
+      if (clients.length < limit) break;
+    }
+
+    if (rangeCount > 0) {
+      console.log(`Range ${range.start} to ${range.end}: ${rangeCount} clients (total: ${totalSynced})`);
+    }
   }
 
   console.log(`Total clients synced: ${totalSynced}`);
