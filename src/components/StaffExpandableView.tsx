@@ -3,10 +3,18 @@ import { supabase } from '../lib/supabase';
 import { ChevronDown, ChevronRight, UserCog, Calendar, Package, Users, Filter, Building2, DollarSign, Download } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 
+interface AppointmentDetail {
+  id: string;
+  date: string;
+  time: string;
+  status: string;
+}
+
 interface ClientStat {
   client_id: string;
   client_name: string;
   appointments: number;
+  appointment_details: AppointmentDetail[];
 }
 
 interface PricingOptionStat {
@@ -142,6 +150,43 @@ interface PricingOptionCardProps {
   stat: PricingOptionStat;
 }
 
+function ClientCard({ client }: { client: ClientStat }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="pl-4 py-1">
+      <div
+        className="flex items-center justify-between text-xs text-slate-600 cursor-pointer hover:bg-slate-100 rounded px-2 py-1 -mx-2"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-center gap-2">
+          {expanded ? <ChevronDown className="w-3 h-3 text-slate-400" /> : <ChevronRight className="w-3 h-3 text-slate-400" />}
+          <Users className="w-3 h-3 text-slate-400" />
+          <span>{client.client_name}</span>
+        </div>
+        <span className="text-slate-500">{client.appointments} visit{client.appointments !== 1 ? 's' : ''}</span>
+      </div>
+
+      {expanded && client.appointment_details.length > 0 && (
+        <div className="ml-8 mt-1 space-y-1 border-l-2 border-slate-200 pl-3">
+          {client.appointment_details.map((appt) => (
+            <div key={appt.id} className="flex items-center gap-3 text-xs text-slate-500 py-0.5">
+              <Calendar className="w-3 h-3 text-slate-400" />
+              <span className="font-medium text-slate-700">{appt.date}</span>
+              <span>{appt.time}</span>
+              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                appt.status === 'Completed' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600'
+              }`}>
+                {appt.status}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PricingOptionCard({ stat }: PricingOptionCardProps) {
   const [showClients, setShowClients] = useState(false);
 
@@ -186,15 +231,9 @@ function PricingOptionCard({ stat }: PricingOptionCardProps) {
           </button>
 
           {showClients && (
-            <div className="mt-2 space-y-1">
+            <div className="mt-2 space-y-0.5">
               {stat.clients.map((client, idx) => (
-                <div key={idx} className="flex items-center justify-between text-xs text-slate-600 pl-4 py-1">
-                  <div className="flex items-center gap-2">
-                    <Users className="w-3 h-3 text-slate-400" />
-                    <span>{client.client_name}</span>
-                  </div>
-                  <span className="text-slate-500">{client.appointments} visit{client.appointments !== 1 ? 's' : ''}</span>
-                </div>
+                <ClientCard key={idx} client={client} />
               ))}
             </div>
           )}
@@ -467,6 +506,7 @@ export function StaffExpandableView() {
           client_service_id,
           session_type_id,
           status,
+          start_datetime,
           client:client_id (first_name, last_name),
           session_type:session_type_id (name)
         `)
@@ -474,7 +514,8 @@ export function StaffExpandableView() {
         .eq('status', 'Completed')
         .not('client_service_id', 'is', null)
         .gte('start_datetime', dateRange.start)
-        .lte('start_datetime', dateRange.end + 'T23:59:59');
+        .lte('start_datetime', dateRange.end + 'T23:59:59')
+        .order('start_datetime', { ascending: false });
 
       const clientServiceIds = [...new Set((appointments || []).map((a: any) => a.client_service_id).filter(Boolean))];
 
@@ -508,12 +549,18 @@ export function StaffExpandableView() {
         });
       }
 
+      type ClientVisit = {
+        name: string;
+        count: number;
+        visits: AppointmentDetail[];
+      };
+
       type ServiceData = {
         session_type_name: string;
         pricing_options: Record<string, {
           pricing_option_name: string;
           price: number;
-          clients: Record<string, { name: string; count: number }>;
+          clients: Record<string, ClientVisit>;
         }>;
       };
 
@@ -550,9 +597,17 @@ export function StaffExpandableView() {
           : 'Unknown Client';
 
         if (!serviceMap[stId].pricing_options[productId].clients[clientId]) {
-          serviceMap[stId].pricing_options[productId].clients[clientId] = { name: clientName, count: 0 };
+          serviceMap[stId].pricing_options[productId].clients[clientId] = { name: clientName, count: 0, visits: [] };
         }
         serviceMap[stId].pricing_options[productId].clients[clientId].count++;
+
+        const apptDate = new Date(a.start_datetime);
+        serviceMap[stId].pricing_options[productId].clients[clientId].visits.push({
+          id: a.id,
+          date: apptDate.toLocaleDateString('lv-LV'),
+          time: apptDate.toLocaleTimeString('lv-LV', { hour: '2-digit', minute: '2-digit' }),
+          status: a.status,
+        });
       });
 
       const services_provided: StaffServiceStat[] = Object.entries(serviceMap).map(([stId, data]) => {
@@ -561,6 +616,7 @@ export function StaffExpandableView() {
             client_id: cId,
             client_name: c.name,
             appointments: c.count,
+            appointment_details: c.visits,
           }));
           const appointmentCount = clients.reduce((sum, c) => sum + c.appointments, 0);
 
