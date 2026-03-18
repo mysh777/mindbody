@@ -141,12 +141,11 @@ export function AppointmentsView() {
       let query = supabase
         .from('appointments')
         .select(`
-          id, start_datetime, end_datetime, status, duration_minutes, notes, first_appointment,
+          id, start_datetime, end_datetime, status, duration_minutes, notes, first_appointment, client_service_id,
           client:clients(id, first_name, last_name),
           staff:staff(id, first_name, last_name),
           location:locations(id, name),
-          session_type:session_types(id, name),
-          client_service:client_services(id, name, program_name)
+          session_type:session_types(id, name)
         `, { count: 'exact' })
         .gte('start_datetime', dateRange.start)
         .lte('start_datetime', dateRange.end + 'T23:59:59')
@@ -165,7 +164,26 @@ export function AppointmentsView() {
 
       const { data, count } = await query;
 
-      setAppointments(data || []);
+      const clientServiceIds = [...new Set((data || []).map((a: any) => a.client_service_id).filter(Boolean))];
+
+      let clientServicesMap: Record<string, { name: string; program_name: string | null }> = {};
+      if (clientServiceIds.length > 0) {
+        const { data: servicesData } = await supabase
+          .from('client_services')
+          .select('mindbody_id, name, program_name')
+          .in('mindbody_id', clientServiceIds);
+
+        (servicesData || []).forEach((s: any) => {
+          clientServicesMap[s.mindbody_id] = { name: s.name, program_name: s.program_name };
+        });
+      }
+
+      const appointmentsWithServices = (data || []).map((a: any) => ({
+        ...a,
+        client_service: a.client_service_id ? clientServicesMap[a.client_service_id] || null : null,
+      }));
+
+      setAppointments(appointmentsWithServices);
       setTotalCount(count || 0);
     } catch (error) {
       console.error('Error loading appointments:', error);
@@ -224,12 +242,11 @@ export function AppointmentsView() {
     let query = supabase
       .from('appointments')
       .select(`
-        id, start_datetime, end_datetime, status, duration_minutes, notes, first_appointment,
+        id, start_datetime, end_datetime, status, duration_minutes, notes, first_appointment, client_service_id,
         client:clients(id, first_name, last_name),
         staff:staff(id, first_name, last_name),
         location:locations(id, name),
-        session_type:session_types(id, name),
-        client_service:client_services(id, name, program_name)
+        session_type:session_types(id, name)
       `)
       .gte('start_datetime', dateRange.start)
       .lte('start_datetime', dateRange.end + 'T23:59:59')
@@ -247,20 +264,36 @@ export function AppointmentsView() {
 
     const { data } = await query;
 
-    const exportData = (data || []).map((a: any) => ({
-      Date: new Date(a.start_datetime).toLocaleDateString('lv-LV'),
-      Time: new Date(a.start_datetime).toLocaleTimeString('lv-LV', { hour: '2-digit', minute: '2-digit' }),
-      Client: a.client ? `${a.client.first_name} ${a.client.last_name}` : '',
-      Staff: a.staff ? `${a.staff.first_name} ${a.staff.last_name}` : '',
-      Service: a.session_type?.name || '',
-      'Pricing Option': a.client_service?.name || '',
-      Program: a.client_service?.program_name || '',
-      Location: a.location?.name || '',
-      Duration: a.duration_minutes || 0,
-      Status: a.status || '-',
-      'First Appointment': a.first_appointment ? 'Yes' : 'No',
-      Notes: a.notes || '',
-    }));
+    const clientServiceIds = [...new Set((data || []).map((a: any) => a.client_service_id).filter(Boolean))];
+    let clientServicesMap: Record<string, { name: string; program_name: string | null }> = {};
+    if (clientServiceIds.length > 0) {
+      const { data: servicesData } = await supabase
+        .from('client_services')
+        .select('mindbody_id, name, program_name')
+        .in('mindbody_id', clientServiceIds);
+
+      (servicesData || []).forEach((s: any) => {
+        clientServicesMap[s.mindbody_id] = { name: s.name, program_name: s.program_name };
+      });
+    }
+
+    const exportData = (data || []).map((a: any) => {
+      const clientService = a.client_service_id ? clientServicesMap[a.client_service_id] : null;
+      return {
+        Date: new Date(a.start_datetime).toLocaleDateString('lv-LV'),
+        Time: new Date(a.start_datetime).toLocaleTimeString('lv-LV', { hour: '2-digit', minute: '2-digit' }),
+        Client: a.client ? `${a.client.first_name} ${a.client.last_name}` : '',
+        Staff: a.staff ? `${a.staff.first_name} ${a.staff.last_name}` : '',
+        Service: a.session_type?.name || '',
+        'Pricing Option': clientService?.name || '',
+        Program: clientService?.program_name || '',
+        Location: a.location?.name || '',
+        Duration: a.duration_minutes || 0,
+        Status: a.status || '',
+        'First Appointment': a.first_appointment ? 'Yes' : 'No',
+        Notes: a.notes || '',
+      };
+    });
 
     exportToExcel(exportData, `appointments_${dateRange.start}_${dateRange.end}`);
   };
