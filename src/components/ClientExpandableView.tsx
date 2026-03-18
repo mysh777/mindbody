@@ -260,6 +260,16 @@ export function ClientExpandableView() {
   const [loading, setLoading] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState<string | null>(null);
 
+  const [filterMode, setFilterMode] = useState<'all' | 'with_packages' | 'active_only'>('with_packages');
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const handleSearchChange = (value: string) => {
     setClientReportFilters({ search: value });
   };
@@ -267,7 +277,6 @@ export function ClientExpandableView() {
   const handleExpandedIdChange = (id: string | null) => {
     setClientReportFilters({ expandedId: id });
   };
-  const [filterMode, setFilterMode] = useState<'all' | 'with_packages' | 'active_only'>('with_packages');
 
   const loadClients = useCallback(async () => {
     setLoading(true);
@@ -283,19 +292,32 @@ export function ClientExpandableView() {
         .select('id, first_name, last_name, email, mobile_phone')
         .order('last_name');
 
+      if (debouncedSearch) {
+        query = query.or(`first_name.ilike.%${debouncedSearch}%,last_name.ilike.%${debouncedSearch}%,email.ilike.%${debouncedSearch}%`);
+      }
+
       if (filterMode === 'with_packages' || filterMode === 'active_only') {
         if (clientIdsWithServices.length > 0) {
-          query = query.in('id', clientIdsWithServices);
-        } else {
-          query = query.limit(100);
+          if (!debouncedSearch) {
+            query = query.in('id', clientIdsWithServices);
+          }
         }
-      } else {
+      }
+
+      if (!debouncedSearch) {
         query = query.limit(200);
+      } else {
+        query = query.limit(100);
       }
 
       const { data: clientsData } = await query;
 
-      const clientsWithEmptyServices = (clientsData || []).map(c => ({
+      let filteredData = clientsData || [];
+      if ((filterMode === 'with_packages' || filterMode === 'active_only') && debouncedSearch) {
+        filteredData = filteredData.filter(c => clientIdsWithServices.includes(c.id));
+      }
+
+      const clientsWithEmptyServices = filteredData.map(c => ({
         ...c,
         services: [],
         appointments: [],
@@ -307,7 +329,7 @@ export function ClientExpandableView() {
     } finally {
       setLoading(false);
     }
-  }, [filterMode]);
+  }, [filterMode, debouncedSearch]);
 
   const loadClientDetails = async (clientId: string) => {
     setLoadingDetails(clientId);
@@ -361,18 +383,9 @@ export function ClientExpandableView() {
     loadClients();
   }, [loadClients]);
 
-  const filteredClients = clients.filter(c => {
-    const matchesSearch = search === '' ||
-      `${c.first_name} ${c.last_name}`.toLowerCase().includes(search.toLowerCase()) ||
-      c.email?.toLowerCase().includes(search.toLowerCase());
-
-    if (filterMode === 'active_only') {
-      const hasActive = c.services.some(s => s.remaining > 0);
-      return matchesSearch && (c.services.length === 0 || hasActive);
-    }
-
-    return matchesSearch;
-  });
+  const filteredClients = filterMode === 'active_only'
+    ? clients.filter(c => c.services.length === 0 || c.services.some(s => s.remaining > 0))
+    : clients;
 
   return (
     <div className="w-full bg-slate-50 min-h-full">

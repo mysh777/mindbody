@@ -30,6 +30,11 @@ interface Appointment {
     id: string;
     name: string;
   };
+  client_service?: {
+    id: string;
+    name: string;
+    program_name: string | null;
+  } | null;
 }
 
 type FilterPreset = 'today' | 'this_week' | 'this_month' | 'last_month' | 'this_year' | 'custom';
@@ -140,7 +145,8 @@ export function AppointmentsView() {
           client:clients(id, first_name, last_name),
           staff:staff(id, first_name, last_name),
           location:locations(id, name),
-          session_type:session_types(id, name)
+          session_type:session_types(id, name),
+          client_service:client_services(id, name, program_name)
         `, { count: 'exact' })
         .gte('start_datetime', dateRange.start)
         .lte('start_datetime', dateRange.end + 'T23:59:59')
@@ -222,7 +228,8 @@ export function AppointmentsView() {
         client:clients(id, first_name, last_name),
         staff:staff(id, first_name, last_name),
         location:locations(id, name),
-        session_type:session_types(id, name)
+        session_type:session_types(id, name),
+        client_service:client_services(id, name, program_name)
       `)
       .gte('start_datetime', dateRange.start)
       .lte('start_datetime', dateRange.end + 'T23:59:59')
@@ -243,11 +250,13 @@ export function AppointmentsView() {
     const exportData = (data || []).map((a: any) => ({
       Date: new Date(a.start_datetime).toLocaleDateString('lv-LV'),
       Time: new Date(a.start_datetime).toLocaleTimeString('lv-LV', { hour: '2-digit', minute: '2-digit' }),
-      Client: a.client ? `${a.client.first_name} ${a.client.last_name}` : '-',
-      Staff: a.staff ? `${a.staff.first_name} ${a.staff.last_name}` : '-',
-      Service: a.session_type?.name || '-',
-      Location: a.location?.name || '-',
-      Duration: `${a.duration_minutes || 0} min`,
+      Client: a.client ? `${a.client.first_name} ${a.client.last_name}` : '',
+      Staff: a.staff ? `${a.staff.first_name} ${a.staff.last_name}` : '',
+      Service: a.session_type?.name || '',
+      'Pricing Option': a.client_service?.name || '',
+      Program: a.client_service?.program_name || '',
+      Location: a.location?.name || '',
+      Duration: a.duration_minutes || 0,
       Status: a.status || '-',
       'First Appointment': a.first_appointment ? 'Yes' : 'No',
       Notes: a.notes || '',
@@ -331,9 +340,12 @@ export function AppointmentsView() {
                 type="date"
                 value={dateRange.start}
                 onChange={(e) => {
-                  setDateRange(prev => ({ ...prev, start: e.target.value }));
-                  setFilterPreset('custom');
-                  setSelectedMonth(null);
+                  setAppointmentsFilters({
+                    dateRange: { ...dateRange, start: e.target.value },
+                    filterPreset: 'custom',
+                    selectedMonth: null,
+                    currentPage: 1,
+                  });
                 }}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
               />
@@ -344,9 +356,12 @@ export function AppointmentsView() {
                 type="date"
                 value={dateRange.end}
                 onChange={(e) => {
-                  setDateRange(prev => ({ ...prev, end: e.target.value }));
-                  setFilterPreset('custom');
-                  setSelectedMonth(null);
+                  setAppointmentsFilters({
+                    dateRange: { ...dateRange, end: e.target.value },
+                    filterPreset: 'custom',
+                    selectedMonth: null,
+                    currentPage: 1,
+                  });
                 }}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
               />
@@ -423,6 +438,7 @@ export function AppointmentsView() {
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Client</th>
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Staff</th>
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Service</th>
+                      <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Pricing Option</th>
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Location</th>
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Duration</th>
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Status</th>
@@ -466,6 +482,18 @@ export function AppointmentsView() {
                         </td>
                         <td className="px-4 py-3">
                           <span className="text-slate-700">{appt.session_type?.name || '-'}</span>
+                        </td>
+                        <td className="px-4 py-3">
+                          {appt.client_service ? (
+                            <div>
+                              <div className="text-slate-700 text-sm">{appt.client_service.name}</div>
+                              {appt.client_service.program_name && (
+                                <div className="text-xs text-slate-500">{appt.client_service.program_name}</div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">

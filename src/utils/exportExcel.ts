@@ -1,37 +1,28 @@
+import * as XLSX from 'xlsx';
+
 export function exportToExcel(data: any[], filename: string) {
   if (data.length === 0) {
     alert('No data to export');
     return;
   }
 
-  const headers = Object.keys(data[0]);
+  const worksheet = XLSX.utils.json_to_sheet(data);
 
-  let csv = headers.join(',') + '\n';
-
-  data.forEach(row => {
-    const values = headers.map(header => {
-      const value = row[header];
-      if (value === null || value === undefined) return '';
-
-      const stringValue = String(value);
-      if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
-        return `"${stringValue.replace(/"/g, '""')}"`;
-      }
-      return stringValue;
-    });
-    csv += values.join(',') + '\n';
+  const colWidths = Object.keys(data[0]).map(key => {
+    const maxLength = Math.max(
+      key.length,
+      ...data.map(row => {
+        const val = row[key];
+        if (val === null || val === undefined) return 0;
+        return String(val).length;
+      })
+    );
+    return { wch: Math.min(Math.max(maxLength + 2, 10), 50) };
   });
+  worksheet['!cols'] = colWidths;
 
-  const BOM = '\uFEFF';
-  const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement('a');
-  const url = URL.createObjectURL(blob);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Data');
 
-  link.setAttribute('href', url);
-  link.setAttribute('download', `${filename}_${new Date().toISOString().split('T')[0]}.csv`);
-  link.style.visibility = 'hidden';
-
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  XLSX.writeFile(workbook, `${filename}_${new Date().toISOString().split('T')[0]}.xlsx`);
 }
