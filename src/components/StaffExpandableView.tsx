@@ -9,6 +9,7 @@ interface AppointmentDetail {
   date: string;
   time: string;
   status: string;
+  client_name?: string;
 }
 
 interface ClientStat {
@@ -26,6 +27,7 @@ interface PricingOptionStat {
   client_count: number;
   total_revenue: number;
   clients: ClientStat[];
+  all_appointments: AppointmentDetail[];
 }
 
 interface StaffServiceStat {
@@ -190,6 +192,7 @@ function ClientCard({ client }: { client: ClientStat }) {
 
 function PricingOptionCard({ stat }: PricingOptionCardProps) {
   const [showClients, setShowClients] = useState(false);
+  const [showAppointments, setShowAppointments] = useState(false);
 
   return (
     <div className="bg-slate-50 rounded-lg border border-slate-200 p-3 ml-6">
@@ -221,23 +224,53 @@ function PricingOptionCard({ stat }: PricingOptionCardProps) {
         </div>
       </div>
 
-      {stat.clients.length > 0 && (
-        <div className="mt-2 pt-2 border-t border-slate-200">
+      <div className="mt-2 pt-2 border-t border-slate-200 flex gap-4">
+        {stat.clients.length > 0 && (
           <button
             onClick={() => setShowClients(!showClients)}
             className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1"
           >
             {showClients ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            <Users className="w-3 h-3" />
             {stat.clients.length} client{stat.clients.length !== 1 ? 's' : ''}
           </button>
+        )}
 
-          {showClients && (
-            <div className="mt-2 space-y-0.5">
-              {stat.clients.map((client, idx) => (
-                <ClientCard key={idx} client={client} />
-              ))}
+        {stat.all_appointments.length > 0 && (
+          <button
+            onClick={() => setShowAppointments(!showAppointments)}
+            className="text-xs text-emerald-600 hover:text-emerald-700 font-medium flex items-center gap-1"
+          >
+            {showAppointments ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            <Calendar className="w-3 h-3" />
+            {stat.all_appointments.length} appointment{stat.all_appointments.length !== 1 ? 's' : ''}
+          </button>
+        )}
+      </div>
+
+      {showClients && stat.clients.length > 0 && (
+        <div className="mt-2 space-y-0.5">
+          {stat.clients.map((client, idx) => (
+            <ClientCard key={idx} client={client} />
+          ))}
+        </div>
+      )}
+
+      {showAppointments && stat.all_appointments.length > 0 && (
+        <div className="mt-2 ml-4 border-l-2 border-emerald-200 pl-3 space-y-1">
+          {stat.all_appointments.map((appt) => (
+            <div key={appt.id} className="flex items-center gap-3 text-xs text-slate-500 py-0.5">
+              <Calendar className="w-3 h-3 text-emerald-400" />
+              <span className="font-medium text-slate-700">{appt.date}</span>
+              <span>{appt.time}</span>
+              {appt.client_name && <span className="text-slate-600">{appt.client_name}</span>}
+              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                appt.status === 'Completed' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600'
+              }`}>
+                {appt.status}
+              </span>
             </div>
-          )}
+          ))}
         </div>
       )}
     </div>
@@ -517,32 +550,32 @@ export function StaffExpandableView() {
 
       const clientServiceIds = [...new Set((appointments || []).map((a: any) => a.client_service_id).filter(Boolean))];
 
-      let clientServicesMap: Record<string, { name: string; product_id: string | null }> = {};
+      let clientServicesMap: Record<string, { name: string; pricing_option_id: string | null }> = {};
       let pricingOptionData: Record<string, { name: string; price: number }> = {};
 
       if (clientServiceIds.length > 0) {
         const { data: clientServices } = await supabase
           .from('client_services')
-          .select('mindbody_id, name, product_id')
+          .select('mindbody_id, name, pricing_option_id')
           .in('mindbody_id', clientServiceIds);
 
-        const productIds = [...new Set((clientServices || []).map((cs: any) => cs.product_id).filter(Boolean))];
+        const pricingOptionIds = [...new Set((clientServices || []).map((cs: any) => cs.pricing_option_id).filter(Boolean))];
 
-        if (productIds.length > 0) {
+        if (pricingOptionIds.length > 0) {
           const { data: pricingOpts } = await supabase
             .from('pricing_options')
-            .select('mindbody_id, name, price')
-            .in('mindbody_id', productIds);
+            .select('id, name, price')
+            .in('id', pricingOptionIds);
 
           (pricingOpts || []).forEach((po: any) => {
-            pricingOptionData[po.mindbody_id] = { name: po.name || 'Unknown', price: po.price || 0 };
+            pricingOptionData[po.id] = { name: po.name || 'Unknown', price: po.price || 0 };
           });
         }
 
         (clientServices || []).forEach((cs: any) => {
           clientServicesMap[cs.mindbody_id] = {
             name: cs.name,
-            product_id: cs.product_id,
+            pricing_option_id: cs.pricing_option_id,
           };
         });
       }
@@ -576,13 +609,13 @@ export function StaffExpandableView() {
         }
 
         const csData = clientServicesMap[a.client_service_id];
-        const productId = csData?.product_id || 'unknown';
-        const poData = pricingOptionData[productId];
-        const poName = poData?.name || csData?.name || (csData ? 'Unknown Package' : 'Data Not Synced');
+        const pricingOptionId = csData?.pricing_option_id || 'unknown';
+        const poData = pricingOptionData[pricingOptionId];
+        const poName = poData?.name || (csData && !csData.pricing_option_id ? `${csData.name} (no pricing link)` : (csData ? 'Unknown Package' : 'Data Not Synced'));
         const poPrice = poData?.price || 0;
 
-        if (!serviceMap[stId].pricing_options[productId]) {
-          serviceMap[stId].pricing_options[productId] = {
+        if (!serviceMap[stId].pricing_options[pricingOptionId]) {
+          serviceMap[stId].pricing_options[pricingOptionId] = {
             pricing_option_name: poName,
             price: poPrice,
             clients: {},
@@ -594,17 +627,18 @@ export function StaffExpandableView() {
           ? `${a.client.first_name || ''} ${a.client.last_name || ''}`.trim()
           : 'Unknown Client';
 
-        if (!serviceMap[stId].pricing_options[productId].clients[clientId]) {
-          serviceMap[stId].pricing_options[productId].clients[clientId] = { name: clientName, count: 0, visits: [] };
+        if (!serviceMap[stId].pricing_options[pricingOptionId].clients[clientId]) {
+          serviceMap[stId].pricing_options[pricingOptionId].clients[clientId] = { name: clientName, count: 0, visits: [] };
         }
-        serviceMap[stId].pricing_options[productId].clients[clientId].count++;
+        serviceMap[stId].pricing_options[pricingOptionId].clients[clientId].count++;
 
         const apptDate = new Date(a.start_datetime);
-        serviceMap[stId].pricing_options[productId].clients[clientId].visits.push({
+        serviceMap[stId].pricing_options[pricingOptionId].clients[clientId].visits.push({
           id: a.id,
           date: apptDate.toLocaleDateString('lv-LV'),
           time: apptDate.toLocaleTimeString('lv-LV', { hour: '2-digit', minute: '2-digit' }),
           status: a.status,
+          client_name: clientName,
         });
       });
 
@@ -617,6 +651,9 @@ export function StaffExpandableView() {
             appointment_details: c.visits,
           }));
           const appointmentCount = clients.reduce((sum, c) => sum + c.appointments, 0);
+          const allAppointments = clients.flatMap(c => c.appointment_details).sort((a, b) =>
+            new Date(b.date.split('.').reverse().join('-')).getTime() - new Date(a.date.split('.').reverse().join('-')).getTime()
+          );
 
           return {
             pricing_option_id: poId,
@@ -626,6 +663,7 @@ export function StaffExpandableView() {
             client_count: clients.length,
             total_revenue: poData.price * appointmentCount,
             clients,
+            all_appointments: allAppointments,
           };
         });
 
