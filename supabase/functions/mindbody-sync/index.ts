@@ -1305,9 +1305,10 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
   let totalSynced = 0;
   let totalLinked = 0;
   let processedClients = 0;
-  const BATCH_SIZE = 50;
-  const MAX_RETRIES = 2;
-  const TIMEOUT_MS = 8000;
+  const BATCH_SIZE = 25;
+  const MAX_RETRIES = 1;
+  const TIMEOUT_MS = 5000;
+  const MAX_EXECUTION_TIME_MS = 45000;
 
   async function fetchClientServicesWithTimeout(clientId: string, retryCount = 0): Promise<{ clientId: string; services: any[] }> {
     const url = `${MINDBODY_BASE_URL}/client/clientservices?clientId=${clientId}`;
@@ -1339,6 +1340,11 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
   const startTime = Date.now();
 
   for (let i = 0; i < uniqueClientIds.length; i += BATCH_SIZE) {
+    if (Date.now() - startTime > MAX_EXECUTION_TIME_MS) {
+      console.log(`[CLIENT_SERVICES] Stopping early due to time limit. Processed ${processedClients}/${uniqueClientIds.length} clients`);
+      break;
+    }
+
     const batch = uniqueClientIds.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(batch.map(id => fetchClientServicesWithTimeout(id)));
 
