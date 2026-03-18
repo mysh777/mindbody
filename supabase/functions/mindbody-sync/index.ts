@@ -1228,81 +1228,74 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
 async function syncClientServices(supabase: any, config: MindbodyConfig, userToken: string, year?: number) {
   console.log(`=== CLIENT SERVICES SYNC START ===`);
 
-  const { data: clientsWithAppointments } = await supabase
+  const { data: clientsWithServiceIds } = await supabase
     .from("appointments")
     .select("client_id")
     .not("client_id", "is", null)
     .not("client_service_id", "is", null);
 
-  const uniqueClientIds = [...new Set((clientsWithAppointments || []).map((a: any) => a.client_id))];
-  console.log(`[CLIENT_SERVICES] Found ${uniqueClientIds.length} unique clients with pricing option appointments`);
+  const clientsFromAppointments = [...new Set((clientsWithServiceIds || []).map((a: any) => a.client_id))];
+  console.log(`[CLIENT_SERVICES] Found ${clientsFromAppointments.length} clients with client_service_id in appointments`);
 
-  if (uniqueClientIds.length === 0) {
-    console.log(`[CLIENT_SERVICES] No clients with client_service_id in appointments. Trying full client list...`);
+  const uniqueClientIds = clientsFromAppointments;
+  console.log(`[CLIENT_SERVICES] Will sync client_services for ${uniqueClientIds.length} priority clients`);
 
-    const { data: allClients } = await supabase
-      .from("clients")
-      .select("mindbody_id")
-      .limit(500);
+  const { data: pricingOptions } = await supabase
+    .from("pricing_options")
+    .select("id, product_id");
 
-    if (allClients && allClients.length > 0) {
-      uniqueClientIds.push(...allClients.map((c: any) => c.mindbody_id));
+  const pricingByProductId = new Map<string, string>();
+  if (pricingOptions) {
+    for (const po of pricingOptions) {
+      if (po.product_id) {
+        pricingByProductId.set(po.product_id, po.id);
+      }
     }
   }
+  console.log(`[CLIENT_SERVICES] Loaded ${pricingByProductId.size} pricing options for product_id linking`);
 
   let totalSynced = 0;
+  let totalLinked = 0;
   let processedClients = 0;
+  const BATCH_SIZE = 10;
 
-  for (const clientId of uniqueClientIds) {
-    processedClients++;
-
+  async function fetchClientServices(clientId: string) {
     const url = `${MINDBODY_BASE_URL}/client/clientservices?clientId=${clientId}`;
-    const startTime = Date.now();
-
     try {
       const response = await fetch(url, {
         headers: getUserHeaders(config, userToken),
       });
 
-      const durationMs = Date.now() - startTime;
-      const responseText = await response.text();
-
-      let data;
-      let error = null;
-      try {
-        data = JSON.parse(responseText);
-      } catch (e) {
-        error = `Failed to parse response: ${e.message}`;
-        data = {};
-      }
-
-      if (processedClients <= 5 || processedClients % 50 === 0) {
-        await logApiCall(supabase, url, "GET", { clientId }, response.status, data, error, durationMs);
-      }
-
       if (!response.ok) {
-        if (response.status !== 404) {
-          console.error(`[CLIENT_SERVICES] Failed for client ${clientId}: ${response.status}`);
-        }
-        continue;
+        return { clientId, services: [] };
       }
 
-      const clientServices = data.ClientServices || [];
+      const data = await response.json();
+      return { clientId, services: data.ClientServices || [] };
+    } catch (err) {
+      console.error(`[CLIENT_SERVICES] Exception for client ${clientId}:`, err);
+      return { clientId, services: [] };
+    }
+  }
 
-      if (clientServices.length === 0) continue;
+  for (let i = 0; i < uniqueClientIds.length; i += BATCH_SIZE) {
+    const batch = uniqueClientIds.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(batch.map(fetchClientServices));
 
-      if (totalSynced === 0) {
-        await saveRawData(supabase, 'client_services', data, clientServices.length, null);
-        console.log('Sample ClientService:', JSON.stringify(clientServices[0], null, 2));
-      }
+    const syncedAt = new Date().toISOString();
+    const allServicesData: any[] = [];
 
-      const syncedAt = new Date().toISOString();
+    for (const { clientId, services } of results) {
+      processedClients++;
 
-      for (const cs of clientServices) {
-        const csData = {
+      for (const cs of services) {
+        const productId = cs.ProductId ? String(cs.ProductId) : null;
+        const pricingOptionId = productId ? pricingByProductId.get(productId) : null;
+
+        const csData: any = {
           mindbody_id: String(cs.Id),
           client_id: clientId,
-          product_id: cs.ProductId ? String(cs.ProductId) : String(cs.Id),
+          product_id: productId || String(cs.Id),
           name: cs.Name,
           payment_date: cs.PaymentDate,
           active_date: cs.ActiveDate,
@@ -1318,28 +1311,160 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
           synced_at: syncedAt,
         };
 
-        const { error: upsertError } = await supabase.from("client_services").upsert(csData, {
-          onConflict: "mindbody_id",
-        });
-
-        if (upsertError) {
-          console.error(`[CLIENT_SERVICES] Upsert error for ${cs.Id}:`, upsertError.message);
-        } else {
-          totalSynced++;
+        if (pricingOptionId) {
+          csData.pricing_option_id = pricingOptionId;
+          totalLinked++;
         }
-      }
 
-      if (processedClients % 50 === 0) {
-        console.log(`[CLIENT_SERVICES] Progress: ${processedClients}/${uniqueClientIds.length} clients, ${totalSynced} services synced`);
+        allServicesData.push(csData);
       }
+    }
 
-    } catch (err) {
-      console.error(`[CLIENT_SERVICES] Exception for client ${clientId}:`, err);
+    if (allServicesData.length > 0) {
+      const { error: upsertError } = await supabase.from("client_services").upsert(allServicesData, {
+        onConflict: "mindbody_id",
+      });
+
+      if (upsertError) {
+        console.error(`[CLIENT_SERVICES] Batch upsert error:`, upsertError.message);
+      } else {
+        totalSynced += allServicesData.length;
+      }
+    }
+
+    if (processedClients % 50 === 0 || i + BATCH_SIZE >= uniqueClientIds.length) {
+      console.log(`[CLIENT_SERVICES] Progress: ${processedClients}/${uniqueClientIds.length} clients, ${totalSynced} services, ${totalLinked} linked`);
     }
   }
 
-  console.log(`=== CLIENT_SERVICES SYNC COMPLETE: ${totalSynced} records from ${processedClients} clients ===`);
+  console.log(`=== CLIENT_SERVICES SYNC COMPLETE: ${totalSynced} records from ${processedClients} clients, ${totalLinked} linked to pricing_options ===`);
   return totalSynced;
+}
+
+async function backfillClientServicesFromAppointments(supabase: any) {
+  console.log(`=== BACKFILL CLIENT_SERVICES FROM APPOINTMENTS START ===`);
+
+  let allAppointments: any[] = [];
+  let offset = 0;
+  const pageSize = 1000;
+
+  while (true) {
+    const { data: batch } = await supabase
+      .from("appointments")
+      .select("client_id, client_service_id, session_type_id, raw_data")
+      .not("client_service_id", "is", null)
+      .not("client_id", "is", null)
+      .range(offset, offset + pageSize - 1);
+
+    if (!batch || batch.length === 0) break;
+    allAppointments = allAppointments.concat(batch);
+    console.log(`[BACKFILL] Loaded ${allAppointments.length} appointments so far...`);
+    if (batch.length < pageSize) break;
+    offset += pageSize;
+  }
+
+  const appointmentsWithMissingServices = allAppointments;
+
+  if (appointmentsWithMissingServices.length === 0) {
+    console.log(`[BACKFILL] No appointments with client_service_id found`);
+    return 0;
+  }
+
+  console.log(`[BACKFILL] Total appointments with client_service_id: ${appointmentsWithMissingServices.length}`);
+
+  let allExistingServices: any[] = [];
+  offset = 0;
+
+  while (true) {
+    const { data: batch } = await supabase
+      .from("client_services")
+      .select("mindbody_id")
+      .range(offset, offset + pageSize - 1);
+
+    if (!batch || batch.length === 0) break;
+    allExistingServices = allExistingServices.concat(batch);
+    if (batch.length < pageSize) break;
+    offset += pageSize;
+  }
+
+  const existingServices = allExistingServices;
+
+  const existingServiceIds = new Set((existingServices || []).map((s: any) => s.mindbody_id));
+
+  const { data: pricingOptions } = await supabase
+    .from("pricing_options")
+    .select("id, product_id, mindbody_id, name");
+
+  const pricingByProductId = new Map<string, string>();
+  const pricingByMindbodyId = new Map<string, string>();
+  const pricingByName = new Map<string, string>();
+  if (pricingOptions) {
+    for (const po of pricingOptions) {
+      if (po.product_id) pricingByProductId.set(po.product_id, po.id);
+      if (po.mindbody_id) pricingByMindbodyId.set(po.mindbody_id, po.id);
+      if (po.name) pricingByName.set(po.name.trim().toLowerCase(), po.id);
+    }
+  }
+  console.log(`[BACKFILL] Loaded ${pricingOptions?.length || 0} pricing options`);
+
+  const { data: sessionTypes } = await supabase
+    .from("session_types")
+    .select("id, mindbody_id, name, program_id");
+
+  const sessionTypeMap = new Map<string, any>();
+  if (sessionTypes) {
+    for (const st of sessionTypes) {
+      sessionTypeMap.set(st.mindbody_id, st);
+    }
+  }
+
+  const missingServices = new Map<string, any>();
+  for (const appt of appointmentsWithMissingServices) {
+    const csId = appt.client_service_id;
+    if (!existingServiceIds.has(csId) && !missingServices.has(csId)) {
+      const rawData = appt.raw_data || {};
+      const sessionType = appt.session_type_id ? sessionTypeMap.get(appt.session_type_id) : null;
+
+      missingServices.set(csId, {
+        mindbody_id: csId,
+        client_id: appt.client_id,
+        product_id: csId,
+        name: sessionType?.name || `Service ${csId}`,
+        program_id: rawData.ProgramId ? String(rawData.ProgramId) : sessionType?.program_id || null,
+        status: 'Unknown',
+        raw_data: { source: 'backfill_from_appointment', appointment_raw: rawData },
+        synced_at: new Date().toISOString(),
+      });
+    }
+  }
+
+  console.log(`[BACKFILL] Found ${missingServices.size} missing client_services to create`);
+
+  if (missingServices.size === 0) {
+    return 0;
+  }
+
+  const servicesData = Array.from(missingServices.values()).map((cs: any) => {
+    let pricingOptionId = pricingByProductId.get(cs.product_id) || pricingByMindbodyId.get(cs.product_id) || null;
+    if (!pricingOptionId && cs.name) {
+      pricingOptionId = pricingByName.get(cs.name.trim().toLowerCase()) || null;
+    }
+    return { ...cs, pricing_option_id: pricingOptionId };
+  });
+
+  const linkedCount = servicesData.filter((s: any) => s.pricing_option_id).length;
+
+  const { error: upsertError } = await supabase.from("client_services").upsert(servicesData, {
+    onConflict: "mindbody_id",
+  });
+
+  if (upsertError) {
+    console.error(`[BACKFILL] Upsert error:`, upsertError.message);
+    return 0;
+  }
+
+  console.log(`=== BACKFILL COMPLETE: ${servicesData.length} records created, ${linkedCount} linked to pricing_options ===`);
+  return servicesData.length;
 }
 
 async function syncTransactions(supabase: any, config: MindbodyConfig, userToken: string, year?: number) {
@@ -2031,6 +2156,17 @@ Deno.serve(async (req: Request) => {
         } catch (e) {
           console.error('❌ Client services sync failed:', e);
           results.client_services = 0;
+        }
+      }
+
+      if (shouldSyncAll || syncType === "client_services" || syncType === "backfill_client_services" || isQuickMode) {
+        try {
+          console.log('\n--- Backfilling Missing Client Services from Appointments ---');
+          results.backfilled_client_services = await backfillClientServicesFromAppointments(supabase);
+          console.log(`✅ Backfilled client services: ${results.backfilled_client_services}`);
+        } catch (e) {
+          console.error('❌ Backfill client services failed:', e);
+          results.backfilled_client_services = 0;
         }
       }
 
