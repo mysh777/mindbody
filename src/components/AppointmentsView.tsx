@@ -1,17 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { useReportFilters } from '../lib/reportFiltersContext';
-import { Calendar, Filter, Building2, UserCog, Clock, Tag, Users, ChevronLeft, ChevronRight, Download } from 'lucide-react';
+import { Calendar, Filter, Building2, UserCog, Clock, Tag, Users, ChevronLeft, ChevronRight, Download, X, FileJson } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 
 interface Appointment {
   id: string;
+  mindbody_id?: string;
   start_datetime: string;
   end_datetime: string;
   status: string;
   duration_minutes: number;
   notes: string | null;
   first_appointment: boolean;
+  raw_data?: any;
   client?: {
     id: string;
     first_name: string;
@@ -34,6 +36,7 @@ interface Appointment {
     id: string;
     name: string;
     program_name: string | null;
+    price: number | null;
   } | null;
 }
 
@@ -116,6 +119,7 @@ export function AppointmentsView() {
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [staffList, setStaffList] = useState<{ id: string; first_name: string; last_name: string }[]>([]);
   const [statuses, setStatuses] = useState<string[]>([]);
+  const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
 
   const page = currentPage - 1;
 
@@ -141,7 +145,7 @@ export function AppointmentsView() {
       let query = supabase
         .from('appointments')
         .select(`
-          id, mindbody_id, start_datetime, end_datetime, status, duration_minutes, notes, first_appointment, client_service_id,
+          id, mindbody_id, start_datetime, end_datetime, status, duration_minutes, notes, first_appointment, client_service_id, raw_data,
           client:clients(id, first_name, last_name),
           staff:staff(id, first_name, last_name),
           location:locations(id, name),
@@ -166,15 +170,33 @@ export function AppointmentsView() {
 
       const clientServiceIds = [...new Set((data || []).map((a: any) => a.client_service_id).filter(Boolean))];
 
-      let clientServicesMap: Record<string, { name: string; program_name: string | null }> = {};
+      let clientServicesMap: Record<string, { name: string; program_name: string | null; price: number | null }> = {};
       if (clientServiceIds.length > 0) {
         const { data: servicesData } = await supabase
           .from('client_services')
-          .select('mindbody_id, name, program_name')
+          .select('mindbody_id, name, program_name, pricing_option_id')
           .in('mindbody_id', clientServiceIds);
 
+        const pricingOptionIds = [...new Set((servicesData || []).map((s: any) => s.pricing_option_id).filter(Boolean))];
+
+        let pricingMap: Record<string, number> = {};
+        if (pricingOptionIds.length > 0) {
+          const { data: pricingData } = await supabase
+            .from('pricing_options')
+            .select('id, price')
+            .in('id', pricingOptionIds);
+
+          (pricingData || []).forEach((p: any) => {
+            pricingMap[p.id] = p.price;
+          });
+        }
+
         (servicesData || []).forEach((s: any) => {
-          clientServicesMap[s.mindbody_id] = { name: s.name, program_name: s.program_name };
+          clientServicesMap[s.mindbody_id] = {
+            name: s.name,
+            program_name: s.program_name,
+            price: s.pricing_option_id ? pricingMap[s.pricing_option_id] || null : null
+          };
         });
       }
 
@@ -474,6 +496,7 @@ export function AppointmentsView() {
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Staff</th>
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Service</th>
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Pricing Option</th>
+                      <th className="text-right px-4 py-3 text-sm font-semibold text-slate-700">Price</th>
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Location</th>
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Duration</th>
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Status</th>
@@ -481,9 +504,16 @@ export function AppointmentsView() {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {appointments.map((appt) => (
-                      <tr key={appt.id} className="hover:bg-slate-50 transition-colors">
+                      <tr
+                        key={appt.id}
+                        className="hover:bg-slate-50 transition-colors cursor-pointer"
+                        onClick={() => setSelectedAppointment(appt)}
+                      >
                         <td className="px-4 py-3">
-                          <span className="text-sm font-mono text-slate-600">{appt.mindbody_id || '-'}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-mono text-slate-600">{appt.mindbody_id || '-'}</span>
+                            <FileJson className="w-3.5 h-3.5 text-slate-400" />
+                          </div>
                         </td>
                         <td className="px-4 py-3">
                           <div className="font-medium text-slate-900">
@@ -529,6 +559,13 @@ export function AppointmentsView() {
                                 <div className="text-xs text-slate-500">{appt.client_service.program_name}</div>
                               )}
                             </div>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {appt.client_service?.price ? (
+                            <span className="font-medium text-slate-900">{Number(appt.client_service.price).toFixed(2)}</span>
                           ) : (
                             <span className="text-slate-400">-</span>
                           )}
@@ -584,6 +621,57 @@ export function AppointmentsView() {
           )}
         </div>
       </div>
+
+      {selectedAppointment && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200">
+              <div className="flex items-center gap-3">
+                <FileJson className="w-5 h-5 text-blue-600" />
+                <div>
+                  <h3 className="font-semibold text-slate-900">
+                    Appointment #{selectedAppointment.mindbody_id}
+                  </h3>
+                  <p className="text-sm text-slate-500">
+                    {selectedAppointment.client?.first_name} {selectedAppointment.client?.last_name} - {new Date(selectedAppointment.start_datetime).toLocaleString('lv-LV')}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedAppointment(null)}
+                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4 bg-slate-900">
+              <pre className="text-xs text-green-400 whitespace-pre-wrap break-words font-mono">
+                {JSON.stringify(selectedAppointment.raw_data, null, 2)}
+              </pre>
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t border-slate-200">
+              <button
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(JSON.stringify(selectedAppointment.raw_data, null, 2));
+                  } catch (e) {
+                    console.error('Copy failed:', e);
+                  }
+                }}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
+              >
+                Copy JSON
+              </button>
+              <button
+                onClick={() => setSelectedAppointment(null)}
+                className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors text-sm"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

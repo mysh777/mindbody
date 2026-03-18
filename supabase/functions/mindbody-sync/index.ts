@@ -130,13 +130,13 @@ async function logApiCall(supabase: any, endpoint: string, method: string, reque
   }
 }
 
-async function saveRawData(supabase: any, endpointType: string, responseData: any, recordCount: number, paginationInfo: any = null) {
+async function saveRawData(supabase: any, endpointType: string, responseData: any, recordCount: number, paginationInfo: any = null, pageNumber: number = 1) {
   try {
     await supabase.from("api_raw_data").insert({
-      endpoint_type: endpointType,
+      endpoint_type: pageNumber > 1 ? `${endpointType}_page${pageNumber}` : endpointType,
       response_data: responseData,
       record_count: recordCount,
-      pagination_info: paginationInfo,
+      pagination_info: paginationInfo ? { ...paginationInfo, page: pageNumber } : { page: pageNumber },
     });
   } catch (err) {
     console.error("Failed to save raw data:", err);
@@ -290,10 +290,8 @@ async function syncStaff(supabase: any, config: MindbodyConfig) {
     }
 
     const staffMembers = data.StaffMembers || [];
-
-    if (offset === 0) {
-      await saveRawData(supabase, 'staff', data, staffMembers.length, data.PaginationResponse);
-    }
+    const pageNum = Math.floor(offset / limit) + 1;
+    await saveRawData(supabase, 'staff', data, staffMembers.length, data.PaginationResponse, pageNum);
 
     if (staffMembers.length === 0) break;
 
@@ -422,10 +420,8 @@ async function syncSessionTypes(supabase: any, config: MindbodyConfig) {
 
     const sessionTypes = data.SessionTypes || [];
     console.log(`Found ${sessionTypes.length} session types at offset ${offset}`);
-
-    if (offset === 0) {
-      await saveRawData(supabase, 'services', data, sessionTypes.length, data.PaginationResponse);
-    }
+    const pageNum = Math.floor(offset / limit) + 1;
+    await saveRawData(supabase, 'session_types', data, sessionTypes.length, data.PaginationResponse, pageNum);
 
     if (sessionTypes.length === 0) break;
 
@@ -643,9 +639,8 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
     const services = data.Services || [];
     console.log(`Found ${services.length} pricing options at offset ${offset}`);
 
-    if (offset === 0) {
-      await saveRawData(supabase, 'pricing_options', data, services.length, data.PaginationResponse);
-    }
+    const pageNum = Math.floor(offset / limit) + 1;
+    await saveRawData(supabase, 'pricing_options', data, services.length, data.PaginationResponse, pageNum);
 
     if (services.length === 0) break;
 
@@ -781,9 +776,8 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
 
       const appointments = data.Appointments || [];
 
-      if (offset === 0 && totalSynced === 0 && appointments.length > 0) {
-        await saveRawData(supabase, 'appointments', data, appointments.length, data.PaginationResponse);
-      }
+      const pageNum = Math.floor(offset / limit) + 1;
+      await saveRawData(supabase, 'appointments', data, appointments.length, data.PaginationResponse, pageNum);
 
       if (appointments.length === 0) break;
 
@@ -873,10 +867,8 @@ async function syncAppointmentsDirect(supabase: any, config: MindbodyConfig, use
     }
 
     const appointments = data.Appointments || [];
-
-    if (offset === 0) {
-      await saveRawData(supabase, 'appointments', data, appointments.length, data.PaginationResponse);
-    }
+    const pageNum = Math.floor(offset / limit) + 1;
+    await saveRawData(supabase, 'appointments_direct', data, appointments.length, data.PaginationResponse, pageNum);
 
     if (appointments.length === 0) break;
 
@@ -962,8 +954,8 @@ async function syncClients(supabase: any, config: MindbodyConfig, userToken?: st
     const pagination = data.PaginationResponse;
     const returnedCount = clients.length;
 
+    await saveRawData(supabase, 'clients', data, returnedCount, pagination, pageNumber);
     if (offset === 0) {
-      await saveRawData(supabase, 'clients', data, returnedCount, pagination);
       totalResults = pagination?.TotalResults || 0;
       console.log(`[CLIENTS] API reports TotalResults: ${totalResults}`);
     }
@@ -1077,8 +1069,8 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
     const pagination = data.PaginationResponse;
     const returnedCount = sales.length;
 
+    await saveRawData(supabase, 'sales', data, returnedCount, pagination, pageNumber);
     if (offset === 0) {
-      await saveRawData(supabase, 'sales', data, returnedCount, pagination);
       totalResults = pagination?.TotalResults || 0;
       console.log(`[SALES] API reports TotalResults: ${totalResults} for year ${targetYear}`);
     }
@@ -1623,10 +1615,8 @@ async function syncClientVisits(supabase: any, config: MindbodyConfig, userToken
 
     const visits = data.Visits || [];
     console.log(`Found ${visits.length} visits at offset ${offset}`);
-
-    if (offset === 0) {
-      await saveRawData(supabase, 'client_visits', data, visits.length, data.PaginationResponse);
-    }
+    const pageNum = Math.floor(offset / limit) + 1;
+    await saveRawData(supabase, 'client_visits', data, visits.length, data.PaginationResponse, pageNum);
 
     if (visits.length === 0) break;
 
@@ -1702,10 +1692,8 @@ async function syncPackages(supabase: any, config: MindbodyConfig, userToken: st
 
     const packages = data.Packages || [];
     console.log(`Found ${packages.length} packages at offset ${offset}`);
-
-    if (offset === 0) {
-      await saveRawData(supabase, 'packages', data, packages.length, data.PaginationResponse);
-    }
+    const pageNum = Math.floor(offset / limit) + 1;
+    await saveRawData(supabase, 'packages', data, packages.length, data.PaginationResponse, pageNum);
 
     if (packages.length === 0) break;
 
@@ -1910,9 +1898,10 @@ async function syncProducts(supabase: any, config: MindbodyConfig, userToken?: s
 
     const products = data.Products || [];
     const pagination = data.PaginationResponse;
+    const pageNum = Math.floor(offset / limit) + 1;
+    await saveRawData(supabase, 'products', data, products.length, pagination, pageNum);
 
     if (offset === 0) {
-      await saveRawData(supabase, 'products', data, products.length, pagination);
       totalResults = pagination?.TotalResults || 0;
       console.log(`Total products in Mindbody: ${totalResults}`);
       if (products.length > 0) {
