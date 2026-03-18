@@ -141,7 +141,7 @@ export function AppointmentsView() {
       let query = supabase
         .from('appointments')
         .select(`
-          id, start_datetime, end_datetime, status, duration_minutes, notes, first_appointment, client_service_id,
+          id, mindbody_id, start_datetime, end_datetime, status, duration_minutes, notes, first_appointment, client_service_id,
           client:clients(id, first_name, last_name),
           staff:staff(id, first_name, last_name),
           location:locations(id, name),
@@ -242,7 +242,7 @@ export function AppointmentsView() {
     let query = supabase
       .from('appointments')
       .select(`
-        id, start_datetime, end_datetime, status, duration_minutes, notes, first_appointment, client_service_id,
+        id, mindbody_id, start_datetime, end_datetime, status, duration_minutes, notes, first_appointment, client_service_id,
         client:clients(id, first_name, last_name),
         staff:staff(id, first_name, last_name),
         location:locations(id, name),
@@ -280,6 +280,7 @@ export function AppointmentsView() {
     const exportData = (data || []).map((a: any) => {
       const clientService = a.client_service_id ? clientServicesMap[a.client_service_id] : null;
       return {
+        'Appointment ID': a.mindbody_id || '',
         Date: new Date(a.start_datetime).toLocaleDateString('lv-LV'),
         Time: new Date(a.start_datetime).toLocaleTimeString('lv-LV', { hour: '2-digit', minute: '2-digit' }),
         Client: a.client ? `${a.client.first_name} ${a.client.last_name}` : '',
@@ -467,6 +468,7 @@ export function AppointmentsView() {
                 <table className="w-full">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
+                      <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">ID</th>
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Date & Time</th>
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Client</th>
                       <th className="text-left px-4 py-3 text-sm font-semibold text-slate-700">Staff</th>
@@ -480,6 +482,9 @@ export function AppointmentsView() {
                   <tbody className="divide-y divide-slate-100">
                     {appointments.map((appt) => (
                       <tr key={appt.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-4 py-3">
+                          <span className="text-sm font-mono text-slate-600">{appt.mindbody_id || '-'}</span>
+                        </td>
                         <td className="px-4 py-3">
                           <div className="font-medium text-slate-900">
                             {new Date(appt.start_datetime).toLocaleDateString('lv-LV')}
