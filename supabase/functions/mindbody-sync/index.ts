@@ -1217,28 +1217,56 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
   return totalSynced;
 }
 
-async function syncClientServices(supabase: any, config: MindbodyConfig, userToken: string, year?: number) {
-  console.log(`=== CLIENT SERVICES SYNC START (OPTIMIZED) ===`);
+async function syncClientServices(supabase: any, config: MindbodyConfig, userToken: string, year?: number, month?: number) {
+  const hasMonthFilter = year && month;
+  const periodLabel = hasMonthFilter ? `${year}-${String(month).padStart(2, '0')}` : (year ? String(year) : 'ALL');
+  console.log(`=== CLIENT SERVICES SYNC START (OPTIMIZED) - Period: ${periodLabel} ===`);
 
   let allClients: any[] = [];
-  let offset = 0;
-  const pageSize = 1000;
 
-  while (true) {
-    const { data: batch } = await supabase
-      .from("clients")
-      .select("id, mindbody_id")
-      .range(offset, offset + pageSize - 1);
+  if (hasMonthFilter) {
+    const startDate = new Date(year!, month! - 1, 1);
+    const endDate = new Date(year!, month!, 0, 23, 59, 59);
+    const startDateStr = startDate.toISOString();
+    const endDateStr = endDate.toISOString();
 
-    if (!batch || batch.length === 0) break;
-    allClients = allClients.concat(batch);
-    console.log(`[CLIENT_SERVICES] Loaded ${allClients.length} clients so far...`);
-    if (batch.length < pageSize) break;
-    offset += pageSize;
+    console.log(`[CLIENT_SERVICES] Filtering clients by sales in period: ${startDateStr} to ${endDateStr}`);
+
+    const { data: salesClients } = await supabase
+      .from("sales")
+      .select("client_id")
+      .gte("sale_datetime", startDateStr)
+      .lte("sale_datetime", endDateStr)
+      .not("client_id", "is", null);
+
+    if (salesClients && salesClients.length > 0) {
+      const uniqueIds = [...new Set(salesClients.map((s: any) => s.client_id))];
+      allClients = uniqueIds.map(id => ({ mindbody_id: id }));
+      console.log(`[CLIENT_SERVICES] Found ${allClients.length} unique clients with sales in ${periodLabel}`);
+    } else {
+      console.log(`[CLIENT_SERVICES] No clients with sales found for ${periodLabel}`);
+      return 0;
+    }
+  } else {
+    let offset = 0;
+    const pageSize = 1000;
+
+    while (true) {
+      const { data: batch } = await supabase
+        .from("clients")
+        .select("id, mindbody_id")
+        .range(offset, offset + pageSize - 1);
+
+      if (!batch || batch.length === 0) break;
+      allClients = allClients.concat(batch);
+      console.log(`[CLIENT_SERVICES] Loaded ${allClients.length} clients so far...`);
+      if (batch.length < pageSize) break;
+      offset += pageSize;
+    }
   }
 
   const uniqueClientIds = allClients.map((c: any) => c.mindbody_id);
-  console.log(`[CLIENT_SERVICES] Will sync client_services for ALL ${uniqueClientIds.length} clients`);
+  console.log(`[CLIENT_SERVICES] Will sync client_services for ${uniqueClientIds.length} clients (Period: ${periodLabel})`);
 
   const { data: pricingOptions } = await supabase
     .from("pricing_options")
@@ -1856,8 +1884,9 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { syncType = "quick", year } = await req.json().catch(() => ({}));
+    const { syncType = "quick", year, month } = await req.json().catch(() => ({}));
     const targetYear = year ? parseInt(year) : undefined;
+    const targetMonth = month ? parseInt(month) : undefined;
 
     if (syncType === "ping") {
       return new Response(
@@ -2038,7 +2067,7 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "client_services" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Client Services (Ownership/Entitlements) ---');
-          results.client_services = await syncClientServices(supabase, config, userToken, targetYear);
+          results.client_services = await syncClientServices(supabase, config, userToken, targetYear, targetMonth);
           console.log(`✅ Client services synced: ${results.client_services}`);
         } catch (e) {
           console.error('❌ Client services sync failed:', e);

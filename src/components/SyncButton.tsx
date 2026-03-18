@@ -12,7 +12,23 @@ interface SyncStatus {
 }
 
 const currentYear = new Date().getFullYear();
+const currentMonth = new Date().getMonth() + 1;
 const availableYears = [currentYear, currentYear - 1, currentYear - 2];
+const months = [
+  { value: 0, label: 'All Year' },
+  { value: 1, label: 'January' },
+  { value: 2, label: 'February' },
+  { value: 3, label: 'March' },
+  { value: 4, label: 'April' },
+  { value: 5, label: 'May' },
+  { value: 6, label: 'June' },
+  { value: 7, label: 'July' },
+  { value: 8, label: 'August' },
+  { value: 9, label: 'September' },
+  { value: 10, label: 'October' },
+  { value: 11, label: 'November' },
+  { value: 12, label: 'December' },
+];
 
 export function SyncButton({ onSyncComplete }: SyncButtonProps) {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({});
@@ -24,13 +40,21 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     transactions: currentYear,
     appointments: currentYear,
   });
+  const [selectedMonths, setSelectedMonths] = useState<{ [key: string]: number }>({
+    client_services: currentMonth,
+  });
 
   const handleYearChange = (syncType: string, year: number) => {
     setSelectedYears(prev => ({ ...prev, [syncType]: year }));
   };
 
-  const handleSync = async (syncType: SyncType, year?: number) => {
-    console.log(`Starting sync for: ${syncType}${year ? ` (year: ${year})` : ''}`);
+  const handleMonthChange = (syncType: string, month: number) => {
+    setSelectedMonths(prev => ({ ...prev, [syncType]: month }));
+  };
+
+  const handleSync = async (syncType: SyncType, year?: number, month?: number) => {
+    const monthLabel = month ? `-${String(month).padStart(2, '0')}` : '';
+    console.log(`Starting sync for: ${syncType}${year ? ` (period: ${year}${monthLabel})` : ''}`);
     setSyncStatus(prev => ({ ...prev, [syncType]: 'syncing' }));
     setError(null);
     setSyncResult(null);
@@ -39,9 +63,12 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-      const payload: { syncType: string; year?: number } = { syncType };
+      const payload: { syncType: string; year?: number; month?: number } = { syncType };
       if (year) {
         payload.year = year;
+      }
+      if (month && month > 0) {
+        payload.month = month;
       }
 
       console.log(`Calling edge function with payload:`, payload);
@@ -107,8 +134,11 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
   const yearBasedButtons = [
     { type: 'appointments' as SyncType, label: 'Appointments', icon: Calendar, color: 'red', description: 'All appointments for the year' },
     { type: 'sales' as SyncType, label: 'Sales', icon: DollarSign, color: 'emerald', description: 'Sales + Payments + Items' },
-    { type: 'client_services' as SyncType, label: 'Client Services', icon: FileText, color: 'blue', description: 'Purchased packages/memberships' },
     { type: 'transactions' as SyncType, label: 'Transactions', icon: CreditCard, color: 'violet', description: 'Payment transactions detail' },
+  ];
+
+  const monthBasedButtons = [
+    { type: 'client_services' as SyncType, label: 'Client Services', icon: FileText, color: 'blue', description: 'Purchased packages/memberships (by month)' },
   ];
 
   const getButtonClass = (type: SyncType, color: string) => {
@@ -167,7 +197,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
 
       <div className="border-t pt-4">
         <h3 className="text-sm font-semibold text-gray-700 mb-3">Year-Based Sync:</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {yearBasedButtons.map(({ type, label, icon: Icon, color, description }) => (
             <div key={type} className="flex flex-col gap-2 p-3 bg-gray-50 rounded-lg border border-gray-200">
               <div className="flex items-center justify-between">
@@ -197,6 +227,59 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
                 <RefreshCw className={`w-4 h-4 ${syncStatus[type] === 'syncing' ? 'animate-spin' : ''}`} />
                 <span className="text-sm">
                   {syncStatus[type] === 'syncing' ? 'Syncing...' : `Sync ${selectedYears[type]}`}
+                </span>
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t pt-4">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Month-Based Sync:</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {monthBasedButtons.map(({ type, label, icon: Icon, color, description }) => (
+            <div key={type} className="flex flex-col gap-2 p-3 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Icon className="w-5 h-5 text-gray-600" />
+                  <span className="font-medium text-gray-800">{label}</span>
+                </div>
+                <div className="flex gap-2">
+                  <div className="relative">
+                    <select
+                      value={selectedYears[type] || currentYear}
+                      onChange={(e) => handleYearChange(type, parseInt(e.target.value))}
+                      className="appearance-none bg-white border border-gray-300 rounded-md px-3 py-1.5 pr-8 text-sm font-medium text-gray-700 cursor-pointer hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      {availableYears.map(year => (
+                        <option key={year} value={year}>{year}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+                  </div>
+                  <div className="relative">
+                    <select
+                      value={selectedMonths[type] || 0}
+                      onChange={(e) => handleMonthChange(type, parseInt(e.target.value))}
+                      className="appearance-none bg-white border border-gray-300 rounded-md px-3 py-1.5 pr-8 text-sm font-medium text-gray-700 cursor-pointer hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      {months.map(m => (
+                        <option key={m.value} value={m.value}>{m.label}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs text-gray-500">{description}</p>
+              <button
+                onClick={() => handleSync(type, selectedYears[type], selectedMonths[type])}
+                disabled={syncStatus[type] === 'syncing'}
+                className={`${getButtonClass(type, color)} w-full justify-center`}
+              >
+                <RefreshCw className={`w-4 h-4 ${syncStatus[type] === 'syncing' ? 'animate-spin' : ''}`} />
+                <span className="text-sm">
+                  {syncStatus[type] === 'syncing' ? 'Syncing...' : `Sync ${selectedYears[type]}${selectedMonths[type] ? `-${String(selectedMonths[type]).padStart(2, '0')}` : ''}`}
                 </span>
               </button>
             </div>
