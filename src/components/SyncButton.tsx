@@ -41,6 +41,9 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     appointments: currentYear,
   });
   const [selectedMonths, setSelectedMonths] = useState<{ [key: string]: number }>({
+    appointments: currentMonth,
+    sales: currentMonth,
+    transactions: currentMonth,
     client_services: currentMonth,
   });
 
@@ -131,14 +134,11 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     { type: 'clients' as SyncType, label: 'Clients', icon: Users, color: 'orange' },
   ];
 
-  const yearBasedButtons = [
-    { type: 'appointments' as SyncType, label: 'Appointments', icon: Calendar, color: 'red', description: 'All appointments for the year' },
+  const monthBasedButtons = [
+    { type: 'appointments' as SyncType, label: 'Appointments', icon: Calendar, color: 'red', description: 'Appointments for period' },
     { type: 'sales' as SyncType, label: 'Sales', icon: DollarSign, color: 'emerald', description: 'Sales + Payments + Items' },
     { type: 'transactions' as SyncType, label: 'Transactions', icon: CreditCard, color: 'violet', description: 'Payment transactions detail' },
-  ];
-
-  const monthBasedButtons = [
-    { type: 'client_services' as SyncType, label: 'Client Services', icon: FileText, color: 'blue', description: 'Purchased packages/memberships (by month)' },
+    { type: 'client_services' as SyncType, label: 'Client Services', icon: FileText, color: 'blue', description: 'Purchased packages/memberships' },
   ];
 
   const getButtonClass = (type: SyncType, color: string) => {
@@ -196,46 +196,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
       </div>
 
       <div className="border-t pt-4">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Year-Based Sync:</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {yearBasedButtons.map(({ type, label, icon: Icon, color, description }) => (
-            <div key={type} className="flex flex-col gap-2 p-3 bg-gray-50 rounded-lg border border-gray-200">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Icon className="w-5 h-5 text-gray-600" />
-                  <span className="font-medium text-gray-800">{label}</span>
-                </div>
-                <div className="relative">
-                  <select
-                    value={selectedYears[type] || currentYear}
-                    onChange={(e) => handleYearChange(type, parseInt(e.target.value))}
-                    className="appearance-none bg-white border border-gray-300 rounded-md px-3 py-1.5 pr-8 text-sm font-medium text-gray-700 cursor-pointer hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    {availableYears.map(year => (
-                      <option key={year} value={year}>{year}</option>
-                    ))}
-                  </select>
-                  <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
-                </div>
-              </div>
-              <p className="text-xs text-gray-500">{description}</p>
-              <button
-                onClick={() => handleSync(type, selectedYears[type])}
-                disabled={syncStatus[type] === 'syncing'}
-                className={`${getButtonClass(type, color)} w-full justify-center`}
-              >
-                <RefreshCw className={`w-4 h-4 ${syncStatus[type] === 'syncing' ? 'animate-spin' : ''}`} />
-                <span className="text-sm">
-                  {syncStatus[type] === 'syncing' ? 'Syncing...' : `Sync ${selectedYears[type]}`}
-                </span>
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="border-t pt-4">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Month-Based Sync:</h3>
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Period-Based Sync (Year-Month):</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {monthBasedButtons.map(({ type, label, icon: Icon, color, description }) => (
             <div key={type} className="flex flex-col gap-2 p-3 bg-gray-50 rounded-lg border border-gray-200">

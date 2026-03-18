@@ -717,14 +717,24 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
   return totalSynced;
 }
 
-async function syncAppointments(supabase: any, config: MindbodyConfig, userToken: string, year?: number) {
+async function syncAppointments(supabase: any, config: MindbodyConfig, userToken: string, year?: number, month?: number) {
   const targetYear = year || new Date().getFullYear();
-  console.log(`=== APPOINTMENTS SYNC START for year ${targetYear} ===`);
+  const hasMonthFilter = month && month > 0;
+  const periodLabel = hasMonthFilter ? `${targetYear}-${String(month).padStart(2, '0')}` : String(targetYear);
+  console.log(`=== APPOINTMENTS SYNC START for period ${periodLabel} ===`);
 
-  const startDate = new Date(targetYear, 0, 1);
-  const endDate = targetYear === new Date().getFullYear()
-    ? new Date(new Date().getFullYear(), new Date().getMonth() + 3, 0)
-    : new Date(targetYear, 11, 31);
+  let startDate: Date;
+  let endDate: Date;
+
+  if (hasMonthFilter) {
+    startDate = new Date(targetYear, month! - 1, 1);
+    endDate = new Date(targetYear, month!, 0);
+  } else {
+    startDate = new Date(targetYear, 0, 1);
+    endDate = targetYear === new Date().getFullYear()
+      ? new Date(new Date().getFullYear(), new Date().getMonth() + 3, 0)
+      : new Date(targetYear, 11, 31);
+  }
 
   const startDateStr = startDate.toISOString().split('T')[0];
   const endDateStr = endDate.toISOString().split('T')[0];
@@ -1021,14 +1031,24 @@ async function syncClients(supabase: any, config: MindbodyConfig, userToken?: st
   return totalSynced;
 }
 
-async function syncSales(supabase: any, config: MindbodyConfig, userToken: string, year?: number) {
+async function syncSales(supabase: any, config: MindbodyConfig, userToken: string, year?: number, month?: number) {
   const targetYear = year || new Date().getFullYear();
-  console.log(`=== SALES SYNC START for year ${targetYear} ===`);
+  const hasMonthFilter = month && month > 0;
+  const periodLabel = hasMonthFilter ? `${targetYear}-${String(month).padStart(2, '0')}` : String(targetYear);
+  console.log(`=== SALES SYNC START for period ${periodLabel} ===`);
 
-  const startDate = new Date(targetYear, 0, 1);
-  const endDate = targetYear === new Date().getFullYear()
-    ? new Date()
-    : new Date(targetYear, 11, 31, 23, 59, 59);
+  let startDate: Date;
+  let endDate: Date;
+
+  if (hasMonthFilter) {
+    startDate = new Date(targetYear, month! - 1, 1);
+    endDate = new Date(targetYear, month!, 0, 23, 59, 59);
+  } else {
+    startDate = new Date(targetYear, 0, 1);
+    endDate = targetYear === new Date().getFullYear()
+      ? new Date()
+      : new Date(targetYear, 11, 31, 23, 59, 59);
+  }
 
   let offset = 0;
   const limit = 200;
@@ -1385,14 +1405,24 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
 }
 
 
-async function syncTransactions(supabase: any, config: MindbodyConfig, userToken: string, year?: number) {
+async function syncTransactions(supabase: any, config: MindbodyConfig, userToken: string, year?: number, month?: number) {
   const targetYear = year || new Date().getFullYear();
-  console.log(`=== TRANSACTIONS SYNC START for year ${targetYear} ===`);
+  const hasMonthFilter = month && month > 0;
+  const periodLabel = hasMonthFilter ? `${targetYear}-${String(month).padStart(2, '0')}` : String(targetYear);
+  console.log(`=== TRANSACTIONS SYNC START for period ${periodLabel} ===`);
 
-  const startDate = new Date(targetYear, 0, 1);
-  const endDate = targetYear === new Date().getFullYear()
-    ? new Date()
-    : new Date(targetYear, 11, 31, 23, 59, 59);
+  let startDate: Date;
+  let endDate: Date;
+
+  if (hasMonthFilter) {
+    startDate = new Date(targetYear, month! - 1, 1);
+    endDate = new Date(targetYear, month!, 0, 23, 59, 59);
+  } else {
+    startDate = new Date(targetYear, 0, 1);
+    endDate = targetYear === new Date().getFullYear()
+      ? new Date()
+      : new Date(targetYear, 11, 31, 23, 59, 59);
+  }
 
   let offset = 0;
   const limit = 200;
@@ -2045,7 +2075,7 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "appointments" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Appointments ---');
-          results.appointments = await syncAppointments(supabase, config, userToken, targetYear);
+          results.appointments = await syncAppointments(supabase, config, userToken, targetYear, targetMonth);
           console.log(`✅ Appointments synced: ${results.appointments}`);
         } catch (e) {
           console.error('❌ Appointments sync failed:', e);
@@ -2056,7 +2086,7 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "sales" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Sales ---');
-          results.sales = await syncSales(supabase, config, userToken, targetYear);
+          results.sales = await syncSales(supabase, config, userToken, targetYear, targetMonth);
           console.log(`✅ Sales synced: ${results.sales}`);
         } catch (e) {
           console.error('❌ Sales sync failed:', e);
@@ -2079,7 +2109,7 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "transactions")) {
         try {
           console.log('\n--- Syncing Transactions ---');
-          results.transactions = await syncTransactions(supabase, config, userToken, targetYear);
+          results.transactions = await syncTransactions(supabase, config, userToken, targetYear, targetMonth);
           console.log(`✅ Transactions synced: ${results.transactions}`);
         } catch (e) {
           console.error('❌ Transactions sync failed:', e);
