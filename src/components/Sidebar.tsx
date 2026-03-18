@@ -11,7 +11,6 @@ export type MenuSection =
   | 'staff-report'
   | 'service-categories'
   | 'services'
-  | 'staff-services'
   | 'pricing-options'
   | 'clients'
   | 'clients-report'
@@ -47,7 +46,6 @@ const tableNameMap: Record<MenuSection, string | null> = {
   'staff-report': null,
   'service-categories': 'service_categories',
   'services': 'session_types',
-  'staff-services': 'staff_session_types',
   'pricing-options': 'pricing_options',
   'clients': 'clients',
   'clients-report': null,
@@ -73,7 +71,6 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
     { id: 'staff-report', label: 'Staff Report', icon: ClipboardList, color: 'sky' },
     { id: 'service-categories', label: 'Service Categories', icon: Grid3x3, color: 'cyan' },
     { id: 'services', label: 'Services', icon: Tag, color: 'green' },
-    { id: 'staff-services', label: 'Staff - Services', icon: Grid3x3, color: 'teal' },
     { id: 'pricing-options', label: 'Pricing Options', icon: Package, color: 'lime' },
     { id: 'clients', label: 'Clients', icon: Users, color: 'orange' },
     { id: 'clients-report', label: 'Clients Report', icon: ClipboardList, color: 'orange' },

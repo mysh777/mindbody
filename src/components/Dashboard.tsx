@@ -10,6 +10,7 @@ import { SalesReportPage } from './SalesReportPage';
 import { SalesByPricingOption } from './SalesByPricingOption';
 import { ClientExpandableView } from './ClientExpandableView';
 import { StaffExpandableView } from './StaffExpandableView';
+import { AppointmentsView } from './AppointmentsView';
 
 interface Stats {
   clients: number;
@@ -28,7 +29,6 @@ const tableNameMap: Record<MenuSection, { tableName: string; displayName: string
   'staff-report': null,
   'service-categories': { tableName: 'service_categories', displayName: 'Service Categories' },
   'services': { tableName: 'session_types', displayName: 'Session Types' },
-  'staff-services': { tableName: 'staff_session_types', displayName: 'Staff - Session Types' },
   'pricing-options': { tableName: 'pricing_options', displayName: 'Pricing Options' },
   'clients': { tableName: 'clients', displayName: 'Clients' },
   'clients-report': null,
@@ -58,7 +58,6 @@ const tableSectionMap: Record<string, MenuSection> = {
   'transactions': 'transactions',
   'client_services': 'client-services',
   'retail_products': 'retail-products',
-  'staff_session_types': 'staff-services',
 };
 
 export function Dashboard() {
@@ -163,6 +162,10 @@ export function Dashboard() {
 
     if (activeSection === 'sales-by-pricing') {
       return <SalesByPricingOption onNavigate={handleNavigate} />;
+    }
+
+    if (activeSection === 'appointments') {
+      return <AppointmentsView />;
     }
 
     const tableConfig = tableNameMap[activeSection];
