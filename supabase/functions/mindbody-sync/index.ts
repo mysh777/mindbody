@@ -1218,7 +1218,7 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
 }
 
 async function syncClientServices(supabase: any, config: MindbodyConfig, userToken: string, year?: number) {
-  console.log(`=== CLIENT SERVICES SYNC START ===`);
+  console.log(`=== CLIENT SERVICES SYNC START (OPTIMIZED) ===`);
 
   let allClients: any[] = [];
   let offset = 0;
@@ -1257,14 +1257,21 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
   let totalSynced = 0;
   let totalLinked = 0;
   let processedClients = 0;
-  const BATCH_SIZE = 10;
+  const BATCH_SIZE = 50;
+  const MAX_RETRIES = 2;
+  const TIMEOUT_MS = 8000;
 
-  async function fetchClientServices(clientId: string) {
+  async function fetchClientServicesWithTimeout(clientId: string, retryCount = 0): Promise<{ clientId: string; services: any[] }> {
     const url = `${MINDBODY_BASE_URL}/client/clientservices?clientId=${clientId}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
     try {
       const response = await fetch(url, {
         headers: getUserHeaders(config, userToken),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         return { clientId, services: [] };
@@ -1272,15 +1279,20 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
 
       const data = await response.json();
       return { clientId, services: data.ClientServices || [] };
-    } catch (err) {
-      console.error(`[CLIENT_SERVICES] Exception for client ${clientId}:`, err);
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError' && retryCount < MAX_RETRIES) {
+        return fetchClientServicesWithTimeout(clientId, retryCount + 1);
+      }
       return { clientId, services: [] };
     }
   }
 
+  const startTime = Date.now();
+
   for (let i = 0; i < uniqueClientIds.length; i += BATCH_SIZE) {
     const batch = uniqueClientIds.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(batch.map(fetchClientServices));
+    const results = await Promise.all(batch.map(id => fetchClientServicesWithTimeout(id)));
 
     const syncedAt = new Date().toISOString();
     const allServicesData: any[] = [];
@@ -1332,12 +1344,15 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
       }
     }
 
-    if (processedClients % 50 === 0 || i + BATCH_SIZE >= uniqueClientIds.length) {
-      console.log(`[CLIENT_SERVICES] Progress: ${processedClients}/${uniqueClientIds.length} clients, ${totalSynced} services, ${totalLinked} linked`);
+    if (processedClients % 100 === 0 || i + BATCH_SIZE >= uniqueClientIds.length) {
+      const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+      const rate = (processedClients / parseFloat(elapsedSec)).toFixed(1);
+      console.log(`[CLIENT_SERVICES] Progress: ${processedClients}/${uniqueClientIds.length} clients (${rate}/sec), ${totalSynced} services, ${totalLinked} linked`);
     }
   }
 
-  console.log(`=== CLIENT_SERVICES SYNC COMPLETE: ${totalSynced} records from ${processedClients} clients, ${totalLinked} linked to pricing_options ===`);
+  const totalTimeSec = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log(`=== CLIENT_SERVICES SYNC COMPLETE: ${totalSynced} records from ${processedClients} clients in ${totalTimeSec}s, ${totalLinked} linked to pricing_options ===`);
   return totalSynced;
 }
 
