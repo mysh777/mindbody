@@ -11,6 +11,7 @@ import { SalesByPricingOption } from './SalesByPricingOption';
 import { ClientExpandableView } from './ClientExpandableView';
 import { StaffExpandableView } from './StaffExpandableView';
 import { AppointmentsView } from './AppointmentsView';
+import { ClientServicesView } from './ClientServicesView';
 
 interface Stats {
   clients: number;
@@ -166,6 +167,10 @@ export function Dashboard() {
 
     if (activeSection === 'appointments') {
       return <AppointmentsView />;
+    }
+
+    if (activeSection === 'client-services') {
+      return <ClientServicesView />;
     }
 
     const tableConfig = tableNameMap[activeSection];
