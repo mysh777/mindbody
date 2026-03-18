@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { useReportFilters } from '../lib/reportFiltersContext';
 import { ChevronDown, ChevronRight, Package, Calendar, User, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 
 interface ClientService {
@@ -252,11 +253,20 @@ function ServiceCard({ service, appointments, isActive }: ServiceCardProps) {
 }
 
 export function ClientExpandableView() {
+  const { filters, setClientReportFilters } = useReportFilters();
+  const { search, expandedId } = filters.clientReport;
+
   const [clients, setClients] = useState<ClientWithServices[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [loadingDetails, setLoadingDetails] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
+
+  const handleSearchChange = (value: string) => {
+    setClientReportFilters({ search: value });
+  };
+
+  const handleExpandedIdChange = (id: string | null) => {
+    setClientReportFilters({ expandedId: id });
+  };
   const [filterMode, setFilterMode] = useState<'all' | 'with_packages' | 'active_only'>('with_packages');
 
   const loadClients = useCallback(async () => {
@@ -385,7 +395,7 @@ export function ClientExpandableView() {
                 type="text"
                 placeholder="Search clients by name or email..."
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
@@ -419,7 +429,7 @@ export function ClientExpandableView() {
                 key={client.id}
                 client={client}
                 expanded={expandedId === client.id}
-                onToggle={() => setExpandedId(expandedId === client.id ? null : client.id)}
+                onToggle={() => handleExpandedIdChange(expandedId === client.id ? null : client.id)}
                 onLoadDetails={loadClientDetails}
                 loading={loadingDetails === client.id}
               />

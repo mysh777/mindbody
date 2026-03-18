@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { useReportFilters } from '../lib/reportFiltersContext';
 import { ChevronDown, ChevronRight, UserCog, Calendar, Package, Users, Filter, Building2, DollarSign, Download } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 
@@ -345,20 +346,17 @@ function getMonthsForTimeline(): { label: string; start: string; end: string }[]
 }
 
 export function StaffExpandableView() {
+  const { filters, setStaffReportFilters } = useReportFilters();
+  const { filterPreset, dateRange, selectedMonth, search, selectedLocation, expandedLocations, expandedId } = filters.staffReport;
+
   const [staff, setStaff] = useState<StaffWithStats[]>([]);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [staffLocations, setStaffLocations] = useState<Record<string, string>>({});
   const [pricingOptions, setPricingOptions] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [loadingDetails, setLoadingDetails] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-  const [selectedLocation, setSelectedLocation] = useState<string>('all');
-  const [expandedLocations, setExpandedLocations] = useState<Set<string>>(new Set(['all']));
 
-  const [filterPreset, setFilterPreset] = useState<FilterPreset>('this_month');
-  const [dateRange, setDateRange] = useState(getFilterPresetDates('this_month'));
-  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  const expandedLocationsSet = new Set(expandedLocations);
 
   const months = getMonthsForTimeline();
 
@@ -674,29 +672,49 @@ export function StaffExpandableView() {
   }, [loadStaff]);
 
   const handlePresetChange = (preset: FilterPreset) => {
-    setFilterPreset(preset);
-    setSelectedMonth(null);
     if (preset !== 'custom') {
-      setDateRange(getFilterPresetDates(preset));
+      setStaffReportFilters({
+        filterPreset: preset,
+        selectedMonth: null,
+        dateRange: getFilterPresetDates(preset),
+        expandedId: null,
+      });
       setStaff(prev => prev.map(s => ({ ...s, services_provided: [] })));
-      setExpandedId(null);
+    } else {
+      setStaffReportFilters({ filterPreset: preset, selectedMonth: null });
     }
   };
 
   const handleMonthSelect = (month: { start: string; end: string; label: string }) => {
-    setSelectedMonth(month.label);
-    setFilterPreset('custom');
-    setDateRange({ start: month.start, end: month.end });
+    setStaffReportFilters({
+      selectedMonth: month.label,
+      filterPreset: 'custom',
+      dateRange: { start: month.start, end: month.end },
+      expandedId: null,
+    });
     setStaff(prev => prev.map(s => ({ ...s, services_provided: [] })));
-    setExpandedId(null);
   };
 
   const handleDateChange = (field: 'start' | 'end', value: string) => {
-    setFilterPreset('custom');
-    setSelectedMonth(null);
-    setDateRange(prev => ({ ...prev, [field]: value }));
+    setStaffReportFilters({
+      filterPreset: 'custom',
+      selectedMonth: null,
+      dateRange: { ...dateRange, [field]: value },
+      expandedId: null,
+    });
     setStaff(prev => prev.map(s => ({ ...s, services_provided: [] })));
-    setExpandedId(null);
+  };
+
+  const handleSearchChange = (value: string) => {
+    setStaffReportFilters({ search: value });
+  };
+
+  const handleLocationChange = (value: string) => {
+    setStaffReportFilters({ selectedLocation: value });
+  };
+
+  const handleExpandedIdChange = (id: string | null) => {
+    setStaffReportFilters({ expandedId: id });
   };
 
   const filteredStaff = staff.filter(s => {
@@ -739,15 +757,13 @@ export function StaffExpandableView() {
   })();
 
   const toggleLocationExpand = (locId: string) => {
-    setExpandedLocations(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(locId)) {
-        newSet.delete(locId);
-      } else {
-        newSet.add(locId);
-      }
-      return newSet;
-    });
+    const newSet = new Set(expandedLocationsSet);
+    if (newSet.has(locId)) {
+      newSet.delete(locId);
+    } else {
+      newSet.add(locId);
+    }
+    setStaffReportFilters({ expandedLocations: Array.from(newSet) });
   };
 
   const totals = {
@@ -934,14 +950,14 @@ export function StaffExpandableView() {
                 type="text"
                 placeholder="Search staff by name or email..."
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
 
             <select
               value={selectedLocation}
-              onChange={(e) => setSelectedLocation(e.target.value)}
+              onChange={(e) => handleLocationChange(e.target.value)}
               className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
             >
               <option value="all">All Locations</option>
@@ -998,7 +1014,7 @@ export function StaffExpandableView() {
                   onClick={() => toggleLocationExpand(group.location_id)}
                 >
                   <div className="flex items-center gap-3">
-                    {expandedLocations.has(group.location_id) ? (
+                    {expandedLocationsSet.has(group.location_id) ? (
                       <ChevronDown className="w-5 h-5 text-slate-500" />
                     ) : (
                       <ChevronRight className="w-5 h-5 text-slate-500" />
@@ -1029,14 +1045,14 @@ export function StaffExpandableView() {
                   </div>
                 </div>
 
-                {expandedLocations.has(group.location_id) && (
+                {expandedLocationsSet.has(group.location_id) && (
                   <div className="p-4">
                     {group.staff.map(s => (
                       <StaffRow
                         key={s.id}
                         staff={s}
                         expanded={expandedId === s.id}
-                        onToggle={() => setExpandedId(expandedId === s.id ? null : s.id)}
+                        onToggle={() => handleExpandedIdChange(expandedId === s.id ? null : s.id)}
                         onLoadDetails={loadStaffDetails}
                         loading={loadingDetails === s.id}
                         dateRange={dateRange}

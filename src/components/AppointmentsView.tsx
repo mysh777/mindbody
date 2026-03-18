@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { useReportFilters } from '../lib/reportFiltersContext';
 import { Calendar, Filter, Building2, UserCog, Clock, Tag, Users, ChevronLeft, ChevronRight, Download } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 
@@ -91,23 +92,27 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export function AppointmentsView() {
+  const { filters, setAppointmentsFilters } = useReportFilters();
+  const {
+    filterPreset,
+    dateRange,
+    selectedMonth,
+    selectedLocation,
+    selectedStaff,
+    selectedStatus,
+    currentPage,
+  } = filters.appointments;
+
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
-  const [page, setPage] = useState(0);
   const [pageSize] = useState(50);
 
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [staffList, setStaffList] = useState<{ id: string; first_name: string; last_name: string }[]>([]);
   const [statuses, setStatuses] = useState<string[]>([]);
 
-  const [selectedLocation, setSelectedLocation] = useState<string>('all');
-  const [selectedStaff, setSelectedStaff] = useState<string>('all');
-  const [selectedStatus, setSelectedStatus] = useState<string>('all');
-
-  const [filterPreset, setFilterPreset] = useState<FilterPreset>('this_month');
-  const [dateRange, setDateRange] = useState(getFilterPresetDates('this_month'));
-  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  const page = currentPage - 1;
 
   const months = getMonthsForTimeline();
 
@@ -171,22 +176,42 @@ export function AppointmentsView() {
     loadAppointments();
   }, [loadAppointments]);
 
-  useEffect(() => {
-    setPage(0);
-  }, [dateRange, selectedLocation, selectedStaff, selectedStatus]);
-
   const handlePresetChange = (preset: FilterPreset) => {
-    setFilterPreset(preset);
-    setSelectedMonth(null);
     if (preset !== 'custom') {
-      setDateRange(getFilterPresetDates(preset));
+      setAppointmentsFilters({
+        filterPreset: preset,
+        selectedMonth: null,
+        dateRange: getFilterPresetDates(preset),
+        currentPage: 1,
+      });
+    } else {
+      setAppointmentsFilters({ filterPreset: preset, selectedMonth: null });
     }
   };
 
   const handleMonthSelect = (month: { start: string; end: string }) => {
-    setFilterPreset('custom');
-    setSelectedMonth(month.start);
-    setDateRange(month);
+    setAppointmentsFilters({
+      filterPreset: 'custom',
+      selectedMonth: month.start,
+      dateRange: month,
+      currentPage: 1,
+    });
+  };
+
+  const handleLocationChange = (value: string) => {
+    setAppointmentsFilters({ selectedLocation: value, currentPage: 1 });
+  };
+
+  const handleStaffChange = (value: string) => {
+    setAppointmentsFilters({ selectedStaff: value, currentPage: 1 });
+  };
+
+  const handleStatusChange = (value: string) => {
+    setAppointmentsFilters({ selectedStatus: value, currentPage: 1 });
+  };
+
+  const handlePageChange = (newPage: number) => {
+    setAppointmentsFilters({ currentPage: newPage });
   };
 
   const handleExport = async () => {
@@ -333,7 +358,7 @@ export function AppointmentsView() {
               </label>
               <select
                 value={selectedLocation}
-                onChange={(e) => setSelectedLocation(e.target.value)}
+                onChange={(e) => handleLocationChange(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
               >
                 <option value="all">All Locations</option>
@@ -349,7 +374,7 @@ export function AppointmentsView() {
               </label>
               <select
                 value={selectedStaff}
-                onChange={(e) => setSelectedStaff(e.target.value)}
+                onChange={(e) => handleStaffChange(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
               >
                 <option value="all">All Staff</option>
@@ -365,7 +390,7 @@ export function AppointmentsView() {
               </label>
               <select
                 value={selectedStatus}
-                onChange={(e) => setSelectedStatus(e.target.value)}
+                onChange={(e) => handleStatusChange(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
               >
                 <option value="all">All Statuses</option>
@@ -471,18 +496,18 @@ export function AppointmentsView() {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setPage(p => Math.max(0, p - 1))}
-                    disabled={page === 0}
+                    onClick={() => handlePageChange(Math.max(1, currentPage - 1))}
+                    disabled={currentPage === 1}
                     className="p-2 rounded-lg border border-slate-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-100 transition-colors"
                   >
                     <ChevronLeft className="w-4 h-4" />
                   </button>
                   <span className="text-sm text-slate-600">
-                    Page {page + 1} of {totalPages}
+                    Page {currentPage} of {totalPages}
                   </span>
                   <button
-                    onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-                    disabled={page >= totalPages - 1}
+                    onClick={() => handlePageChange(Math.min(totalPages, currentPage + 1))}
+                    disabled={currentPage >= totalPages}
                     className="p-2 rounded-lg border border-slate-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-100 transition-colors"
                   >
                     <ChevronRight className="w-4 h-4" />
