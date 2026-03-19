@@ -4,11 +4,11 @@ import { Sidebar, MenuSection } from './Sidebar';
 import { ApiIntegration } from './ApiIntegration';
 import { PivotTable } from './PivotTable';
 import { TableView } from './TableView';
-import { ServicesGroupedView } from './ServicesGroupedView';
+import { ReferenceTables } from './ReferenceTables';
 import { SalesExpandableView } from './SalesExpandableView';
 import { SalesReportPage } from './SalesReportPage';
 import { SalesByPricingOption } from './SalesByPricingOption';
-import { ClientExpandableView } from './ClientExpandableView';
+import { ClientsReport } from './ClientsReport';
 import { StaffExpandableView } from './StaffExpandableView';
 import { AppointmentsView } from './AppointmentsView';
 import { ClientServicesView } from './ClientServicesView';
@@ -23,42 +23,34 @@ interface Stats {
 
 const tableNameMap: Record<MenuSection, { tableName: string; displayName: string } | null> = {
   'api-integration': null,
+  'references': null,
   'pivot-reports': null,
-  'sites': { tableName: 'sites', displayName: 'Sites' },
-  'locations': { tableName: 'locations', displayName: 'Locations' },
-  'staff': { tableName: 'staff', displayName: 'Staff' },
-  'staff-report': null,
-  'service-categories': { tableName: 'service_categories', displayName: 'Service Categories' },
-  'services': { tableName: 'session_types', displayName: 'Session Types' },
-  'pricing-options': { tableName: 'pricing_options', displayName: 'Pricing Options' },
-  'clients': { tableName: 'clients', displayName: 'Clients' },
   'clients-report': null,
+  'staff-report': null,
   'appointments': { tableName: 'appointments', displayName: 'Appointments' },
   'sales': { tableName: 'sales', displayName: 'Sales' },
   'sales-report': null,
   'sales-by-pricing': null,
+  'client-services': { tableName: 'client_services', displayName: 'Client Services' },
   'transactions': { tableName: 'transactions', displayName: 'Transactions' },
   'sale-items': { tableName: 'sale_items', displayName: 'Sale Items' },
-  'client-services': { tableName: 'client_services', displayName: 'Client Services' },
-  'retail-products': { tableName: 'retail_products', displayName: 'Retail Products' },
 };
 
 const tableSectionMap: Record<string, MenuSection> = {
-  'clients': 'clients',
-  'staff': 'staff',
-  'locations': 'locations',
+  'clients': 'clients-report',
+  'staff': 'references',
+  'locations': 'references',
   'sales': 'sales',
   'appointments': 'appointments',
-  'session_types': 'services',
-  'service_categories': 'service-categories',
-  'service_subcategories': 'service-categories',
-  'pricing_options': 'pricing-options',
-  'products': 'retail-products',
-  'sites': 'sites',
+  'session_types': 'references',
+  'service_categories': 'references',
+  'pricing_options': 'references',
+  'products': 'references',
+  'sites': 'references',
   'sale_items': 'sale-items',
   'transactions': 'transactions',
   'client_services': 'client-services',
-  'retail_products': 'retail-products',
+  'retail_products': 'references',
 };
 
 export function Dashboard() {
@@ -127,6 +119,10 @@ export function Dashboard() {
       return <ApiIntegration onSyncComplete={handleSyncComplete} />;
     }
 
+    if (activeSection === 'references') {
+      return <ReferenceTables onNavigate={handleNavigate} />;
+    }
+
     if (activeSection === 'pivot-reports') {
       return (
         <div className="w-full bg-slate-50 min-h-full">
@@ -141,20 +137,16 @@ export function Dashboard() {
       );
     }
 
-    if (activeSection === 'services') {
-      return <ServicesGroupedView />;
-    }
-
-    if (activeSection === 'sales') {
-      return <SalesExpandableView onNavigate={handleNavigate} />;
-    }
-
     if (activeSection === 'clients-report') {
-      return <ClientExpandableView />;
+      return <ClientsReport />;
     }
 
     if (activeSection === 'staff-report') {
       return <StaffExpandableView />;
+    }
+
+    if (activeSection === 'sales') {
+      return <SalesExpandableView onNavigate={handleNavigate} />;
     }
 
     if (activeSection === 'sales-report') {

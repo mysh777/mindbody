@@ -1,27 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Database, Settings, BarChart3, Users, Calendar, DollarSign, MapPin, UserCog, Grid3x3, Tag, Package, ShoppingBag, FileText, CreditCard, Wallet, ClipboardList, PieChart } from 'lucide-react';
+import { Database, Settings, BarChart3, Users, Calendar, DollarSign, FileText, ClipboardList, PieChart, Package, ShoppingBag } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export type MenuSection =
   | 'api-integration'
+  | 'references'
   | 'pivot-reports'
-  | 'sites'
-  | 'locations'
-  | 'staff'
-  | 'staff-report'
-  | 'service-categories'
-  | 'services'
-  | 'pricing-options'
-  | 'clients'
   | 'clients-report'
+  | 'staff-report'
   | 'appointments'
   | 'sales'
   | 'sales-report'
   | 'sales-by-pricing'
-  | 'transactions'
-  | 'sale-items'
   | 'client-services'
-  | 'retail-products';
+  | 'transactions'
+  | 'sale-items';
 
 interface SidebarProps {
   activeSection: MenuSection;
@@ -33,55 +26,41 @@ interface MenuItem {
   id: MenuSection;
   label: string;
   icon: any;
-  color: string;
   tableName?: string;
+  dividerBefore?: boolean;
 }
 
 const tableNameMap: Record<MenuSection, string | null> = {
   'api-integration': null,
+  'references': null,
   'pivot-reports': null,
-  'sites': 'sites',
-  'locations': 'locations',
-  'staff': 'staff',
-  'staff-report': null,
-  'service-categories': 'service_categories',
-  'services': 'session_types',
-  'pricing-options': 'pricing_options',
-  'clients': 'clients',
   'clients-report': null,
+  'staff-report': null,
   'appointments': 'appointments',
   'sales': 'sales',
   'sales-report': null,
   'sales-by-pricing': null,
+  'client-services': 'client_services',
   'transactions': 'transactions',
   'sale-items': 'sale_items',
-  'client-services': 'client_services',
-  'retail-products': 'retail_products',
 };
 
 export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: SidebarProps) {
   const [counts, setCounts] = useState<Record<string, number>>({});
 
   const menuItems: MenuItem[] = [
-    { id: 'api-integration', label: 'API Integration', icon: Settings, color: 'slate' },
-    { id: 'pivot-reports', label: 'Pivot Reports', icon: BarChart3, color: 'blue' },
-    { id: 'sites', label: 'Sites', icon: Database, color: 'slate' },
-    { id: 'locations', label: 'Locations', icon: MapPin, color: 'blue' },
-    { id: 'staff', label: 'Staff', icon: UserCog, color: 'sky' },
-    { id: 'staff-report', label: 'Staff Report', icon: ClipboardList, color: 'sky' },
-    { id: 'service-categories', label: 'Service Categories', icon: Grid3x3, color: 'cyan' },
-    { id: 'services', label: 'Services', icon: Tag, color: 'green' },
-    { id: 'pricing-options', label: 'Pricing Options', icon: Package, color: 'lime' },
-    { id: 'clients', label: 'Clients', icon: Users, color: 'orange' },
-    { id: 'clients-report', label: 'Clients Report', icon: ClipboardList, color: 'orange' },
-    { id: 'appointments', label: 'Appointments', icon: Calendar, color: 'red' },
-    { id: 'sales', label: 'Sales', icon: DollarSign, color: 'emerald' },
-    { id: 'sales-report', label: 'Sales Report', icon: PieChart, color: 'emerald' },
-    { id: 'sales-by-pricing', label: 'Sales by Pricing', icon: FileText, color: 'emerald' },
-    { id: 'transactions', label: 'Transactions', icon: CreditCard, color: 'sky' },
-    { id: 'sale-items', label: 'Sale Items', icon: FileText, color: 'amber' },
-    { id: 'client-services', label: 'Client Services', icon: Wallet, color: 'pink' },
-    { id: 'retail-products', label: 'Retail Products', icon: ShoppingBag, color: 'rose' },
+    { id: 'api-integration', label: 'API Integration', icon: Settings },
+    { id: 'references', label: 'Reference Tables', icon: Database, dividerBefore: true },
+    { id: 'pivot-reports', label: 'Pivot Reports', icon: BarChart3, dividerBefore: true },
+    { id: 'clients-report', label: 'Clients Report', icon: Users },
+    { id: 'staff-report', label: 'Staff Report', icon: ClipboardList },
+    { id: 'appointments', label: 'Appointments', icon: Calendar, dividerBefore: true },
+    { id: 'client-services', label: 'Client Services', icon: Package },
+    { id: 'sales', label: 'Sales Journal', icon: DollarSign, dividerBefore: true },
+    { id: 'sales-report', label: 'Sales Report', icon: PieChart },
+    { id: 'sales-by-pricing', label: 'Sales by Pricing', icon: FileText },
+    { id: 'transactions', label: 'Transactions', icon: ShoppingBag },
+    { id: 'sale-items', label: 'Sale Items', icon: FileText },
   ];
 
   const loadCounts = useCallback(async () => {
@@ -141,19 +120,23 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
           const hasCount = count !== undefined && count > 0;
 
           return (
-            <button
-              key={item.id}
-              onClick={() => onSectionChange(item.id)}
-              className={getItemClass(item.id)}
-            >
-              <item.icon className="w-5 h-5 flex-shrink-0" />
-              <span className="text-sm flex-1 text-left">{item.label}</span>
-              {hasCount && (
-                <span className="ml-auto text-xs font-semibold px-2 py-0.5 bg-slate-200 text-slate-700 rounded-full">
-                  {formatCount(count)}
-                </span>
+            <div key={item.id}>
+              {item.dividerBefore && (
+                <div className="my-3 border-t border-slate-200" />
               )}
-            </button>
+              <button
+                onClick={() => onSectionChange(item.id)}
+                className={getItemClass(item.id)}
+              >
+                <item.icon className="w-5 h-5 flex-shrink-0" />
+                <span className="text-sm flex-1 text-left">{item.label}</span>
+                {hasCount && (
+                  <span className="ml-auto text-xs font-semibold px-2 py-0.5 bg-slate-200 text-slate-700 rounded-full">
+                    {formatCount(count)}
+                  </span>
+                )}
+              </button>
+            </div>
           );
         })}
       </nav>

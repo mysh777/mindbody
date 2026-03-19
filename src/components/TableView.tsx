@@ -8,6 +8,7 @@ interface TableViewProps {
   displayName: string;
   onNavigate?: (tableName: string, id: string) => void;
   selectedId?: string | null;
+  hideHeader?: boolean;
 }
 
 interface RelatedDataCache {
@@ -73,7 +74,7 @@ const getRelatedTable = (columnName: string): string | null => {
   return relationshipMap[columnName] || null;
 };
 
-export function TableView({ tableName, displayName, onNavigate, selectedId }: TableViewProps) {
+export function TableView({ tableName, displayName, onNavigate, selectedId, hideHeader }: TableViewProps) {
   const [data, setData] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState<number>(0);
   const [loading, setLoading] = useState(false);
@@ -247,35 +248,37 @@ export function TableView({ tableName, displayName, onNavigate, selectedId }: Ta
   };
 
   return (
-    <div className="w-full bg-slate-50 min-h-full">
-      <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold text-slate-900">{displayName}</h2>
-            <p className="text-slate-600 mt-1">
-              {loading ? 'Loading...' : `Showing ${filteredData.length} of ${data.length} loaded records (${totalCount} total in table)`}
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={loadData}
-              disabled={loading}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 disabled:opacity-50 transition-colors"
-            >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
-            <button
-              onClick={handleExport}
-              disabled={filteredData.length === 0}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
-            >
-              <Download className="w-4 h-4" />
-              Export to Excel
-            </button>
+    <div className={`w-full ${hideHeader ? '' : 'bg-slate-50 min-h-full'}`}>
+      {!hideHeader && (
+        <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-900">{displayName}</h2>
+              <p className="text-slate-600 mt-1">
+                {loading ? 'Loading...' : `Showing ${filteredData.length} of ${data.length} loaded records (${totalCount} total in table)`}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={loadData}
+                disabled={loading}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 disabled:opacity-50 transition-colors"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+              <button
+                onClick={handleExport}
+                disabled={filteredData.length === 0}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                Export to Excel
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div className="p-6 space-y-4">
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
