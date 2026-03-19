@@ -411,73 +411,103 @@ export function ClientsReport() {
                           <div>
                             <h4 className="font-semibold text-slate-700 mb-3 flex items-center gap-2">
                               <Package className="w-4 h-4" />
-                              Pricing Options (Remaining Sessions)
+                              Packages / Remaining
                             </h4>
                             {clientDetails.services.length === 0 ? (
                               <div className="text-sm text-slate-500 py-4 text-center bg-white rounded-lg border border-slate-200">
                                 No active pricing options
                               </div>
                             ) : (
-                              <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                                {clientDetails.services.map(service => (
-                                  <div
-                                    key={service.id}
-                                    className={`p-3 rounded-lg border ${
-                                      service.remaining > 0
-                                        ? 'bg-emerald-50 border-emerald-200'
-                                        : 'bg-slate-100 border-slate-200'
-                                    }`}
-                                  >
-                                    <div className="flex justify-between items-start">
-                                      <div>
-                                        <div className="font-medium text-slate-900">{service.name}</div>
-                                        <div className="text-xs text-slate-500">{service.program_name}</div>
+                              <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
+                                {clientDetails.services.map(service => {
+                                  const used = service.count - service.remaining;
+                                  const pct = service.count > 0 ? (used / service.count) * 100 : 100;
+                                  const isExpired = service.expiration_date && new Date(service.expiration_date) < new Date();
+                                  const isEmpty = service.remaining <= 0;
+
+                                  return (
+                                    <div
+                                      key={service.id}
+                                      className={`p-3 rounded-lg border ${
+                                        isExpired || isEmpty
+                                          ? 'bg-slate-50 border-slate-200'
+                                          : 'bg-white border-emerald-200'
+                                      }`}
+                                    >
+                                      <div className="flex justify-between items-start mb-1.5">
+                                        <div className="flex-1 min-w-0 mr-3">
+                                          <div className="font-medium text-slate-900 text-sm truncate">{service.name}</div>
+                                          {service.program_name && (
+                                            <div className="text-xs text-slate-500 truncate">{service.program_name}</div>
+                                          )}
+                                        </div>
+                                        <div className={`text-sm font-bold whitespace-nowrap ${
+                                          isEmpty ? 'text-slate-400' : 'text-emerald-600'
+                                        }`}>
+                                          {service.remaining} / {service.count}
+                                        </div>
                                       </div>
-                                      <div className={`text-lg font-bold ${
-                                        service.remaining > 0 ? 'text-emerald-600' : 'text-slate-400'
-                                      }`}>
-                                        {service.remaining}/{service.count}
+                                      <div className="w-full bg-slate-200 rounded-full h-2 mb-1.5">
+                                        <div
+                                          className={`h-2 rounded-full transition-all ${
+                                            isEmpty
+                                              ? 'bg-slate-400'
+                                              : pct > 75
+                                                ? 'bg-amber-500'
+                                                : 'bg-emerald-500'
+                                          }`}
+                                          style={{ width: `${Math.min(pct, 100)}%` }}
+                                        />
+                                      </div>
+                                      <div className="flex justify-between text-xs text-slate-500">
+                                        <span>{formatDate(service.active_date)} - {formatDate(service.expiration_date)}</span>
+                                        {isExpired && <span className="text-red-500 font-medium">Expired</span>}
                                       </div>
                                     </div>
-                                    <div className="mt-2 text-xs text-slate-500 flex gap-3">
-                                      <span>Active: {formatDate(service.active_date)}</span>
-                                      <span>Expires: {formatDate(service.expiration_date)}</span>
-                                    </div>
-                                  </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             )}
                           </div>
 
                           <div>
-                            <h4 className="font-semibold text-slate-700 mb-3 flex items-center gap-2">
-                              <ShoppingCart className="w-4 h-4" />
-                              Purchases (Period)
-                            </h4>
+                            <div className="flex items-center justify-between mb-3">
+                              <h4 className="font-semibold text-slate-700 flex items-center gap-2">
+                                <ShoppingCart className="w-4 h-4" />
+                                Sale Items (Period)
+                              </h4>
+                              {clientDetails.purchases.length > 0 && (
+                                <span className="text-sm font-bold text-emerald-600">
+                                  {formatCurrency(clientDetails.purchases.reduce((s, p) => s + p.total_amount, 0))}
+                                </span>
+                              )}
+                            </div>
                             {clientDetails.purchases.length === 0 ? (
                               <div className="text-sm text-slate-500 py-4 text-center bg-white rounded-lg border border-slate-200">
                                 No purchases in selected period
                               </div>
                             ) : (
-                              <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                                {clientDetails.purchases.map(item => (
-                                  <div
-                                    key={item.id}
-                                    className="p-3 rounded-lg border bg-white border-slate-200"
-                                  >
-                                    <div className="flex justify-between items-start">
-                                      <div>
-                                        <div className="font-medium text-slate-900">{item.item_name}</div>
-                                        <div className="text-xs text-slate-500">
-                                          {formatDate(item.sale_datetime)} | Qty: {item.quantity}
-                                        </div>
-                                      </div>
-                                      <div className="text-emerald-600 font-semibold">
-                                        {formatCurrency(item.total_amount)}
-                                      </div>
-                                    </div>
-                                  </div>
-                                ))}
+                              <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+                                <table className="w-full text-sm">
+                                  <thead className="bg-slate-50 border-b border-slate-200">
+                                    <tr>
+                                      <th className="text-left px-3 py-2 font-medium text-slate-600">Date</th>
+                                      <th className="text-left px-3 py-2 font-medium text-slate-600">Item</th>
+                                      <th className="text-right px-3 py-2 font-medium text-slate-600">Qty</th>
+                                      <th className="text-right px-3 py-2 font-medium text-slate-600">Amount</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100 max-h-[340px]">
+                                    {clientDetails.purchases.map(item => (
+                                      <tr key={item.id} className="hover:bg-slate-50">
+                                        <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{formatDate(item.sale_datetime)}</td>
+                                        <td className="px-3 py-2 text-slate-900 font-medium">{item.item_name}</td>
+                                        <td className="px-3 py-2 text-right text-slate-600">{item.quantity}</td>
+                                        <td className="px-3 py-2 text-right font-semibold text-emerald-600 whitespace-nowrap">{formatCurrency(item.total_amount)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
                               </div>
                             )}
                           </div>
