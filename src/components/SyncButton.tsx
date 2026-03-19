@@ -127,7 +127,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     { type: 'staff' as SyncType, label: 'Staff', icon: UserCog, color: 'sky' },
     { type: 'programs' as SyncType, label: 'Service Categories', icon: Grid3x3, color: 'cyan' },
     { type: 'services' as SyncType, label: 'Services', icon: Tag, color: 'green' },
-    { type: 'staff_services' as SyncType, label: 'Staff - Services', icon: Grid3x3, color: 'teal' },
+    { type: 'staff_services' as SyncType, label: 'Staff Services & Pay Rates', icon: Grid3x3, color: 'teal' },
     { type: 'pricing_options' as SyncType, label: 'Pricing Options', icon: Package, color: 'pink' },
     { type: 'build_pricing_links' as SyncType, label: 'Price - Service Links', icon: Link2, color: 'amber' },
     { type: 'retail_products' as SyncType, label: 'Retail Products', icon: ShoppingCart, color: 'slate' },

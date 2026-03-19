@@ -96,7 +96,7 @@ export function StaffPricelist() {
       const sessionTypeIds = [...new Set(appts.map(a => a.session_type_id).filter(Boolean))];
       const serviceIds = [...new Set(appts.map(a => a.client_service_id).filter(Boolean))];
 
-      const [clientsRes, sessionsRes, servicesRes, ratesRes] = await Promise.all([
+      const [clientsRes, sessionsRes, servicesRes, ratesRes, syncedRatesRes] = await Promise.all([
         clientIds.length > 0
           ? supabase.from('clients').select('id, first_name, last_name').in('id', clientIds)
           : { data: [] },
@@ -111,6 +111,10 @@ export function StaffPricelist() {
           .select('session_type_id, rate_per_appointment')
           .eq('staff_id', selectedStaffId)
           .is('effective_to', null),
+        supabase
+          .from('staff_session_types')
+          .select('session_type_id, pay_rate')
+          .eq('staff_id', selectedStaffId),
       ]);
 
       const clientMap = new Map(
@@ -121,7 +125,12 @@ export function StaffPricelist() {
 
       const ratesBySession = new Map<string, number>();
       let defaultRate = 0;
-      for (const r of (ratesRes.data || [])) {
+      for (const r of ((syncedRatesRes as any)?.data || [])) {
+        if (r.session_type_id && Number(r.pay_rate) > 0) {
+          ratesBySession.set(r.session_type_id, Number(r.pay_rate));
+        }
+      }
+      for (const r of ((ratesRes as any)?.data || [])) {
         if (r.session_type_id) {
           ratesBySession.set(r.session_type_id, Number(r.rate_per_appointment) || 0);
         } else {

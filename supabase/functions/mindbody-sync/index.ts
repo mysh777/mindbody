@@ -568,6 +568,9 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig) {
 
     const staffSessionTypes = data.StaffSessionTypes || [];
     console.log(`Found ${staffSessionTypes.length} session types for staff ${staff.mindbody_id}`);
+    if (staffSessionTypes.length > 0) {
+      console.log(`Sample SST keys: ${Object.keys(staffSessionTypes[0]).join(', ')}`);
+    }
 
     for (const sst of staffSessionTypes) {
       const { data: sessionType } = await supabase
@@ -581,13 +584,19 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig) {
         continue;
       }
 
+      const payRate = sst.PayRate ?? sst.PayRateAmount ?? sst.Pay ?? sst.payRate ?? 0;
+      const timeLength = sst.TimeLength ?? sst.DefaultTimeLength ?? sst.StaffTimeLength ?? null;
+
       const relationId = `${staff.id}_${sessionType.id}`;
       const relationData = {
         id: relationId,
         staff_id: staff.id,
         session_type_id: sessionType.id,
         is_active: true,
+        pay_rate: Number(payRate) || 0,
+        time_length: timeLength ? Number(timeLength) : null,
         raw_data: sst,
+        synced_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
 

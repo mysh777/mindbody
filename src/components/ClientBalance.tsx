@@ -219,13 +219,27 @@ export function ClientBalance() {
       const staffIds = [...new Set((clientAppointments || []).map(a => a.staff_id).filter(Boolean))];
       const staffRates = new Map<string, Map<string, number>>();
       if (staffIds.length > 0) {
-        const { data: rates } = await supabase
+        const { data: syncedRates } = await supabase
+          .from('staff_session_types')
+          .select('staff_id, session_type_id, pay_rate')
+          .in('staff_id', staffIds);
+
+        for (const rate of (syncedRates || [])) {
+          if (Number(rate.pay_rate) > 0) {
+            if (!staffRates.has(rate.staff_id)) {
+              staffRates.set(rate.staff_id, new Map());
+            }
+            staffRates.get(rate.staff_id)!.set(rate.session_type_id, Number(rate.pay_rate));
+          }
+        }
+
+        const { data: overrideRates } = await supabase
           .from('staff_appointment_rates')
-          .select('staff_id, session_type_id, rate_per_appointment, rate_type, percentage_rate')
+          .select('staff_id, session_type_id, rate_per_appointment')
           .in('staff_id', staffIds)
           .is('effective_to', null);
 
-        for (const rate of (rates || [])) {
+        for (const rate of (overrideRates || [])) {
           if (!staffRates.has(rate.staff_id)) {
             staffRates.set(rate.staff_id, new Map());
           }
@@ -360,12 +374,20 @@ export function ClientBalance() {
         .select('id, name, category_name');
       const sessionMap = new Map((allSessionTypes || []).map(s => [s.id, s]));
 
-      const { data: allRates } = await supabase
+      const { data: allSyncedRates } = await supabase
+        .from('staff_session_types')
+        .select('staff_id, session_type_id, pay_rate');
+      const ratesMap = new Map<string, number>();
+      for (const r of (allSyncedRates || [])) {
+        if (Number(r.pay_rate) > 0) {
+          ratesMap.set(`${r.staff_id}_${r.session_type_id}`, Number(r.pay_rate));
+        }
+      }
+      const { data: allOverrides } = await supabase
         .from('staff_appointment_rates')
         .select('staff_id, session_type_id, rate_per_appointment')
         .is('effective_to', null);
-      const ratesMap = new Map<string, number>();
-      for (const r of (allRates || [])) {
+      for (const r of (allOverrides || [])) {
         ratesMap.set(`${r.staff_id}_${r.session_type_id || '_default'}`, Number(r.rate_per_appointment) || 0);
       }
 
