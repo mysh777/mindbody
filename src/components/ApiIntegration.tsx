@@ -4,9 +4,10 @@ import { SyncHistory } from './SyncHistory';
 import { ApiLogs } from './ApiLogs';
 import { RawApiData } from './RawApiData';
 import { ActivationCode } from './ActivationCode';
-import { RefreshCw, History, FileText, FileJson, Key } from 'lucide-react';
+import { StaffRatesManager } from './StaffRatesManager';
+import { RefreshCw, History, FileText, FileJson, Key, UserCog } from 'lucide-react';
 
-type ApiTab = 'sync' | 'history' | 'logs' | 'raw' | 'activation';
+type ApiTab = 'sync' | 'history' | 'logs' | 'raw' | 'activation' | 'staff-rates';
 
 interface ApiIntegrationProps {
   onSyncComplete?: () => void;
@@ -21,6 +22,7 @@ export function ApiIntegration({ onSyncComplete }: ApiIntegrationProps) {
     { id: 'logs' as ApiTab, label: 'API Logs', icon: FileText },
     { id: 'raw' as ApiTab, label: 'Raw API Data', icon: FileJson },
     { id: 'activation' as ApiTab, label: 'Site Activation', icon: Key },
+    { id: 'staff-rates' as ApiTab, label: 'Staff Rates', icon: UserCog },
   ];
 
   return (
@@ -79,6 +81,13 @@ export function ApiIntegration({ onSyncComplete }: ApiIntegrationProps) {
         {activeTab === 'logs' && <ApiLogs />}
         {activeTab === 'raw' && <RawApiData />}
         {activeTab === 'activation' && <ActivationCode />}
+        {activeTab === 'staff-rates' && (
+          <div className="max-w-5xl">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+              <StaffRatesManager />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -8,10 +8,11 @@ import { ReferenceTables } from './ReferenceTables';
 import { SalesExpandableView } from './SalesExpandableView';
 import { SalesReportPage } from './SalesReportPage';
 import { SalesByPricingOption } from './SalesByPricingOption';
-import { ClientsReport } from './ClientsReport';
+import { ClientBalance } from './ClientBalance';
 import { StaffExpandableView } from './StaffExpandableView';
 import { AppointmentsView } from './AppointmentsView';
 import { ClientServicesView } from './ClientServicesView';
+import { StaffPricelist } from './StaffPricelist';
 
 interface Stats {
   clients: number;
@@ -27,6 +28,7 @@ const tableNameMap: Record<MenuSection, { tableName: string; displayName: string
   'pivot-reports': null,
   'clients-report': null,
   'staff-report': null,
+  'staff-pricelist': null,
   'appointments': { tableName: 'appointments', displayName: 'Appointments' },
   'sales': { tableName: 'sales', displayName: 'Sales' },
   'sales-report': null,
@@ -138,11 +140,15 @@ export function Dashboard() {
     }
 
     if (activeSection === 'clients-report') {
-      return <ClientsReport />;
+      return <ClientBalance />;
     }
 
     if (activeSection === 'staff-report') {
       return <StaffExpandableView />;
+    }
+
+    if (activeSection === 'staff-pricelist') {
+      return <StaffPricelist />;
     }
 
     if (activeSection === 'sales') {

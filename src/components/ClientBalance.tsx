@@ -1,0 +1,834 @@
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { supabase } from '../lib/supabase';
+import {
+  ChevronDown,
+  ChevronRight,
+  Search,
+  Calendar,
+  ArrowUpDown,
+  Download,
+  User,
+  Package,
+  ShoppingCart,
+  Wallet,
+} from 'lucide-react';
+import { exportToExcel } from '../utils/exportExcel';
+
+interface ClientService {
+  id: string;
+  mindbody_id: string;
+  name: string;
+  count: number;
+  remaining: number;
+  active_date: string;
+  expiration_date: string;
+  program_name: string;
+  paid_price: number;
+}
+
+interface SaleItem {
+  id: string;
+  sale_id: string;
+  item_name: string;
+  quantity: number;
+  total_amount: number;
+  sale_datetime: string;
+}
+
+interface ClientRow {
+  id: string;
+  mindbody_id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  mobile_phone: string;
+  home_phone: string;
+  creation_date: string;
+  total_purchases: number;
+}
+
+interface ClientBalanceSummary {
+  totalPrice: number;
+  spentPrice: number;
+  remainingPrice: number;
+}
+
+type SortField = 'name' | 'total';
+type SortDirection = 'asc' | 'desc';
+
+function computeServiceBalance(service: ClientService) {
+  const used = service.count - service.remaining;
+  const total = service.paid_price;
+  const spent = service.count > 0 ? (used / service.count) * total : total;
+  const remaining = total - spent;
+  return { total, spent, remaining };
+}
+
+function computeClientBalance(services: ClientService[]): ClientBalanceSummary {
+  let totalPrice = 0;
+  let spentPrice = 0;
+  let remainingPrice = 0;
+  for (const s of services) {
+    const b = computeServiceBalance(s);
+    totalPrice += b.total;
+    spentPrice += b.spent;
+    remainingPrice += b.remaining;
+  }
+  return { totalPrice, spentPrice, remainingPrice };
+}
+
+const formatDate = (dateStr: string | null) => {
+  if (!dateStr) return '-';
+  try {
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) return dateStr;
+    const day = date.getDate().toString().padStart(2, '0');
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}.${month}.${year}`;
+  } catch {
+    return dateStr;
+  }
+};
+
+const formatCurrency = (amount: number) => {
+  return new Intl.NumberFormat('de-DE', {
+    style: 'currency',
+    currency: 'EUR',
+  }).format(amount);
+};
+
+export function ClientBalance() {
+  const [clients, setClients] = useState<ClientRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [sortField, setSortField] = useState<SortField>('total');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [expandedClientId, setExpandedClientId] = useState<string | null>(null);
+  const [clientDetails, setClientDetails] = useState<{
+    services: ClientService[];
+    purchases: SaleItem[];
+    staffRates: Map<string, Map<string, number>>;
+    appointments: any[];
+  } | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
+
+  useEffect(() => {
+    const today = new Date();
+    const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+    setStartDate(firstDay.toISOString().split('T')[0]);
+    setEndDate(today.toISOString().split('T')[0]);
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const loadClients = useCallback(async () => {
+    if (!startDate || !endDate) return;
+    setLoading(true);
+    try {
+      const { data: salesData, error: salesError } = await supabase
+        .from('sales')
+        .select('client_id, total')
+        .gte('sale_datetime', `${startDate}T00:00:00`)
+        .lte('sale_datetime', `${endDate}T23:59:59`)
+        .not('client_id', 'is', null);
+
+      if (salesError) throw salesError;
+
+      const clientTotals = new Map<string, number>();
+      (salesData || []).forEach(sale => {
+        const current = clientTotals.get(sale.client_id) || 0;
+        clientTotals.set(sale.client_id, current + (Number(sale.total) || 0));
+      });
+
+      const clientIds = Array.from(clientTotals.keys());
+      if (clientIds.length === 0) {
+        setClients([]);
+        setLoading(false);
+        return;
+      }
+
+      const { data: clientsData, error: clientsError } = await supabase
+        .from('clients')
+        .select('id, mindbody_id, first_name, last_name, email, mobile_phone, home_phone, creation_date')
+        .in('id', clientIds);
+
+      if (clientsError) throw clientsError;
+
+      const clientsWithTotals: ClientRow[] = (clientsData || []).map(client => ({
+        ...client,
+        total_purchases: clientTotals.get(client.id) || 0,
+      }));
+
+      setClients(clientsWithTotals);
+    } catch (error) {
+      console.error('Error loading clients:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [startDate, endDate]);
+
+  useEffect(() => {
+    loadClients();
+  }, [loadClients]);
+
+  const loadClientDetails = useCallback(async (clientId: string) => {
+    setDetailsLoading(true);
+    try {
+      const servicesRes = await supabase
+        .from('client_services')
+        .select('id, mindbody_id, name, count, remaining, active_date, expiration_date, program_name')
+        .eq('client_id', clientId)
+        .order('active_date', { ascending: false });
+
+      const { data: allClientSales } = await supabase
+        .from('sales')
+        .select('id, sale_datetime')
+        .eq('client_id', clientId)
+        .order('sale_datetime', { ascending: false });
+
+      const allSaleIds = (allClientSales || []).map(s => s.id);
+      const saleDateMap = new Map((allClientSales || []).map(s => [s.id, s.sale_datetime]));
+
+      let allItemsData: any[] = [];
+      if (allSaleIds.length > 0) {
+        const batchSize = 200;
+        for (let i = 0; i < allSaleIds.length; i += batchSize) {
+          const batch = allSaleIds.slice(i, i + batchSize);
+          const { data } = await supabase
+            .from('sale_items')
+            .select('id, sale_id, item_name, description, quantity, total_amount, unit_price')
+            .in('sale_id', batch);
+          if (data) allItemsData = allItemsData.concat(data);
+        }
+      }
+
+      const { data: clientAppointments } = await supabase
+        .from('appointments')
+        .select('id, staff_id, session_type_id, client_service_id, start_datetime, status')
+        .eq('client_id', clientId)
+        .order('start_datetime', { ascending: false });
+
+      const staffIds = [...new Set((clientAppointments || []).map(a => a.staff_id).filter(Boolean))];
+      const staffRates = new Map<string, Map<string, number>>();
+      if (staffIds.length > 0) {
+        const { data: rates } = await supabase
+          .from('staff_appointment_rates')
+          .select('staff_id, session_type_id, rate_per_appointment, rate_type, percentage_rate')
+          .in('staff_id', staffIds)
+          .is('effective_to', null);
+
+        for (const rate of (rates || [])) {
+          if (!staffRates.has(rate.staff_id)) {
+            staffRates.set(rate.staff_id, new Map());
+          }
+          staffRates.get(rate.staff_id)!.set(
+            rate.session_type_id || '_default',
+            Number(rate.rate_per_appointment) || 0
+          );
+        }
+      }
+
+      const priceByName = new Map<string, number>();
+      for (const item of allItemsData) {
+        const name = item.item_name || item.description;
+        const amount = Number(item.total_amount) || 0;
+        if (name && amount > 0) {
+          const existing = priceByName.get(name);
+          if (existing === undefined || amount > existing) {
+            priceByName.set(name, amount);
+          }
+        }
+      }
+
+      const services: ClientService[] = (servicesRes.data || []).map((s: any) => ({
+        id: s.id,
+        mindbody_id: s.mindbody_id,
+        name: s.name,
+        count: s.count,
+        remaining: s.remaining,
+        active_date: s.active_date,
+        expiration_date: s.expiration_date,
+        program_name: s.program_name,
+        paid_price: priceByName.get(s.name) || 0,
+      }));
+
+      const periodSaleIds = new Set(
+        (allClientSales || [])
+          .filter(s => s.sale_datetime >= `${startDate}T00:00:00` && s.sale_datetime <= `${endDate}T23:59:59`)
+          .map(s => s.id)
+      );
+
+      const purchases: SaleItem[] = allItemsData
+        .filter(item => periodSaleIds.has(item.sale_id))
+        .map((item: any) => ({
+          id: item.id,
+          sale_id: item.sale_id,
+          item_name: item.item_name || item.description || '-',
+          quantity: item.quantity,
+          total_amount: Number(item.total_amount) || 0,
+          sale_datetime: saleDateMap.get(item.sale_id) || null,
+        }));
+
+      purchases.sort((a, b) => {
+        if (!a.sale_datetime || !b.sale_datetime) return 0;
+        return new Date(b.sale_datetime).getTime() - new Date(a.sale_datetime).getTime();
+      });
+
+      setClientDetails({
+        services,
+        purchases,
+        staffRates,
+        appointments: clientAppointments || [],
+      });
+    } catch (error) {
+      console.error('Error loading client details:', error);
+    } finally {
+      setDetailsLoading(false);
+    }
+  }, [startDate, endDate]);
+
+  const handleToggleExpand = (clientId: string) => {
+    if (expandedClientId === clientId) {
+      setExpandedClientId(null);
+      setClientDetails(null);
+    } else {
+      setExpandedClientId(clientId);
+      loadClientDetails(clientId);
+    }
+  };
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDirection(field === 'total' ? 'desc' : 'asc');
+    }
+  };
+
+  const filteredAndSortedClients = useMemo(() => {
+    let result = [...clients];
+    if (debouncedSearch) {
+      const searchLower = debouncedSearch.toLowerCase();
+      result = result.filter(
+        client =>
+          client.first_name?.toLowerCase().includes(searchLower) ||
+          client.last_name?.toLowerCase().includes(searchLower) ||
+          client.email?.toLowerCase().includes(searchLower) ||
+          client.mobile_phone?.includes(debouncedSearch) ||
+          client.home_phone?.includes(debouncedSearch) ||
+          client.mindbody_id?.includes(debouncedSearch)
+      );
+    }
+    result.sort((a, b) => {
+      if (sortField === 'name') {
+        const nameA = `${a.last_name || ''} ${a.first_name || ''}`.toLowerCase();
+        const nameB = `${b.last_name || ''} ${b.first_name || ''}`.toLowerCase();
+        return sortDirection === 'asc' ? nameA.localeCompare(nameB) : nameB.localeCompare(nameA);
+      }
+      return sortDirection === 'asc'
+        ? a.total_purchases - b.total_purchases
+        : b.total_purchases - a.total_purchases;
+    });
+    return result;
+  }, [clients, debouncedSearch, sortField, sortDirection]);
+
+  const totalRevenue = useMemo(() => {
+    return filteredAndSortedClients.reduce((sum, c) => sum + c.total_purchases, 0);
+  }, [filteredAndSortedClients]);
+
+  const handleExport = async () => {
+    setExportLoading(true);
+    try {
+      const exportRows: any[] = [];
+
+      const { data: allStaff } = await supabase
+        .from('staff')
+        .select('id, first_name, last_name');
+      const staffMap = new Map((allStaff || []).map(s => [s.id, `${s.first_name || ''} ${s.last_name || ''}`.trim()]));
+
+      const { data: allSessionTypes } = await supabase
+        .from('session_types')
+        .select('id, name, category_name');
+      const sessionMap = new Map((allSessionTypes || []).map(s => [s.id, s]));
+
+      const { data: allRates } = await supabase
+        .from('staff_appointment_rates')
+        .select('staff_id, session_type_id, rate_per_appointment')
+        .is('effective_to', null);
+      const ratesMap = new Map<string, number>();
+      for (const r of (allRates || [])) {
+        ratesMap.set(`${r.staff_id}_${r.session_type_id || '_default'}`, Number(r.rate_per_appointment) || 0);
+      }
+
+      for (const client of filteredAndSortedClients) {
+        const { data: services } = await supabase
+          .from('client_services')
+          .select('id, mindbody_id, name, count, remaining, program_name')
+          .eq('client_id', client.id);
+
+        const { data: sales } = await supabase
+          .from('sales')
+          .select('id, sale_datetime')
+          .eq('client_id', client.id);
+
+        const saleIds = (sales || []).map(s => s.id);
+        let items: any[] = [];
+        if (saleIds.length > 0) {
+          for (let i = 0; i < saleIds.length; i += 200) {
+            const batch = saleIds.slice(i, i + 200);
+            const { data } = await supabase
+              .from('sale_items')
+              .select('id, sale_id, item_name, total_amount')
+              .in('sale_id', batch);
+            if (data) items = items.concat(data);
+          }
+        }
+
+        const priceByName = new Map<string, number>();
+        for (const item of items) {
+          const name = item.item_name;
+          const amount = Number(item.total_amount) || 0;
+          if (name && amount > 0) {
+            const existing = priceByName.get(name);
+            if (existing === undefined || amount > existing) {
+              priceByName.set(name, amount);
+            }
+          }
+        }
+
+        const { data: appointments } = await supabase
+          .from('appointments')
+          .select('id, staff_id, session_type_id, client_service_id, start_datetime, status')
+          .eq('client_id', client.id);
+
+        for (const svc of (services || [])) {
+          const paidPrice = priceByName.get(svc.name) || 0;
+          const used = svc.count - svc.remaining;
+          const spentAmount = svc.count > 0 ? (used / svc.count) * paidPrice : paidPrice;
+          const remainingAmount = paidPrice - spentAmount;
+
+          const svcAppointments = (appointments || []).filter(
+            a => a.client_service_id === svc.mindbody_id
+          );
+
+          if (svcAppointments.length === 0) {
+            exportRows.push({
+              'Client': `${client.first_name || ''} ${client.last_name || ''}`.trim(),
+              'Client ID': client.mindbody_id,
+              'Purchase ID': svc.mindbody_id,
+              'Service Category': svc.program_name || '-',
+              'Service': svc.name,
+              'Pricing Option': svc.name,
+              'Staff': '-',
+              'Staff Cost': 0,
+              'Purchase Amount': paidPrice,
+              'Amount Spent': Math.round(spentAmount * 100) / 100,
+              'Amount Remaining': Math.round(remainingAmount * 100) / 100,
+              'Profit from Spent': Math.round(spentAmount * 100) / 100,
+            });
+          } else {
+            const costPerAppointment = paidPrice > 0 && svc.count > 0 ? paidPrice / svc.count : 0;
+
+            for (const appt of svcAppointments) {
+              const staffName = staffMap.get(appt.staff_id) || '-';
+              const session = sessionMap.get(appt.session_type_id);
+              const staffRate =
+                ratesMap.get(`${appt.staff_id}_${appt.session_type_id}`) ||
+                ratesMap.get(`${appt.staff_id}__default`) ||
+                0;
+
+              exportRows.push({
+                'Client': `${client.first_name || ''} ${client.last_name || ''}`.trim(),
+                'Client ID': client.mindbody_id,
+                'Purchase ID': svc.mindbody_id,
+                'Service Category': session?.category_name || svc.program_name || '-',
+                'Service': session?.name || svc.name,
+                'Pricing Option': svc.name,
+                'Staff': staffName,
+                'Staff Cost': staffRate,
+                'Purchase Amount': paidPrice,
+                'Amount Spent': Math.round(costPerAppointment * 100) / 100,
+                'Amount Remaining': Math.round(remainingAmount * 100) / 100,
+                'Profit from Spent': Math.round((costPerAppointment - staffRate) * 100) / 100,
+              });
+            }
+          }
+        }
+      }
+
+      exportToExcel(exportRows, `client_balance_${startDate}_${endDate}`);
+    } catch (error) {
+      console.error('Export error:', error);
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  const clientBalance = useMemo(() => {
+    if (!clientDetails) return null;
+    return computeClientBalance(clientDetails.services);
+  }, [clientDetails]);
+
+  return (
+    <div className="w-full bg-slate-50 min-h-full">
+      <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+              <Wallet className="w-7 h-7 text-blue-600" />
+              Client Balance
+            </h2>
+            <p className="text-slate-600 mt-1">
+              Package balances, spending, and remaining value per client
+            </p>
+          </div>
+          <button
+            onClick={handleExport}
+            disabled={filteredAndSortedClients.length === 0 || exportLoading}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+          >
+            <Download className={`w-4 h-4 ${exportLoading ? 'animate-spin' : ''}`} />
+            {exportLoading ? 'Exporting...' : 'Export Detail'}
+          </button>
+        </div>
+      </div>
+
+      <div className="p-6 space-y-4">
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+          <div className="flex flex-wrap gap-4 items-end">
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-sm font-medium text-slate-700 mb-1">Search</label>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search by name, email, phone..."
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+            </div>
+            <div className="w-40">
+              <label className="block text-sm font-medium text-slate-700 mb-1">Start Date</label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={e => setStartDate(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+            </div>
+            <div className="w-40">
+              <label className="block text-sm font-medium text-slate-700 mb-1">End Date</label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={e => setEndDate(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-200">
+            <div className="text-sm text-slate-600">
+              Found <span className="font-semibold">{filteredAndSortedClients.length}</span> clients
+            </div>
+            <div className="text-sm font-semibold text-emerald-600">
+              Sale Items Total: {formatCurrency(totalRevenue)}
+            </div>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center text-slate-600">
+            Loading clients...
+          </div>
+        ) : filteredAndSortedClients.length === 0 ? (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center text-slate-600">
+            <User className="w-12 h-12 mx-auto mb-4 text-slate-400" />
+            <p className="text-lg font-medium">No clients found</p>
+            <p className="text-sm mt-2">Try adjusting the date range or search criteria</p>
+          </div>
+        ) : (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="grid grid-cols-[auto_1fr_1fr_1fr_120px] gap-4 px-4 py-3 bg-slate-50 border-b border-slate-200 font-medium text-sm text-slate-700">
+              <div className="w-8" />
+              <button onClick={() => handleSort('name')} className="flex items-center gap-1 hover:text-slate-900">
+                Client
+                <ArrowUpDown className="w-4 h-4" />
+              </button>
+              <div>Email</div>
+              <div>Phone</div>
+              <button
+                onClick={() => handleSort('total')}
+                className="flex items-center gap-1 justify-end hover:text-slate-900"
+              >
+                Purchases
+                <ArrowUpDown className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="divide-y divide-slate-100">
+              {filteredAndSortedClients.map(client => (
+                <div key={client.id}>
+                  <div
+                    className="grid grid-cols-[auto_1fr_1fr_1fr_120px] gap-4 px-4 py-3 cursor-pointer hover:bg-slate-50 transition-colors items-center"
+                    onClick={() => handleToggleExpand(client.id)}
+                  >
+                    <div className="w-8">
+                      {expandedClientId === client.id ? (
+                        <ChevronDown className="w-5 h-5 text-slate-500" />
+                      ) : (
+                        <ChevronRight className="w-5 h-5 text-slate-500" />
+                      )}
+                    </div>
+                    <div>
+                      <div className="font-medium text-slate-900">
+                        {client.first_name} {client.last_name}
+                      </div>
+                      <div className="text-xs text-slate-500">ID: {client.mindbody_id}</div>
+                    </div>
+                    <div className="text-slate-600 truncate">{client.email || '-'}</div>
+                    <div className="text-slate-600">{client.mobile_phone || client.home_phone || '-'}</div>
+                    <div className="text-right font-semibold text-emerald-600">
+                      {formatCurrency(client.total_purchases)}
+                    </div>
+                  </div>
+
+                  {expandedClientId === client.id && (
+                    <div className="bg-slate-50 border-t border-slate-200 p-4">
+                      {detailsLoading ? (
+                        <div className="text-center py-8 text-slate-500">Loading details...</div>
+                      ) : clientDetails ? (
+                        <div>
+                          {clientBalance && (clientBalance.totalPrice > 0) && (
+                            <div className="mb-4 bg-gradient-to-r from-blue-50 to-slate-50 rounded-lg border border-blue-200 p-4">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-6">
+                                  <h4 className="font-semibold text-slate-800 flex items-center gap-2">
+                                    <Wallet className="w-4 h-4 text-blue-600" />
+                                    Client Balance
+                                  </h4>
+                                  <div className="flex items-center gap-4 text-sm">
+                                    <span className="text-slate-600">
+                                      Total:{' '}
+                                      <span className="font-bold text-slate-800">
+                                        {formatCurrency(clientBalance.totalPrice)}
+                                      </span>
+                                    </span>
+                                    <span className="text-slate-300">|</span>
+                                    <span className="text-slate-600">
+                                      Spent:{' '}
+                                      <span className="font-bold text-rose-600">
+                                        {formatCurrency(clientBalance.spentPrice)}
+                                      </span>
+                                    </span>
+                                    <span className="text-slate-300">|</span>
+                                    <span className="text-slate-600">
+                                      Left:{' '}
+                                      <span className="font-bold text-emerald-600">
+                                        {formatCurrency(clientBalance.remainingPrice)}
+                                      </span>
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="text-sm text-slate-600">
+                                  Sale Items:{' '}
+                                  <span className="font-bold text-emerald-600">
+                                    {formatCurrency(
+                                      clientDetails.purchases.reduce((s, p) => s + p.total_amount, 0)
+                                    )}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="grid grid-cols-2 gap-6">
+                            <div>
+                              <h4 className="font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                                <Package className="w-4 h-4" />
+                                Packages / Remaining
+                              </h4>
+                              {clientDetails.services.length === 0 ? (
+                                <div className="text-sm text-slate-500 py-4 text-center bg-white rounded-lg border border-slate-200">
+                                  No active pricing options
+                                </div>
+                              ) : (
+                                <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
+                                  {clientDetails.services.map(service => {
+                                    const used = service.count - service.remaining;
+                                    const pct = service.count > 0 ? (used / service.count) * 100 : 100;
+                                    const isExpired =
+                                      service.expiration_date && new Date(service.expiration_date) < new Date();
+                                    const isEmpty = service.remaining <= 0;
+                                    const bal = computeServiceBalance(service);
+
+                                    return (
+                                      <div
+                                        key={service.id}
+                                        className={`p-3 rounded-lg border ${
+                                          isExpired || isEmpty
+                                            ? 'bg-slate-50 border-slate-200'
+                                            : 'bg-white border-emerald-200'
+                                        }`}
+                                      >
+                                        <div className="flex justify-between items-start mb-1.5">
+                                          <div className="flex-1 min-w-0 mr-3">
+                                            <div className="font-medium text-slate-900 text-sm truncate">
+                                              {service.name}
+                                            </div>
+                                            {service.program_name && (
+                                              <div className="text-xs text-slate-500 truncate">
+                                                {service.program_name}
+                                              </div>
+                                            )}
+                                          </div>
+                                          <div
+                                            className={`text-sm font-bold whitespace-nowrap ${
+                                              isEmpty ? 'text-slate-400' : 'text-emerald-600'
+                                            }`}
+                                          >
+                                            {service.remaining} / {service.count}
+                                          </div>
+                                        </div>
+                                        <div className="w-full bg-slate-200 rounded-full h-2 mb-1.5">
+                                          <div
+                                            className={`h-2 rounded-full transition-all ${
+                                              isEmpty
+                                                ? 'bg-slate-400'
+                                                : pct > 75
+                                                  ? 'bg-amber-500'
+                                                  : 'bg-emerald-500'
+                                            }`}
+                                            style={{ width: `${Math.min(pct, 100)}%` }}
+                                          />
+                                        </div>
+                                        {bal.total > 0 && (
+                                          <div className="flex items-center gap-2 mt-1.5 text-xs">
+                                            <span className="text-slate-500">
+                                              Total:{' '}
+                                              <span className="font-semibold text-slate-700">
+                                                {formatCurrency(bal.total)}
+                                              </span>
+                                            </span>
+                                            <span className="text-slate-300">|</span>
+                                            <span className="text-slate-500">
+                                              Spent:{' '}
+                                              <span className="font-semibold text-rose-600">
+                                                {formatCurrency(bal.spent)}
+                                              </span>
+                                            </span>
+                                            <span className="text-slate-300">|</span>
+                                            <span className="text-slate-500">
+                                              Left:{' '}
+                                              <span className="font-semibold text-emerald-600">
+                                                {formatCurrency(bal.remaining)}
+                                              </span>
+                                            </span>
+                                          </div>
+                                        )}
+                                        <div className="flex justify-between text-xs text-slate-500 mt-1">
+                                          <span>
+                                            {formatDate(service.active_date)} -{' '}
+                                            {formatDate(service.expiration_date)}
+                                          </span>
+                                          {isExpired && (
+                                            <span className="text-red-500 font-medium">Expired</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+
+                            <div>
+                              <div className="flex items-center justify-between mb-3">
+                                <h4 className="font-semibold text-slate-700 flex items-center gap-2">
+                                  <ShoppingCart className="w-4 h-4" />
+                                  Sale Items (Period)
+                                </h4>
+                                {clientDetails.purchases.length > 0 && (
+                                  <span className="text-sm font-bold text-emerald-600">
+                                    {formatCurrency(
+                                      clientDetails.purchases.reduce((s, p) => s + p.total_amount, 0)
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                              {clientDetails.purchases.length === 0 ? (
+                                <div className="text-sm text-slate-500 py-4 text-center bg-white rounded-lg border border-slate-200">
+                                  No purchases in selected period
+                                </div>
+                              ) : (
+                                <div className="bg-white rounded-lg border border-slate-200 overflow-hidden max-h-[400px] overflow-y-auto">
+                                  <table className="w-full text-sm">
+                                    <thead className="bg-slate-50 border-b border-slate-200 sticky top-0">
+                                      <tr>
+                                        <th className="text-left px-3 py-2 font-medium text-slate-600">
+                                          Date
+                                        </th>
+                                        <th className="text-left px-3 py-2 font-medium text-slate-600">
+                                          Item
+                                        </th>
+                                        <th className="text-right px-3 py-2 font-medium text-slate-600">
+                                          Qty
+                                        </th>
+                                        <th className="text-right px-3 py-2 font-medium text-slate-600">
+                                          Amount
+                                        </th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                      {clientDetails.purchases.map(item => (
+                                        <tr key={item.id} className="hover:bg-slate-50">
+                                          <td className="px-3 py-2 text-slate-500 whitespace-nowrap">
+                                            {formatDate(item.sale_datetime)}
+                                          </td>
+                                          <td className="px-3 py-2 text-slate-900 font-medium">
+                                            {item.item_name}
+                                          </td>
+                                          <td className="px-3 py-2 text-right text-slate-600">
+                                            {item.quantity}
+                                          </td>
+                                          <td className="px-3 py-2 text-right font-semibold text-emerald-600 whitespace-nowrap">
+                                            {formatCurrency(item.total_amount)}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

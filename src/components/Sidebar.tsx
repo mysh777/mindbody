@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Database, Settings, BarChart3, Users, Calendar, DollarSign, FileText, ClipboardList, PieChart, Package, ShoppingBag } from 'lucide-react';
+import { Database, Settings, BarChart3, Calendar, DollarSign, FileText, ClipboardList, PieChart, Package, ShoppingBag, Wallet, UserCog } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export type MenuSection =
@@ -8,6 +8,7 @@ export type MenuSection =
   | 'pivot-reports'
   | 'clients-report'
   | 'staff-report'
+  | 'staff-pricelist'
   | 'appointments'
   | 'sales'
   | 'sales-report'
@@ -36,6 +37,7 @@ const tableNameMap: Record<MenuSection, string | null> = {
   'pivot-reports': null,
   'clients-report': null,
   'staff-report': null,
+  'staff-pricelist': null,
   'appointments': 'appointments',
   'sales': 'sales',
   'sales-report': null,
@@ -52,8 +54,9 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
     { id: 'api-integration', label: 'API Integration', icon: Settings },
     { id: 'references', label: 'Reference Tables', icon: Database, dividerBefore: true },
     { id: 'pivot-reports', label: 'Pivot Reports', icon: BarChart3, dividerBefore: true },
-    { id: 'clients-report', label: 'Clients Report', icon: Users },
+    { id: 'clients-report', label: 'Client Balance', icon: Wallet },
     { id: 'staff-report', label: 'Staff Report', icon: ClipboardList },
+    { id: 'staff-pricelist', label: 'Staff Pricelist', icon: UserCog },
     { id: 'appointments', label: 'Appointments', icon: Calendar, dividerBefore: true },
     { id: 'client-services', label: 'Client Services', icon: Package },
     { id: 'sales', label: 'Sales Journal', icon: DollarSign, dividerBefore: true },
