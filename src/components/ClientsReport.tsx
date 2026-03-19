@@ -12,6 +12,7 @@ interface ClientService {
   active_date: string;
   expiration_date: string;
   program_name: string;
+  paid_price: number;
 }
 
 interface SaleItem {
@@ -129,24 +130,38 @@ export function ClientsReport() {
         .eq('client_id', clientId)
         .order('active_date', { ascending: false });
 
-      const { data: clientSales } = await supabase
+      const { data: allClientSales } = await supabase
         .from('sales')
         .select('id, sale_datetime')
         .eq('client_id', clientId)
-        .gte('sale_datetime', `${startDate}T00:00:00`)
-        .lte('sale_datetime', `${endDate}T23:59:59`)
         .order('sale_datetime', { ascending: false });
 
-      const saleIds = (clientSales || []).map(s => s.id);
-      const saleDateMap = new Map((clientSales || []).map(s => [s.id, s.sale_datetime]));
+      const allSaleIds = (allClientSales || []).map(s => s.id);
+      const saleDateMap = new Map((allClientSales || []).map(s => [s.id, s.sale_datetime]));
 
-      let itemsData: any[] = [];
-      if (saleIds.length > 0) {
-        const { data } = await supabase
-          .from('sale_items')
-          .select('id, sale_id, item_name, description, quantity, total_amount, unit_price')
-          .in('sale_id', saleIds);
-        itemsData = data || [];
+      let allItemsData: any[] = [];
+      if (allSaleIds.length > 0) {
+        const batchSize = 200;
+        for (let i = 0; i < allSaleIds.length; i += batchSize) {
+          const batch = allSaleIds.slice(i, i + batchSize);
+          const { data } = await supabase
+            .from('sale_items')
+            .select('id, sale_id, item_name, description, quantity, total_amount, unit_price')
+            .in('sale_id', batch);
+          if (data) allItemsData = allItemsData.concat(data);
+        }
+      }
+
+      const priceByName = new Map<string, number>();
+      for (const item of allItemsData) {
+        const name = item.item_name || item.description;
+        const amount = Number(item.total_amount) || 0;
+        if (name && amount > 0) {
+          const existing = priceByName.get(name);
+          if (existing === undefined || amount > existing) {
+            priceByName.set(name, amount);
+          }
+        }
       }
 
       const services: ClientService[] = (servicesRes.data || []).map((s: any) => ({
@@ -158,16 +173,25 @@ export function ClientsReport() {
         active_date: s.active_date,
         expiration_date: s.expiration_date,
         program_name: s.program_name,
+        paid_price: priceByName.get(s.name) || 0,
       }));
 
-      const purchases: SaleItem[] = itemsData.map((item: any) => ({
-        id: item.id,
-        sale_id: item.sale_id,
-        item_name: item.item_name || item.description || '-',
-        quantity: item.quantity,
-        total_amount: Number(item.total_amount) || 0,
-        sale_datetime: saleDateMap.get(item.sale_id) || null,
-      }));
+      const periodSaleIds = new Set(
+        (allClientSales || [])
+          .filter(s => s.sale_datetime >= `${startDate}T00:00:00` && s.sale_datetime <= `${endDate}T23:59:59`)
+          .map(s => s.id)
+      );
+
+      const purchases: SaleItem[] = allItemsData
+        .filter(item => periodSaleIds.has(item.sale_id))
+        .map((item: any) => ({
+          id: item.id,
+          sale_id: item.sale_id,
+          item_name: item.item_name || item.description || '-',
+          quantity: item.quantity,
+          total_amount: Number(item.total_amount) || 0,
+          sale_datetime: saleDateMap.get(item.sale_id) || null,
+        }));
 
       purchases.sort((a, b) => {
         if (!a.sale_datetime || !b.sale_datetime) return 0;
@@ -424,6 +448,9 @@ export function ClientsReport() {
                                   const pct = service.count > 0 ? (used / service.count) * 100 : 100;
                                   const isExpired = service.expiration_date && new Date(service.expiration_date) < new Date();
                                   const isEmpty = service.remaining <= 0;
+                                  const totalPrice = service.paid_price;
+                                  const spentPrice = service.count > 0 ? (used / service.count) * totalPrice : totalPrice;
+                                  const remainingPrice = totalPrice - spentPrice;
 
                                   return (
                                     <div
@@ -459,7 +486,22 @@ export function ClientsReport() {
                                           style={{ width: `${Math.min(pct, 100)}%` }}
                                         />
                                       </div>
-                                      <div className="flex justify-between text-xs text-slate-500">
+                                      {totalPrice > 0 && (
+                                        <div className="flex items-center gap-2 mt-1.5 text-xs">
+                                          <span className="text-slate-500">
+                                            Total: <span className="font-semibold text-slate-700">{formatCurrency(totalPrice)}</span>
+                                          </span>
+                                          <span className="text-slate-300">|</span>
+                                          <span className="text-slate-500">
+                                            Spent: <span className="font-semibold text-rose-600">{formatCurrency(spentPrice)}</span>
+                                          </span>
+                                          <span className="text-slate-300">|</span>
+                                          <span className="text-slate-500">
+                                            Left: <span className="font-semibold text-emerald-600">{formatCurrency(remainingPrice)}</span>
+                                          </span>
+                                        </div>
+                                      )}
+                                      <div className="flex justify-between text-xs text-slate-500 mt-1">
                                         <span>{formatDate(service.active_date)} - {formatDate(service.expiration_date)}</span>
                                         {isExpired && <span className="text-red-500 font-medium">Expired</span>}
                                       </div>
