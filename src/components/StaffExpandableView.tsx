@@ -135,7 +135,7 @@ function StaffRow({ staff, expanded, onToggle, onLoadDetails, loading, dateRange
           ) : (
             <div className="space-y-3">
               <div className="text-sm text-slate-600 mb-3">
-                Period: {new Date(dateRange.start).toLocaleDateString('lv-LV')} - {new Date(dateRange.end).toLocaleDateString('lv-LV')}
+                Period: {new Date(dateRange.start).toLocaleDateString('de-DE')} - {new Date(dateRange.end).toLocaleDateString('de-DE')}
               </div>
 
               {staff.services_provided.map((service, idx) => (
@@ -635,8 +635,8 @@ export function StaffExpandableView() {
         const apptDate = new Date(a.start_datetime);
         serviceMap[stId].pricing_options[pricingOptionId].clients[clientId].visits.push({
           id: a.id,
-          date: apptDate.toLocaleDateString('lv-LV'),
-          time: apptDate.toLocaleTimeString('lv-LV', { hour: '2-digit', minute: '2-digit' }),
+          date: apptDate.toLocaleDateString('de-DE'),
+          time: apptDate.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
           status: a.status,
           client_name: clientName,
         });
@@ -870,8 +870,8 @@ export function StaffExpandableView() {
     const filteredAppointments = appointments.filter((a: any) => staffFilter.includes(a.staff_id));
 
     const exportData = filteredAppointments.map((a: any) => ({
-      date: new Date(a.start_datetime).toLocaleDateString('lv-LV'),
-      time: new Date(a.start_datetime).toLocaleTimeString('lv-LV', { hour: '2-digit', minute: '2-digit' }),
+      date: new Date(a.start_datetime).toLocaleDateString('de-DE'),
+      time: new Date(a.start_datetime).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
       staff: a.staff ? `${a.staff.first_name || ''} ${a.staff.last_name || ''}`.trim() : 'Unknown',
       location: a.location?.name || 'Unknown',
       client: a.client ? `${a.client.first_name || ''} ${a.client.last_name || ''}`.trim() : 'Unknown',

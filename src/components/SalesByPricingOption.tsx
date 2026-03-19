@@ -242,7 +242,7 @@ export function SalesByPricingOption({ onNavigate }: SalesByPricingOptionProps) 
       const exportData = saleItems.map(item => ({
         'Pricing Option': item.item_name,
         'Client': item.client_name,
-        'Date': item.sale_date ? new Date(item.sale_date).toLocaleDateString('en-GB') : '',
+        'Date': item.sale_date ? new Date(item.sale_date).toLocaleDateString('de-DE') : '',
         'Amount': item.total_amount,
         'Location': item.location_name,
       }));
@@ -402,7 +402,7 @@ export function SalesByPricingOption({ onNavigate }: SalesByPricingOptionProps) 
                                 )}
                               </td>
                               <td className="px-4 py-2 text-slate-600">
-                                {item.sale_date ? new Date(item.sale_date).toLocaleDateString('en-GB') : '-'}
+                                {item.sale_date ? new Date(item.sale_date).toLocaleDateString('de-DE') : '-'}
                               </td>
                               <td className="px-4 py-2 text-slate-600">{item.location_name}</td>
                               <td className="px-4 py-2 text-right font-medium text-slate-900">

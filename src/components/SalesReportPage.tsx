@@ -536,7 +536,7 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
 
         if (saleItemsList.length === 0) {
           exportData.push({
-            'Date': sale.sale_datetime ? new Date(sale.sale_datetime).toLocaleDateString('en-GB') : '',
+            'Date': sale.sale_datetime ? new Date(sale.sale_datetime).toLocaleDateString('de-DE') : '',
             'Client': clientName,
             'Location': locationName,
             'Amount': sale.total || 0,
@@ -550,7 +550,7 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
             const itemName = item.item_name || item.description || 'Unknown';
             const categoryName = itemToCategoryLookup[itemName] || (item.is_service ? 'Other Services' : 'Product');
             exportData.push({
-              'Date': sale.sale_datetime ? new Date(sale.sale_datetime).toLocaleDateString('en-GB') : '',
+              'Date': sale.sale_datetime ? new Date(sale.sale_datetime).toLocaleDateString('de-DE') : '',
               'Client': clientName,
               'Location': locationName,
               'Amount': item.total_amount,
@@ -619,7 +619,7 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
         const categoryName = sessionType?.category_id ? categoryMap[sessionType.category_id] || '' : '';
 
         exportData.push({
-          'Date': appt.start_datetime ? new Date(appt.start_datetime).toLocaleDateString('en-GB') : '',
+          'Date': appt.start_datetime ? new Date(appt.start_datetime).toLocaleDateString('de-DE') : '',
           'Category': categoryName,
           'Service': sessionType?.name || 'Unknown',
           'Pricing Option': sessionType?.name || '',

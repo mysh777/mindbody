@@ -303,8 +303,8 @@ export function AppointmentsView() {
       const clientService = a.client_service_id ? clientServicesMap[a.client_service_id] : null;
       return {
         'Appointment ID': a.mindbody_id || '',
-        Date: new Date(a.start_datetime).toLocaleDateString('lv-LV'),
-        Time: new Date(a.start_datetime).toLocaleTimeString('lv-LV', { hour: '2-digit', minute: '2-digit' }),
+        Date: new Date(a.start_datetime).toLocaleDateString('de-DE'),
+        Time: new Date(a.start_datetime).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
         Client: a.client ? `${a.client.first_name} ${a.client.last_name}` : '',
         Staff: a.staff ? `${a.staff.first_name} ${a.staff.last_name}` : '',
         Service: a.session_type?.name || '',
@@ -517,10 +517,10 @@ export function AppointmentsView() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="font-medium text-slate-900">
-                            {new Date(appt.start_datetime).toLocaleDateString('lv-LV')}
+                            {new Date(appt.start_datetime).toLocaleDateString('de-DE')}
                           </div>
                           <div className="text-sm text-slate-500">
-                            {new Date(appt.start_datetime).toLocaleTimeString('lv-LV', { hour: '2-digit', minute: '2-digit' })}
+                            {new Date(appt.start_datetime).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                           </div>
                         </td>
                         <td className="px-4 py-3">
@@ -565,7 +565,7 @@ export function AppointmentsView() {
                         </td>
                         <td className="px-4 py-3 text-right">
                           {appt.client_service?.price ? (
-                            <span className="font-medium text-slate-900">{Number(appt.client_service.price).toFixed(2)}</span>
+                            <span className="font-medium text-slate-900">{new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(Number(appt.client_service.price))}</span>
                           ) : (
                             <span className="text-slate-400">-</span>
                           )}
@@ -633,7 +633,7 @@ export function AppointmentsView() {
                     Appointment #{selectedAppointment.mindbody_id}
                   </h3>
                   <p className="text-sm text-slate-500">
-                    {selectedAppointment.client?.first_name} {selectedAppointment.client?.last_name} - {new Date(selectedAppointment.start_datetime).toLocaleString('lv-LV')}
+                    {selectedAppointment.client?.first_name} {selectedAppointment.client?.last_name} - {new Date(selectedAppointment.start_datetime).toLocaleString('de-DE')}
                   </p>
                 </div>
               </div>

@@ -123,27 +123,31 @@ export function ClientsReport() {
   const loadClientDetails = useCallback(async (clientId: string) => {
     setDetailsLoading(true);
     try {
-      const [servicesRes, salesRes] = await Promise.all([
-        supabase
-          .from('client_services')
-          .select('id, mindbody_id, name, count, remaining, active_date, expiration_date, program_name')
-          .eq('client_id', clientId)
-          .order('active_date', { ascending: false }),
-        supabase
+      const servicesRes = await supabase
+        .from('client_services')
+        .select('id, mindbody_id, name, count, remaining, active_date, expiration_date, program_name')
+        .eq('client_id', clientId)
+        .order('active_date', { ascending: false });
+
+      const { data: clientSales } = await supabase
+        .from('sales')
+        .select('id, sale_datetime')
+        .eq('client_id', clientId)
+        .gte('sale_datetime', `${startDate}T00:00:00`)
+        .lte('sale_datetime', `${endDate}T23:59:59`)
+        .order('sale_datetime', { ascending: false });
+
+      const saleIds = (clientSales || []).map(s => s.id);
+      const saleDateMap = new Map((clientSales || []).map(s => [s.id, s.sale_datetime]));
+
+      let itemsData: any[] = [];
+      if (saleIds.length > 0) {
+        const { data } = await supabase
           .from('sale_items')
-          .select(`
-            id,
-            sale_id,
-            name,
-            quantity,
-            total_amount,
-            sales!inner(sale_datetime, client_id)
-          `)
-          .eq('sales.client_id', clientId)
-          .gte('sales.sale_datetime', `${startDate}T00:00:00`)
-          .lte('sales.sale_datetime', `${endDate}T23:59:59`)
-          .order('sales(sale_datetime)', { ascending: false }),
-      ]);
+          .select('id, sale_id, item_name, description, quantity, total_amount, unit_price')
+          .in('sale_id', saleIds);
+        itemsData = data || [];
+      }
 
       const services: ClientService[] = (servicesRes.data || []).map((s: any) => ({
         id: s.id,
@@ -156,14 +160,19 @@ export function ClientsReport() {
         program_name: s.program_name,
       }));
 
-      const purchases: SaleItem[] = (salesRes.data || []).map((item: any) => ({
+      const purchases: SaleItem[] = itemsData.map((item: any) => ({
         id: item.id,
         sale_id: item.sale_id,
-        item_name: item.name,
+        item_name: item.item_name || item.description || '-',
         quantity: item.quantity,
         total_amount: Number(item.total_amount) || 0,
-        sale_datetime: item.sales?.sale_datetime,
+        sale_datetime: saleDateMap.get(item.sale_id) || null,
       }));
+
+      purchases.sort((a, b) => {
+        if (!a.sale_datetime || !b.sale_datetime) return 0;
+        return new Date(b.sale_datetime).getTime() - new Date(a.sale_datetime).getTime();
+      });
 
       setClientDetails({ services, purchases });
     } catch (error) {
@@ -225,17 +234,21 @@ export function ClientsReport() {
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return '-';
     try {
-      return new Date(dateStr).toLocaleDateString('ru-RU');
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) return dateStr;
+      const day = date.getDate().toString().padStart(2, '0');
+      const month = (date.getMonth() + 1).toString().padStart(2, '0');
+      const year = date.getFullYear();
+      return `${day}.${month}.${year}`;
     } catch {
       return dateStr;
     }
   };
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-US', {
+    return new Intl.NumberFormat('de-DE', {
       style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
+      currency: 'EUR',
     }).format(amount);
   };
 

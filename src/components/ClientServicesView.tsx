@@ -143,9 +143,9 @@ export function ClientServicesView() {
         'Status': s.status,
         'Count': s.count,
         'Remaining': s.remaining,
-        'Payment Date': s.payment_date ? new Date(s.payment_date).toLocaleDateString('lv-LV') : '',
-        'Active Date': s.active_date ? new Date(s.active_date).toLocaleDateString('lv-LV') : '',
-        'Expiration Date': s.expiration_date ? new Date(s.expiration_date).toLocaleDateString('lv-LV') : '',
+        'Payment Date': s.payment_date ? new Date(s.payment_date).toLocaleDateString('de-DE') : '',
+        'Active Date': s.active_date ? new Date(s.active_date).toLocaleDateString('de-DE') : '',
+        'Expiration Date': s.expiration_date ? new Date(s.expiration_date).toLocaleDateString('de-DE') : '',
         'Current': s.current ? 'Yes' : 'No',
       }));
       exportToExcel(exportData, 'client_services');
@@ -306,7 +306,7 @@ export function ClientServicesView() {
                             <div className="flex items-center gap-2">
                               <Calendar className="w-4 h-4 text-slate-400" />
                               <span className={`text-sm ${new Date(service.expiration_date) < new Date() ? 'text-red-600' : 'text-slate-700'}`}>
-                                {new Date(service.expiration_date).toLocaleDateString('lv-LV')}
+                                {new Date(service.expiration_date).toLocaleDateString('de-DE')}
                               </span>
                             </div>
                           ) : (
