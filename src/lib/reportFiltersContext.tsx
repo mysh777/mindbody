@@ -47,12 +47,22 @@ interface SalesByPricingFilters {
   selectedMonth: string | null;
 }
 
+interface ActivityReportFilters {
+  filterPreset: FilterPreset;
+  dateRange: DateRange;
+  selectedLocation: string;
+  selectedClient: string;
+  search: string;
+  currentPage: number;
+}
+
 interface ReportFiltersState {
   staffReport: StaffReportFilters;
   clientReport: ClientReportFilters;
   appointments: AppointmentsFilters;
   salesReport: SalesReportFilters;
   salesByPricing: SalesByPricingFilters;
+  activityReport: ActivityReportFilters;
 }
 
 function getDefaultDateRange(): DateRange {
@@ -100,6 +110,14 @@ const defaultFilters: ReportFiltersState = {
     dateRange: getDefaultDateRange(),
     selectedMonth: null,
   },
+  activityReport: {
+    filterPreset: 'this_month',
+    dateRange: getDefaultDateRange(),
+    selectedLocation: 'all',
+    selectedClient: 'all',
+    search: '',
+    currentPage: 1,
+  },
 };
 
 interface ReportFiltersContextType {
@@ -109,6 +127,7 @@ interface ReportFiltersContextType {
   setAppointmentsFilters: (filters: Partial<AppointmentsFilters>) => void;
   setSalesReportFilters: (filters: Partial<SalesReportFilters>) => void;
   setSalesByPricingFilters: (filters: Partial<SalesByPricingFilters>) => void;
+  setActivityReportFilters: (filters: Partial<ActivityReportFilters>) => void;
 }
 
 const ReportFiltersContext = createContext<ReportFiltersContextType | null>(null);
@@ -151,6 +170,13 @@ export function ReportFiltersProvider({ children }: { children: ReactNode }) {
     }));
   };
 
+  const setActivityReportFilters = (newFilters: Partial<ActivityReportFilters>) => {
+    setFilters(prev => ({
+      ...prev,
+      activityReport: { ...prev.activityReport, ...newFilters },
+    }));
+  };
+
   return (
     <ReportFiltersContext.Provider
       value={{
@@ -160,6 +186,7 @@ export function ReportFiltersProvider({ children }: { children: ReactNode }) {
         setAppointmentsFilters,
         setSalesReportFilters,
         setSalesByPricingFilters,
+        setActivityReportFilters,
       }}
     >
       {children}

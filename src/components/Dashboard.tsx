@@ -13,6 +13,7 @@ import { StaffExpandableView } from './StaffExpandableView';
 import { AppointmentsView } from './AppointmentsView';
 import { ClientServicesView } from './ClientServicesView';
 import { StaffPricelist } from './StaffPricelist';
+import { ClientActivityReport } from './ClientActivityReport';
 
 interface Stats {
   clients: number;
@@ -36,6 +37,7 @@ const tableNameMap: Record<MenuSection, { tableName: string; displayName: string
   'client-services': { tableName: 'client_services', displayName: 'Client Services' },
   'transactions': { tableName: 'transactions', displayName: 'Transactions' },
   'sale-items': { tableName: 'sale_items', displayName: 'Sale Items' },
+  'client-activity': null,
 };
 
 const tableSectionMap: Record<string, MenuSection> = {
@@ -169,6 +171,10 @@ export function Dashboard() {
 
     if (activeSection === 'client-services') {
       return <ClientServicesView />;
+    }
+
+    if (activeSection === 'client-activity') {
+      return <ClientActivityReport />;
     }
 
     const tableConfig = tableNameMap[activeSection];
