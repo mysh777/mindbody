@@ -1,174 +1,101 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ArrowUpDown, RefreshCw, AlertTriangle } from 'lucide-react';
-import { supabase } from '../lib/supabase';
+import { useState, useMemo } from 'react';
+import { ArrowUpDown, Download } from 'lucide-react';
 import { formatCurrency } from '../utils/salesFilters';
+import { exportToExcel } from '../utils/exportExcel';
+import type { AppointmentRow } from '../hooks/useSalesMarginData';
 
 interface PricelistRow {
-  sessionTypeId: string;
+  key: string;
   sessionTypeName: string;
   categoryName: string;
-  pricingOptionId: string | null;
   pricingOptionName: string;
-  packagePrice: number;
-  sessionCount: number;
-  revenuePerVisit: number;
-  staffEntries: StaffEntry[];
-}
-
-interface StaffEntry {
-  staffId: string;
   staffName: string;
+  revenuePerVisit: number;
   staffCost: number;
   margin: number;
   marginPercent: number;
+  visits: number;
 }
 
 interface ServicePricelistTabProps {
-  onNavigate?: (tableName: string, id: string) => void;
+  loading: boolean;
+  appointments: AppointmentRow[];
+  dateRange: { start: string; end: string };
 }
 
-type SortField = 'sessionTypeName' | 'pricingOptionName' | 'revenuePerVisit';
+type SortField = 'sessionTypeName' | 'pricingOptionName' | 'staffName' | 'revenuePerVisit' | 'staffCost' | 'margin' | 'visits';
 
-export function ServicePricelistTab({ onNavigate }: ServicePricelistTabProps) {
-  const [loading, setLoading] = useState(false);
-  const [rows, setRows] = useState<PricelistRow[]>([]);
+export function ServicePricelistTab({ loading, appointments, dateRange }: ServicePricelistTabProps) {
   const [sortBy, setSortBy] = useState<SortField>('sessionTypeName');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [filterCategory, setFilterCategory] = useState<string>('all');
+  const [exporting, setExporting] = useState(false);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [stRes, poRes, sstRes, staffRes] = await Promise.all([
-        supabase.from('session_types').select('id, name, category_name'),
-        supabase.from('pricing_options').select('id, name, price, session_count, program_name'),
-        supabase.from('staff_session_types').select('staff_id, session_type_id, pay_rate'),
-        supabase.from('staff').select('id, first_name, last_name'),
-      ]);
+  const { rows, categories } = useMemo(() => {
+    const map: Record<string, PricelistRow & { totalRevenue: number; totalCost: number }> = {};
+    const catSet = new Set<string>();
 
-      const sessionTypes = stRes.data || [];
-      const pricingOptions = poRes.data || [];
-      const staffSessionTypes = sstRes.data || [];
-      const staffList = staffRes.data || [];
+    const withData = appointments.filter(a => a.hasRevenueData);
 
-      const staffMap: Record<string, string> = {};
-      staffList.forEach(s => {
-        staffMap[s.id] = `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.id;
-      });
+    withData.forEach(a => {
+      const key = `${a.sessionTypeName}||${a.pricingOptionName}||${a.staffName}`;
+      catSet.add(a.sessionTypeName);
 
-      const stMap: Record<string, { name: string; category: string }> = {};
-      sessionTypes.forEach(st => {
-        stMap[st.id] = { name: st.name, category: st.category_name || '' };
-      });
-
-      const staffRatesBySessionType: Record<string, StaffEntry[]> = {};
-      staffSessionTypes.forEach(sst => {
-        if (!sst.session_type_id || !sst.staff_id) return;
-        const key = sst.session_type_id;
-        if (!staffRatesBySessionType[key]) staffRatesBySessionType[key] = [];
-        staffRatesBySessionType[key].push({
-          staffId: sst.staff_id,
-          staffName: staffMap[sst.staff_id] || sst.staff_id,
-          staffCost: Number(sst.pay_rate) || 0,
+      if (!map[key]) {
+        map[key] = {
+          key,
+          sessionTypeName: a.sessionTypeName,
+          categoryName: '',
+          pricingOptionName: a.pricingOptionName || '(unknown)',
+          staffName: a.staffName,
+          revenuePerVisit: 0,
+          staffCost: 0,
           margin: 0,
           marginPercent: 0,
-        });
-      });
+          visits: 0,
+          totalRevenue: 0,
+          totalCost: 0,
+        };
+      }
+      map[key].visits++;
+      map[key].totalRevenue += a.revenue || 0;
+      map[key].totalCost += a.staffCost;
+    });
 
-      const poByProgram: Record<string, typeof pricingOptions> = {};
-      pricingOptions.forEach(po => {
-        const progName = po.program_name || 'Unknown';
-        if (!poByProgram[progName]) poByProgram[progName] = [];
-        poByProgram[progName].push(po);
-      });
+    const result = Object.values(map).map(r => {
+      const avgRev = r.visits > 0 ? r.totalRevenue / r.visits : 0;
+      const avgCost = r.visits > 0 ? r.totalCost / r.visits : 0;
+      const avgMargin = avgRev - avgCost;
+      return {
+        key: r.key,
+        sessionTypeName: r.sessionTypeName,
+        categoryName: r.categoryName,
+        pricingOptionName: r.pricingOptionName,
+        staffName: r.staffName,
+        revenuePerVisit: avgRev,
+        staffCost: avgCost,
+        margin: avgMargin,
+        marginPercent: avgRev > 0 ? (avgMargin / avgRev) * 100 : 0,
+        visits: r.visits,
+      };
+    });
 
-      const result: PricelistRow[] = [];
-
-      sessionTypes.forEach(st => {
-        const staffEntries = staffRatesBySessionType[st.id] || [];
-
-        const matchingPOs = pricingOptions.filter(po => {
-          const sc = po.session_count || 0;
-          return sc > 0;
-        });
-
-        if (matchingPOs.length === 0) {
-          const entries = staffEntries.map(se => ({
-            ...se,
-            margin: 0 - se.staffCost,
-            marginPercent: 0,
-          }));
-
-          result.push({
-            sessionTypeId: st.id,
-            sessionTypeName: st.name,
-            categoryName: st.category_name || '',
-            pricingOptionId: null,
-            pricingOptionName: 'No pricing option',
-            packagePrice: 0,
-            sessionCount: 0,
-            revenuePerVisit: 0,
-            staffEntries: entries,
-          });
-        }
-
-        matchingPOs.forEach(po => {
-          const price = Number(po.price) || 0;
-          const sc = po.session_count || 1;
-          const rev = price / sc;
-
-          const entries = staffEntries.map(se => ({
-            ...se,
-            margin: rev - se.staffCost,
-            marginPercent: rev > 0 ? ((rev - se.staffCost) / rev) * 100 : 0,
-          }));
-
-          result.push({
-            sessionTypeId: st.id,
-            sessionTypeName: st.name,
-            categoryName: st.category_name || '',
-            pricingOptionId: po.id,
-            pricingOptionName: po.name || 'Unnamed',
-            packagePrice: price,
-            sessionCount: sc,
-            revenuePerVisit: rev,
-            staffEntries: entries,
-          });
-        });
-      });
-
-      setRows(result);
-    } catch (error) {
-      console.error('Error loading pricelist data:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  const categories = useMemo(() => {
-    const set = new Set(rows.map(r => r.categoryName).filter(Boolean));
-    return [...set].sort();
-  }, [rows]);
+    return { rows: result, categories: [...catSet].sort() };
+  }, [appointments]);
 
   const filtered = useMemo(() => {
-    let result = rows;
-    if (filterCategory !== 'all') {
-      result = result.filter(r => r.categoryName === filterCategory);
-    }
-    return result;
+    if (filterCategory === 'all') return rows;
+    return rows.filter(r => r.sessionTypeName === filterCategory);
   }, [rows, filterCategory]);
 
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
       const mul = sortDir === 'desc' ? -1 : 1;
-      if (sortBy === 'revenuePerVisit') {
-        return mul * (a.revenuePerVisit - b.revenuePerVisit);
+      const field = sortBy;
+      if (field === 'revenuePerVisit' || field === 'staffCost' || field === 'margin' || field === 'visits') {
+        return mul * (a[field] - b[field]);
       }
-      return mul * (a[sortBy] || '').localeCompare(b[sortBy] || '');
+      return mul * (a[field] || '').localeCompare(b[field] || '');
     });
   }, [filtered, sortBy, sortDir]);
 
@@ -177,7 +104,26 @@ export function ServicePricelistTab({ onNavigate }: ServicePricelistTabProps) {
       setSortDir(d => d === 'desc' ? 'asc' : 'desc');
     } else {
       setSortBy(field);
-      setSortDir(field === 'revenuePerVisit' ? 'desc' : 'asc');
+      setSortDir(field === 'revenuePerVisit' || field === 'margin' || field === 'visits' || field === 'staffCost' ? 'desc' : 'asc');
+    }
+  };
+
+  const handleExport = () => {
+    setExporting(true);
+    try {
+      const exportData = sorted.map(r => ({
+        'Service': r.sessionTypeName,
+        'Pricing Option': r.pricingOptionName,
+        'Staff': r.staffName,
+        'Revenue / Visit': Number(r.revenuePerVisit.toFixed(2)),
+        'Staff Cost': Number(r.staffCost.toFixed(2)),
+        'Margin': Number(r.margin.toFixed(2)),
+        'Margin %': `${r.marginPercent.toFixed(1)}%`,
+        'Visits': r.visits,
+      }));
+      exportToExcel(exportData, `service_pricelist_${dateRange.start}_to_${dateRange.end}`);
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -194,30 +140,30 @@ export function ServicePricelistTab({ onNavigate }: ServicePricelistTabProps) {
   );
 
   if (loading) {
-    return <div className="flex items-center justify-center h-64 text-slate-500">Loading pricelist data...</div>;
+    return <div className="flex items-center justify-center h-64 text-slate-500">Loading...</div>;
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 flex-wrap">
         <select
           value={filterCategory}
           onChange={(e) => setFilterCategory(e.target.value)}
           className="px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white text-sm"
         >
-          <option value="all">All Categories</option>
+          <option value="all">All Services</option>
           {categories.map(cat => (
             <option key={cat} value={cat}>{cat}</option>
           ))}
         </select>
-        <span className="text-sm text-slate-500">{sorted.length} combinations</span>
+        <span className="text-sm text-slate-500">{sorted.length} rows</span>
         <button
-          onClick={loadData}
-          disabled={loading}
-          className="flex items-center gap-2 px-3 py-2 text-sm bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors disabled:opacity-50 ml-auto"
+          onClick={handleExport}
+          disabled={exporting || sorted.length === 0}
+          className="flex items-center gap-2 px-4 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors ml-auto"
         >
-          <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
+          <Download className={`w-3.5 h-3.5 ${exporting ? 'animate-pulse' : ''}`} />
+          Export Excel
         </button>
       </div>
 
@@ -227,78 +173,43 @@ export function ServicePricelistTab({ onNavigate }: ServicePricelistTabProps) {
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 <SortHeader field="sessionTypeName" label="Service" />
-                <th className="px-4 py-3 text-left font-semibold text-slate-600">Category</th>
                 <SortHeader field="pricingOptionName" label="Pricing Option" />
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Package</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Sessions</th>
+                <SortHeader field="staffName" label="Staff" />
                 <SortHeader field="revenuePerVisit" label="Revenue / Visit" align="right" />
-                <th className="px-4 py-3 text-left font-semibold text-slate-600">Staff</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Staff Cost</th>
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Margin</th>
+                <SortHeader field="staffCost" label="Staff Cost" align="right" />
+                <SortHeader field="margin" label="Margin" align="right" />
                 <th className="px-4 py-3 text-right font-semibold text-slate-600">Margin %</th>
+                <SortHeader field="visits" label="Visits" align="right" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {sorted.map((row, idx) => {
-                if (row.staffEntries.length === 0) {
-                  return (
-                    <tr key={`${row.sessionTypeId}-${row.pricingOptionId || 'none'}-${idx}`} className="hover:bg-slate-50">
-                      <td className="px-4 py-3 font-medium text-slate-900">{row.sessionTypeName}</td>
-                      <td className="px-4 py-3 text-xs text-slate-500">{row.categoryName}</td>
-                      <td className="px-4 py-3 text-slate-700">{row.pricingOptionName}</td>
-                      <td className="px-4 py-3 text-right text-slate-600">
-                        {row.packagePrice > 0 ? formatCurrency(row.packagePrice) : '-'}
-                      </td>
-                      <td className="px-4 py-3 text-right text-slate-500">{row.sessionCount || '-'}</td>
-                      <td className="px-4 py-3 text-right font-medium text-blue-600">
-                        {row.revenuePerVisit > 0 ? formatCurrency(row.revenuePerVisit) : '-'}
-                      </td>
-                      <td className="px-4 py-3 text-slate-400 italic text-xs">no staff assigned</td>
-                      <td className="px-4 py-3 text-right text-slate-400">-</td>
-                      <td className="px-4 py-3 text-right text-slate-400">-</td>
-                      <td className="px-4 py-3 text-right text-slate-400">-</td>
-                    </tr>
-                  );
-                }
-
-                return row.staffEntries.map((se, seIdx) => (
-                  <tr
-                    key={`${row.sessionTypeId}-${row.pricingOptionId || 'none'}-${se.staffId}-${idx}`}
-                    className="hover:bg-slate-50"
-                  >
-                    {seIdx === 0 ? (
-                      <>
-                        <td className="px-4 py-2 font-medium text-slate-900" rowSpan={row.staffEntries.length}>
-                          {row.sessionTypeName}
-                        </td>
-                        <td className="px-4 py-2 text-xs text-slate-500" rowSpan={row.staffEntries.length}>
-                          {row.categoryName}
-                        </td>
-                        <td className="px-4 py-2 text-slate-700" rowSpan={row.staffEntries.length}>
-                          {row.pricingOptionName}
-                        </td>
-                        <td className="px-4 py-2 text-right text-slate-600" rowSpan={row.staffEntries.length}>
-                          {row.packagePrice > 0 ? formatCurrency(row.packagePrice) : '-'}
-                        </td>
-                        <td className="px-4 py-2 text-right text-slate-500" rowSpan={row.staffEntries.length}>
-                          {row.sessionCount || '-'}
-                        </td>
-                        <td className="px-4 py-2 text-right font-medium text-blue-600" rowSpan={row.staffEntries.length}>
-                          {row.revenuePerVisit > 0 ? formatCurrency(row.revenuePerVisit) : '-'}
-                        </td>
-                      </>
-                    ) : null}
-                    <td className="px-4 py-2 text-slate-700">{se.staffName}</td>
-                    <td className="px-4 py-2 text-right text-amber-600">{formatCurrency(se.staffCost)}</td>
-                    <td className={`px-4 py-2 text-right font-semibold ${se.margin >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                      {row.revenuePerVisit > 0 ? formatCurrency(se.margin) : '-'}
-                    </td>
-                    <td className={`px-4 py-2 text-right ${se.margin >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                      {row.revenuePerVisit > 0 ? `${se.marginPercent.toFixed(1)}%` : '-'}
-                    </td>
-                  </tr>
-                ));
-              })}
+              {sorted.map(row => (
+                <tr key={row.key} className="hover:bg-slate-50">
+                  <td className="px-4 py-2.5 font-medium text-slate-900">{row.sessionTypeName}</td>
+                  <td className="px-4 py-2.5 text-slate-700">{row.pricingOptionName}</td>
+                  <td className="px-4 py-2.5 text-slate-700">{row.staffName}</td>
+                  <td className="px-4 py-2.5 text-right font-medium text-blue-600">
+                    {formatCurrency(row.revenuePerVisit)}
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-amber-600">
+                    {formatCurrency(row.staffCost)}
+                  </td>
+                  <td className={`px-4 py-2.5 text-right font-semibold ${row.margin >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {formatCurrency(row.margin)}
+                  </td>
+                  <td className={`px-4 py-2.5 text-right ${row.margin >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {row.marginPercent.toFixed(1)}%
+                  </td>
+                  <td className="px-4 py-2.5 text-right text-slate-600">{row.visits}</td>
+                </tr>
+              ))}
+              {sorted.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
+                    No appointment data with revenue info for this period
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

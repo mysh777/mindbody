@@ -215,9 +215,9 @@ function StaffRow({
                     <th className="px-6 py-2 text-left">Service</th>
                     <th className="px-4 py-2 text-right">Visits</th>
                     <th className="px-4 py-2 text-right">Revenue</th>
-                    <th className="px-4 py-2 text-right">Cost</th>
+                    <th className="px-4 py-2 text-right">Staff Cost</th>
                     <th className="px-4 py-2 text-right">Margin</th>
-                    <th className="px-4 py-2 text-right">N/A</th>
+                    <th className="px-4 py-2 text-right">No Data</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">

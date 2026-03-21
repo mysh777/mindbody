@@ -17,6 +17,7 @@ export interface AppointmentRow {
   clientName: string;
   sessionTypeName: string;
   locationName: string;
+  pricingOptionName: string;
   revenue: number | null;
   staffCost: number;
   margin: number | null;
@@ -75,12 +76,15 @@ export interface ByStaffRow {
   visitsNoData: number;
 }
 
+export type AppointmentStatusFilter = 'Completed' | 'Booked' | 'all';
+
 interface UseSalesMarginDataProps {
   dateRange: DateRange;
   selectedLocation: string;
+  statusFilter?: AppointmentStatusFilter;
 }
 
-export function useSalesMarginData({ dateRange, selectedLocation }: UseSalesMarginDataProps) {
+export function useSalesMarginData({ dateRange, selectedLocation, statusFilter = 'Completed' }: UseSalesMarginDataProps) {
   const [loading, setLoading] = useState(false);
   const [appointments, setAppointments] = useState<AppointmentRow[]>([]);
   const [sales, setSales] = useState<SaleRow[]>([]);
@@ -110,8 +114,13 @@ export function useSalesMarginData({ dateRange, selectedLocation }: UseSalesMarg
         .from('appointments')
         .select('id, client_id, staff_id, session_type_id, location_id, start_datetime, status, client_service_id')
         .gte('start_datetime', dateRange.start)
-        .lte('start_datetime', dateRange.end + 'T23:59:59')
-        .eq('status', 'Completed');
+        .lte('start_datetime', dateRange.end + 'T23:59:59');
+
+      if (statusFilter === 'all') {
+        apptQuery = apptQuery.in('status', ['Completed', 'Booked']);
+      } else {
+        apptQuery = apptQuery.eq('status', statusFilter);
+      }
 
       if (selectedLocation !== 'all') {
         apptQuery = apptQuery.eq('location_id', selectedLocation);
@@ -145,6 +154,7 @@ export function useSalesMarginData({ dateRange, selectedLocation }: UseSalesMarg
         const csEntry = a.client_service_id ? csRevenueMap[a.client_service_id] : null;
         let noDataReason: NoDataReason = 'ok';
         let rev: number | null = null;
+        let poName = '';
 
         if (!a.client_service_id) {
           noDataReason = 'no_client_service';
@@ -153,6 +163,7 @@ export function useSalesMarginData({ dateRange, selectedLocation }: UseSalesMarg
         } else {
           rev = csEntry.revenue;
           noDataReason = csEntry.reason;
+          poName = csEntry.pricingOptionName;
         }
 
         const hasRevenueData = rev !== null;
@@ -182,6 +193,7 @@ export function useSalesMarginData({ dateRange, selectedLocation }: UseSalesMarg
           clientName: a.client_id ? clientsMap[a.client_id] || a.client_id : '-',
           sessionTypeName: a.session_type_id ? sessionTypesMap[a.session_type_id]?.name || a.session_type_id : '-',
           locationName: a.location_id ? locationsMap[a.location_id] || a.location_id : '-',
+          pricingOptionName: poName,
           revenue: hasRevenueData ? rev! : null,
           staffCost: cost,
           margin: hasRevenueData ? rev! - cost : null,
@@ -313,7 +325,7 @@ export function useSalesMarginData({ dateRange, selectedLocation }: UseSalesMarg
     } finally {
       setLoading(false);
     }
-  }, [dateRange, selectedLocation]);
+  }, [dateRange, selectedLocation, statusFilter]);
 
   useEffect(() => {
     loadData();
@@ -382,15 +394,16 @@ async function loadStaffRatesMap(): Promise<Record<string, number>> {
   return map;
 }
 
-async function loadPricingMap(): Promise<Record<string, { price: number; sessionCount: number }>> {
-  const map: Record<string, { price: number; sessionCount: number }> = {};
+async function loadPricingMap(): Promise<Record<string, { price: number; sessionCount: number; name: string }>> {
+  const map: Record<string, { price: number; sessionCount: number; name: string }> = {};
   const { data } = await supabase
     .from('pricing_options')
-    .select('id, price, session_count');
+    .select('id, name, price, session_count');
   (data || []).forEach(po => {
     map[po.id] = {
       price: Number(po.price) || 0,
       sessionCount: po.session_count || 1,
+      name: po.name || '',
     };
   });
   return map;
@@ -399,11 +412,12 @@ async function loadPricingMap(): Promise<Record<string, { price: number; session
 interface CsRevenueEntry {
   revenue: number | null;
   reason: NoDataReason;
+  pricingOptionName: string;
 }
 
 async function loadClientServiceRevenue(
   clientServiceIds: string[],
-  pricingMap: Record<string, { price: number; sessionCount: number }>
+  pricingMap: Record<string, { price: number; sessionCount: number; name: string }>
 ): Promise<Record<string, CsRevenueEntry>> {
   const revenueMap: Record<string, CsRevenueEntry> = {};
   if (clientServiceIds.length === 0) return revenueMap;
@@ -421,7 +435,7 @@ async function loadClientServiceRevenue(
 
     batch.forEach(id => {
       if (!foundIds.has(id)) {
-        revenueMap[id] = { revenue: null, reason: 'cs_not_synced' };
+        revenueMap[id] = { revenue: null, reason: 'cs_not_synced', pricingOptionName: '' };
       }
     });
 
@@ -431,9 +445,10 @@ async function loadClientServiceRevenue(
         revenueMap[cs.mindbody_id!] = {
           revenue: po.sessionCount > 0 ? po.price / po.sessionCount : po.price,
           reason: 'ok',
+          pricingOptionName: po.name,
         };
       } else {
-        revenueMap[cs.mindbody_id!] = { revenue: null, reason: 'no_pricing_option' };
+        revenueMap[cs.mindbody_id!] = { revenue: null, reason: 'no_pricing_option', pricingOptionName: '' };
       }
     });
   }
