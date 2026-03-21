@@ -1,7 +1,14 @@
 import { useState, useMemo } from 'react';
 import { ChevronDown, ChevronRight, AlertTriangle, ArrowUpDown } from 'lucide-react';
 import { formatCurrency } from '../utils/salesFilters';
-import type { ByServiceRow, AppointmentRow } from '../hooks/useSalesMarginData';
+import type { ByServiceRow, AppointmentRow, NoDataReason } from '../hooks/useSalesMarginData';
+
+const noDataLabel: Record<NoDataReason, string> = {
+  ok: '',
+  cs_not_synced: 'no data (service not synced)',
+  no_pricing_option: 'no data (no pricing option)',
+  no_client_service: 'no data (no service linked)',
+};
 
 interface ByServiceTabProps {
   loading: boolean;
@@ -203,7 +210,7 @@ function ServiceRow({
                     <th className="px-4 py-2 text-left">Staff</th>
                     <th className="px-4 py-2 text-left">Location</th>
                     <th className="px-4 py-2 text-right">Revenue</th>
-                    <th className="px-4 py-2 text-right">Cost</th>
+                    <th className="px-4 py-2 text-right">Staff Cost</th>
                     <th className="px-4 py-2 text-right">Margin</th>
                   </tr>
                 </thead>
@@ -231,7 +238,7 @@ function ServiceRow({
                         {a.hasRevenueData ? (
                           <span className="text-blue-600">{formatCurrency(a.revenue!)}</span>
                         ) : (
-                          <span className="text-amber-500 italic">N/A</span>
+                          <span className="text-amber-500 italic text-[10px]">{noDataLabel[a.noDataReason]}</span>
                         )}
                       </td>
                       <td className="px-4 py-1.5 text-right font-mono text-amber-600">
@@ -243,7 +250,7 @@ function ServiceRow({
                             {formatCurrency(a.margin!)}
                           </span>
                         ) : (
-                          <span className="text-amber-500 italic">N/A</span>
+                          <span className="text-amber-500 italic text-[10px]">{noDataLabel[a.noDataReason]}</span>
                         )}
                       </td>
                     </tr>

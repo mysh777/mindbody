@@ -137,11 +137,22 @@ export function SalesOverviewTab({ loading, summary, appointments, sales }: Sale
   return (
     <div className="space-y-6">
       {summary.appointmentsNoData > 0 && (
-        <div className="flex items-center gap-2 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          <span>
-            {summary.appointmentsNoData} of {summary.totalAppointments} visits have no pricing data linked. Revenue calculations are partial.
-          </span>
+        <div className="px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700 space-y-1">
+          <div className="flex items-center gap-2 font-medium">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+            No data: {summary.appointmentsNoData} of {summary.totalAppointments} completed visits have no revenue data
+          </div>
+          <ul className="ml-6 text-xs space-y-0.5 text-amber-600">
+            {summary.noDataCsNotSynced > 0 && (
+              <li>{summary.noDataCsNotSynced} -- client service not synced (missing from client_services table)</li>
+            )}
+            {summary.noDataNoPricingOption > 0 && (
+              <li>{summary.noDataNoPricingOption} -- client service has no pricing option linked</li>
+            )}
+            {summary.noDataNoClientService > 0 && (
+              <li>{summary.noDataNoClientService} -- appointment has no client_service_id</li>
+            )}
+          </ul>
         </div>
       )}
 
@@ -167,7 +178,7 @@ export function SalesOverviewTab({ loading, summary, appointments, sales }: Sale
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-          <h3 className="text-lg font-semibold text-slate-900 mb-4">Margin by Staff</h3>
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">Revenue & Staff Cost by Staff</h3>
           {marginByStaff.length === 0 ? (
             <div className="h-64 flex items-center justify-center text-slate-500">No data</div>
           ) : (

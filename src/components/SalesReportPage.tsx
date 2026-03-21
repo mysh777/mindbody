@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { RefreshCw, Download, BarChart3, Layers, Users, Clock } from 'lucide-react';
+import { RefreshCw, Download, BarChart3, Layers, Users, Clock, ListChecks } from 'lucide-react';
 import { SalesFilterBar } from './SalesFilterBar';
 import { SalesOverviewTab } from './SalesOverviewTab';
 import { ByServiceTab } from './ByServiceTab';
 import { ByStaffTab } from './ByStaffTab';
 import { ExpiredServicesTab } from './ExpiredServicesTab';
+import { ServicePricelistTab } from './ServicePricelistTab';
 import { useSalesMarginData } from '../hooks/useSalesMarginData';
 import { getFilterPresetDates, formatCurrency } from '../utils/salesFilters';
 import { exportToExcel } from '../utils/exportExcel';
@@ -13,12 +14,13 @@ interface SalesReportPageProps {
   onNavigate?: (tableName: string, id: string) => void;
 }
 
-type Tab = 'overview' | 'by-service' | 'by-staff' | 'expired';
+type Tab = 'overview' | 'by-service' | 'by-staff' | 'pricelist' | 'expired';
 
 const tabs: { id: Tab; label: string; icon: typeof BarChart3 }[] = [
   { id: 'overview', label: 'Overview', icon: BarChart3 },
   { id: 'by-service', label: 'By Service', icon: Layers },
   { id: 'by-staff', label: 'By Staff', icon: Users },
+  { id: 'pricelist', label: 'Service Pricelist', icon: ListChecks },
   { id: 'expired', label: 'Expired Services', icon: Clock },
 ];
 
@@ -90,7 +92,7 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
             </p>
           </div>
           <div className="flex gap-2">
-            {activeTab !== 'expired' && (
+            {activeTab !== 'expired' && activeTab !== 'pricelist' && (
               <button
                 onClick={handleExport}
                 disabled={exporting || loading}
@@ -113,7 +115,7 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
       </div>
 
       <div className="p-6 space-y-6">
-        {activeTab !== 'expired' && (
+        {activeTab !== 'expired' && activeTab !== 'pricelist' && (
           <SalesFilterBar
             dateRange={dateRange}
             onDateRangeChange={setDateRange}
@@ -167,6 +169,10 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
             appointments={appointments}
             onNavigate={onNavigate}
           />
+        )}
+
+        {activeTab === 'pricelist' && (
+          <ServicePricelistTab onNavigate={onNavigate} />
         )}
 
         {activeTab === 'expired' && (

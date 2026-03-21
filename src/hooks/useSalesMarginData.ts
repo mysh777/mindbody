@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { DateRange } from '../utils/salesFilters';
 
+export type NoDataReason = 'ok' | 'cs_not_synced' | 'no_pricing_option' | 'no_client_service';
+
 export interface AppointmentRow {
   id: string;
   client_id: string | null;
@@ -19,6 +21,7 @@ export interface AppointmentRow {
   staffCost: number;
   margin: number | null;
   hasRevenueData: boolean;
+  noDataReason: NoDataReason;
 }
 
 export interface SaleRow {
@@ -43,6 +46,9 @@ export interface MarginSummary {
   totalAppointments: number;
   appointmentsWithData: number;
   appointmentsNoData: number;
+  noDataCsNotSynced: number;
+  noDataNoPricingOption: number;
+  noDataNoClientService: number;
 }
 
 export interface ByServiceRow {
@@ -82,6 +88,7 @@ export function useSalesMarginData({ dateRange, selectedLocation }: UseSalesMarg
     cashIn: 0, revenueEarned: 0, staffCost: 0, grossMargin: 0,
     marginPercent: 0, deferredRevenue: 0, avgMarginPerVisit: 0,
     totalAppointments: 0, appointmentsWithData: 0, appointmentsNoData: 0,
+    noDataCsNotSynced: 0, noDataNoPricingOption: 0, noDataNoClientService: 0,
   });
   const [byService, setByService] = useState<ByServiceRow[]>([]);
   const [byStaff, setByStaff] = useState<ByStaffRow[]>([]);
@@ -104,7 +111,7 @@ export function useSalesMarginData({ dateRange, selectedLocation }: UseSalesMarg
         .select('id, client_id, staff_id, session_type_id, location_id, start_datetime, status, client_service_id')
         .gte('start_datetime', dateRange.start)
         .lte('start_datetime', dateRange.end + 'T23:59:59')
-        .neq('status', 'Cancelled');
+        .eq('status', 'Completed');
 
       if (selectedLocation !== 'all') {
         apptQuery = apptQuery.eq('location_id', selectedLocation);
@@ -135,7 +142,19 @@ export function useSalesMarginData({ dateRange, selectedLocation }: UseSalesMarg
       }
 
       const processedAppts: AppointmentRow[] = (apptData || []).map(a => {
-        const rev = a.client_service_id ? (csRevenueMap[a.client_service_id] ?? null) : null;
+        const csEntry = a.client_service_id ? csRevenueMap[a.client_service_id] : null;
+        let noDataReason: NoDataReason = 'ok';
+        let rev: number | null = null;
+
+        if (!a.client_service_id) {
+          noDataReason = 'no_client_service';
+        } else if (!csEntry) {
+          noDataReason = 'cs_not_synced';
+        } else {
+          rev = csEntry.revenue;
+          noDataReason = csEntry.reason;
+        }
+
         const hasRevenueData = rev !== null;
 
         let cost = 0;
@@ -167,6 +186,7 @@ export function useSalesMarginData({ dateRange, selectedLocation }: UseSalesMarg
           staffCost: cost,
           margin: hasRevenueData ? rev! - cost : null,
           hasRevenueData,
+          noDataReason,
         };
       });
 
@@ -213,6 +233,7 @@ export function useSalesMarginData({ dateRange, selectedLocation }: UseSalesMarg
 
       const totalCashIn = processedSales.reduce((sum, s) => sum + s.total, 0);
       const apptsWithData = processedAppts.filter(a => a.hasRevenueData);
+      const apptsNoData = processedAppts.filter(a => !a.hasRevenueData);
       const totalRevenue = apptsWithData.reduce((sum, a) => sum + (a.revenue || 0), 0);
       const totalStaffCost = processedAppts.reduce((sum, a) => sum + a.staffCost, 0);
       const grossMargin = totalRevenue - totalStaffCost;
@@ -227,7 +248,10 @@ export function useSalesMarginData({ dateRange, selectedLocation }: UseSalesMarg
         avgMarginPerVisit: apptsWithData.length > 0 ? grossMargin / apptsWithData.length : 0,
         totalAppointments: processedAppts.length,
         appointmentsWithData: apptsWithData.length,
-        appointmentsNoData: processedAppts.length - apptsWithData.length,
+        appointmentsNoData: apptsNoData.length,
+        noDataCsNotSynced: apptsNoData.filter(a => a.noDataReason === 'cs_not_synced').length,
+        noDataNoPricingOption: apptsNoData.filter(a => a.noDataReason === 'no_pricing_option').length,
+        noDataNoClientService: apptsNoData.filter(a => a.noDataReason === 'no_client_service').length,
       });
 
       const serviceMap: Record<string, ByServiceRow> = {};
@@ -372,11 +396,16 @@ async function loadPricingMap(): Promise<Record<string, { price: number; session
   return map;
 }
 
+interface CsRevenueEntry {
+  revenue: number | null;
+  reason: NoDataReason;
+}
+
 async function loadClientServiceRevenue(
   clientServiceIds: string[],
   pricingMap: Record<string, { price: number; sessionCount: number }>
-): Promise<Record<string, number | null>> {
-  const revenueMap: Record<string, number | null> = {};
+): Promise<Record<string, CsRevenueEntry>> {
+  const revenueMap: Record<string, CsRevenueEntry> = {};
   if (clientServiceIds.length === 0) return revenueMap;
 
   const uniqueIds = [...new Set(clientServiceIds)];
@@ -388,12 +417,23 @@ async function loadClientServiceRevenue(
       .select('mindbody_id, pricing_option_id')
       .in('mindbody_id', batch);
 
+    const foundIds = new Set((data || []).map(cs => cs.mindbody_id));
+
+    batch.forEach(id => {
+      if (!foundIds.has(id)) {
+        revenueMap[id] = { revenue: null, reason: 'cs_not_synced' };
+      }
+    });
+
     (data || []).forEach(cs => {
       if (cs.pricing_option_id && pricingMap[cs.pricing_option_id]) {
         const po = pricingMap[cs.pricing_option_id];
-        revenueMap[cs.mindbody_id!] = po.sessionCount > 0 ? po.price / po.sessionCount : po.price;
+        revenueMap[cs.mindbody_id!] = {
+          revenue: po.sessionCount > 0 ? po.price / po.sessionCount : po.price,
+          reason: 'ok',
+        };
       } else {
-        revenueMap[cs.mindbody_id!] = null;
+        revenueMap[cs.mindbody_id!] = { revenue: null, reason: 'no_pricing_option' };
       }
     });
   }
