@@ -537,7 +537,11 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig) {
     return 0;
   }
 
+  console.log(`[SST] Will query staffsessiontypes for ${allStaff.length} staff members`);
+
   let totalSynced = 0;
+  let totalApiItems = 0;
+  let totalSkippedNoMatch = 0;
 
   for (const staff of allStaff) {
     const url = `${MINDBODY_BASE_URL}/staff/staffsessiontypes?staffId=${staff.mindbody_id}`;
@@ -550,6 +554,8 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig) {
     const durationMs = Date.now() - startTime;
     const responseText = await response.text();
 
+    console.log(`[SST] Staff ${staff.mindbody_id} | HTTP ${response.status} | ${responseText.length} bytes | ${durationMs}ms`);
+
     let data;
     let error = null;
     try {
@@ -557,35 +563,51 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig) {
     } catch (e) {
       error = `Failed to parse response: ${e.message}`;
       data = {};
+      console.error(`[SST] Staff ${staff.mindbody_id} | PARSE ERROR: ${e.message}`);
+      console.error(`[SST] Raw response (first 500 chars): ${responseText.substring(0, 500)}`);
     }
 
-    await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
+    await logApiCall(supabase, url, "GET", { staffId: staff.mindbody_id }, response.status, data, error, durationMs);
 
     if (!response.ok) {
-      console.error(`Failed to fetch session types for staff ${staff.mindbody_id}: ${response.status}`);
+      console.error(`[SST] Staff ${staff.mindbody_id} | API ERROR ${response.status}: ${responseText.substring(0, 300)}`);
       continue;
     }
 
+    const topLevelKeys = Object.keys(data);
+    console.log(`[SST] Staff ${staff.mindbody_id} | Response top-level keys: ${topLevelKeys.join(', ')}`);
+
     const staffSessionTypes = data.StaffSessionTypes || [];
-    console.log(`Found ${staffSessionTypes.length} session types for staff ${staff.mindbody_id}`);
+    console.log(`[SST] Staff ${staff.mindbody_id} | StaffSessionTypes array length: ${staffSessionTypes.length}`);
+    totalApiItems += staffSessionTypes.length;
+
     if (staffSessionTypes.length > 0) {
-      console.log(`Sample SST keys: ${Object.keys(staffSessionTypes[0]).join(', ')}`);
+      const firstItem = staffSessionTypes[0];
+      console.log(`[SST] Staff ${staff.mindbody_id} | FIRST ITEM KEYS: ${Object.keys(firstItem).join(', ')}`);
+      console.log(`[SST] Staff ${staff.mindbody_id} | FIRST ITEM JSON: ${JSON.stringify(firstItem)}`);
     }
 
+    await saveRawData(supabase, `staff_session_types_staff_${staff.mindbody_id}`, data, staffSessionTypes.length, null);
+
     for (const sst of staffSessionTypes) {
+      const sstId = sst.Id ?? sst.SessionTypeId ?? sst.id;
+      console.log(`[SST] Staff ${staff.mindbody_id} | Processing item: Id=${sst.Id}, SessionTypeId=${sst.SessionTypeId}, id=${sst.id} -> lookup mindbody_id=${sstId}`);
+
       const { data: sessionType } = await supabase
         .from("session_types")
         .select("id")
-        .eq("mindbody_id", String(sst.Id))
+        .eq("mindbody_id", String(sstId))
         .maybeSingle();
 
       if (!sessionType) {
-        console.warn(`Session type ${sst.Id} not found in database`);
+        totalSkippedNoMatch++;
+        console.warn(`[SST] Staff ${staff.mindbody_id} | Session type mindbody_id=${sstId} NOT FOUND in DB - skipping`);
         continue;
       }
 
-      const payRate = sst.PayRate ?? sst.PayRateAmount ?? sst.Pay ?? sst.payRate ?? 0;
+      const payRate = sst.PayRate ?? sst.PayRateAmount ?? sst.Pay ?? sst.payRate ?? sst.Rate ?? 0;
       const timeLength = sst.TimeLength ?? sst.DefaultTimeLength ?? sst.StaffTimeLength ?? null;
+      console.log(`[SST] Staff ${staff.mindbody_id} | ST ${sstId} -> payRate=${payRate}, timeLength=${timeLength}`);
 
       const relationId = `${staff.id}_${sessionType.id}`;
       const relationData = {
@@ -600,13 +622,23 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig) {
         updated_at: new Date().toISOString(),
       };
 
-      await supabase.from("staff_session_types").upsert(relationData, {
+      const { error: upsertErr } = await supabase.from("staff_session_types").upsert(relationData, {
         onConflict: "id",
       });
 
-      totalSynced++;
+      if (upsertErr) {
+        console.error(`[SST] Upsert error for ${relationId}: ${upsertErr.message}`);
+      } else {
+        totalSynced++;
+      }
     }
   }
+
+  console.log(`[SST] === SUMMARY ===`);
+  console.log(`[SST] Staff queried: ${allStaff.length}`);
+  console.log(`[SST] Total API items received: ${totalApiItems}`);
+  console.log(`[SST] Skipped (no session_type match): ${totalSkippedNoMatch}`);
+  console.log(`[SST] Successfully upserted: ${totalSynced}`);
 
   return totalSynced;
 }
