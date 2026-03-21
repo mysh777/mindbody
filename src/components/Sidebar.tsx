@@ -63,7 +63,7 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
     { id: 'appointments', label: 'Appointments', icon: Calendar, dividerBefore: true },
     { id: 'client-services', label: 'Client Services', icon: Package },
     { id: 'sales', label: 'Sales Journal', icon: DollarSign, dividerBefore: true },
-    { id: 'sales-report', label: 'Sales Report', icon: PieChart },
+    { id: 'sales-report', label: 'Profitability', icon: PieChart },
     { id: 'sales-by-pricing', label: 'Sales by Pricing', icon: FileText },
     { id: 'transactions', label: 'Transactions', icon: ShoppingBag },
     { id: 'sale-items', label: 'Sale Items', icon: FileText },
