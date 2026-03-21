@@ -527,120 +527,245 @@ async function syncServiceCategories(supabase: any, config: MindbodyConfig) {
   return totalCategories + totalSubcategories;
 }
 
-async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig) {
-  console.log('Syncing staff session types (staff-service relationships)');
+function extractSessionTypeId(sst: any): string | null {
+  const val = sst.SessionTypeId ?? sst.SessionType?.Id ?? sst.Id ?? null;
+  return val != null ? String(val) : null;
+}
 
-  const { data: allStaff } = await supabase.from("staff").select("id, mindbody_id");
+function extractPayRate(sst: any): number {
+  const candidates = [
+    sst.PayRate,
+    sst.PayRateAmount,
+    sst.Pay,
+    sst.payRate,
+    sst.Rate,
+    sst.PayRate?.Amount,
+  ];
+  for (const c of candidates) {
+    if (c != null && !isNaN(Number(c))) return Number(c);
+  }
+  return 0;
+}
 
-  if (!allStaff || allStaff.length === 0) {
-    console.warn('No staff found. Run staff sync first.');
-    return 0;
+function extractTimeLength(sst: any): number | null {
+  const candidates = [
+    sst.TimeLength,
+    sst.DefaultTimeLength,
+    sst.StaffTimeLength,
+    sst.SessionType?.DefaultTimeLength,
+  ];
+  for (const c of candidates) {
+    if (c != null && !isNaN(Number(c))) return Number(c);
+  }
+  return null;
+}
+
+const TECHNICAL_STAFF_NAMES = ['client', 'autoemail', 'auto email', 'system', 'default', 'test'];
+
+function isRealStaff(s: any): boolean {
+  const mbId = Number(s.mindbody_id);
+  if (isNaN(mbId) || mbId <= 0) return false;
+  const fullName = `${s.first_name || ''} ${s.last_name || ''}`.toLowerCase().trim();
+  for (const tech of TECHNICAL_STAFF_NAMES) {
+    if (fullName === tech || fullName.startsWith(tech + ' ')) return false;
+  }
+  return true;
+}
+
+async function fetchStaffSessionTypesFromApi(
+  supabase: any,
+  config: MindbodyConfig,
+  userToken: string,
+  mindbodyStaffId: string,
+): Promise<{ ok: boolean; items: any[]; raw: any; error?: string }> {
+  const url = `${MINDBODY_BASE_URL}/staff/sessiontypes?request.staffId=${mindbodyStaffId}&request.limit=200&request.offset=0`;
+  const startTime = Date.now();
+
+  const response = await fetch(url, {
+    headers: getUserHeaders(config, userToken),
+  });
+
+  const durationMs = Date.now() - startTime;
+  const responseText = await response.text();
+
+  console.log(`[SST] Staff ${mindbodyStaffId} | HTTP ${response.status} | ${responseText.length} bytes | ${durationMs}ms`);
+
+  let data: any;
+  let parseError: string | null = null;
+  try {
+    data = JSON.parse(responseText);
+  } catch (e: any) {
+    parseError = `Failed to parse response: ${e.message}`;
+    data = {};
+    console.error(`[SST] Staff ${mindbodyStaffId} | PARSE ERROR: ${e.message}`);
   }
 
-  console.log(`[SST] Will query staffsessiontypes for ${allStaff.length} staff members`);
+  await logApiCall(supabase, url, "GET", { staffId: mindbodyStaffId }, response.status, data, parseError, durationMs);
 
-  let totalSynced = 0;
-  let totalApiItems = 0;
-  let totalSkippedNoMatch = 0;
+  if (!response.ok) {
+    console.error(`[SST] Staff ${mindbodyStaffId} | API ERROR ${response.status}: ${responseText.substring(0, 300)}`);
+    return { ok: false, items: [], raw: data, error: `HTTP ${response.status}` };
+  }
 
-  for (const staff of allStaff) {
-    const url = `${MINDBODY_BASE_URL}/staff/staffsessiontypes?staffId=${staff.mindbody_id}`;
-    const startTime = Date.now();
+  await saveRawData(supabase, `staff_session_types_staff_${mindbodyStaffId}`, data, 0, data.PaginationResponse);
 
-    const response = await fetch(url, {
-      headers: getSourceHeaders(config),
-    });
+  const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
+  const items = arrayKey ? data[arrayKey] : [];
 
-    const durationMs = Date.now() - startTime;
-    const responseText = await response.text();
+  console.log(`[SST] Staff ${mindbodyStaffId} | Array key="${arrayKey || 'none'}" length=${items.length}`);
+  if (items.length > 0) {
+    console.log(`[SST] Staff ${mindbodyStaffId} | First item keys: ${Object.keys(items[0]).join(', ')}`);
+    console.log(`[SST] Staff ${mindbodyStaffId} | First item: ${JSON.stringify(items[0])}`);
+  }
 
-    console.log(`[SST] Staff ${staff.mindbody_id} | HTTP ${response.status} | ${responseText.length} bytes | ${durationMs}ms`);
+  return { ok: true, items, raw: data };
+}
 
-    let data;
-    let error = null;
-    try {
-      data = JSON.parse(responseText);
-    } catch (e) {
-      error = `Failed to parse response: ${e.message}`;
-      data = {};
-      console.error(`[SST] Staff ${staff.mindbody_id} | PARSE ERROR: ${e.message}`);
-      console.error(`[SST] Raw response (first 500 chars): ${responseText.substring(0, 500)}`);
-    }
+async function importStaffSessionItems(
+  supabase: any,
+  staffDbId: string,
+  mindbodyStaffId: string,
+  items: any[],
+): Promise<{ imported: number; skipped: number; errors: number }> {
+  let imported = 0;
+  let skipped = 0;
+  let errors = 0;
 
-    await logApiCall(supabase, url, "GET", { staffId: staff.mindbody_id }, response.status, data, error, durationMs);
-
-    if (!response.ok) {
-      console.error(`[SST] Staff ${staff.mindbody_id} | API ERROR ${response.status}: ${responseText.substring(0, 300)}`);
+  for (const sst of items) {
+    const sstId = extractSessionTypeId(sst);
+    if (!sstId) {
+      console.warn(`[SST] Staff ${mindbodyStaffId} | Could not extract session type ID from: ${JSON.stringify(sst).substring(0, 200)}`);
+      skipped++;
       continue;
     }
 
-    const topLevelKeys = Object.keys(data);
-    console.log(`[SST] Staff ${staff.mindbody_id} | Response top-level keys: ${topLevelKeys.join(', ')}`);
+    const { data: sessionType } = await supabase
+      .from("session_types")
+      .select("id")
+      .eq("mindbody_id", sstId)
+      .maybeSingle();
 
-    const staffSessionTypes = data.StaffSessionTypes || [];
-    console.log(`[SST] Staff ${staff.mindbody_id} | StaffSessionTypes array length: ${staffSessionTypes.length}`);
-    totalApiItems += staffSessionTypes.length;
-
-    if (staffSessionTypes.length > 0) {
-      const firstItem = staffSessionTypes[0];
-      console.log(`[SST] Staff ${staff.mindbody_id} | FIRST ITEM KEYS: ${Object.keys(firstItem).join(', ')}`);
-      console.log(`[SST] Staff ${staff.mindbody_id} | FIRST ITEM JSON: ${JSON.stringify(firstItem)}`);
+    if (!sessionType) {
+      console.warn(`[SST] Staff ${mindbodyStaffId} | Session type mindbody_id=${sstId} NOT FOUND in DB`);
+      skipped++;
+      continue;
     }
 
-    await saveRawData(supabase, `staff_session_types_staff_${staff.mindbody_id}`, data, staffSessionTypes.length, null);
+    const payRate = extractPayRate(sst);
+    const timeLength = extractTimeLength(sst);
+    console.log(`[SST] Staff ${mindbodyStaffId} | ST ${sstId} -> payRate=${payRate}, timeLength=${timeLength}`);
 
-    for (const sst of staffSessionTypes) {
-      const sstId = sst.Id ?? sst.SessionTypeId ?? sst.id;
-      console.log(`[SST] Staff ${staff.mindbody_id} | Processing item: Id=${sst.Id}, SessionTypeId=${sst.SessionTypeId}, id=${sst.id} -> lookup mindbody_id=${sstId}`);
+    const relationId = `${staffDbId}_${sessionType.id}`;
+    const relationData = {
+      id: relationId,
+      staff_id: staffDbId,
+      session_type_id: sessionType.id,
+      is_active: true,
+      pay_rate: payRate,
+      time_length: timeLength,
+      raw_data: sst,
+      synced_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
 
-      const { data: sessionType } = await supabase
-        .from("session_types")
-        .select("id")
-        .eq("mindbody_id", String(sstId))
-        .maybeSingle();
+    const { error: upsertErr } = await supabase.from("staff_session_types").upsert(relationData, {
+      onConflict: "staff_id,session_type_id",
+    });
 
-      if (!sessionType) {
-        totalSkippedNoMatch++;
-        console.warn(`[SST] Staff ${staff.mindbody_id} | Session type mindbody_id=${sstId} NOT FOUND in DB - skipping`);
-        continue;
-      }
-
-      const payRate = sst.PayRate ?? sst.PayRateAmount ?? sst.Pay ?? sst.payRate ?? sst.Rate ?? 0;
-      const timeLength = sst.TimeLength ?? sst.DefaultTimeLength ?? sst.StaffTimeLength ?? null;
-      console.log(`[SST] Staff ${staff.mindbody_id} | ST ${sstId} -> payRate=${payRate}, timeLength=${timeLength}`);
-
-      const relationId = `${staff.id}_${sessionType.id}`;
-      const relationData = {
-        id: relationId,
-        staff_id: staff.id,
-        session_type_id: sessionType.id,
-        is_active: true,
-        pay_rate: Number(payRate) || 0,
-        time_length: timeLength ? Number(timeLength) : null,
-        raw_data: sst,
-        synced_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error: upsertErr } = await supabase.from("staff_session_types").upsert(relationData, {
-        onConflict: "id",
-      });
-
-      if (upsertErr) {
-        console.error(`[SST] Upsert error for ${relationId}: ${upsertErr.message}`);
-      } else {
-        totalSynced++;
-      }
+    if (upsertErr) {
+      console.error(`[SST] Upsert error for ${relationId}: ${upsertErr.message}`);
+      errors++;
+    } else {
+      imported++;
     }
   }
 
-  console.log(`[SST] === SUMMARY ===`);
-  console.log(`[SST] Staff queried: ${allStaff.length}`);
-  console.log(`[SST] Total API items received: ${totalApiItems}`);
-  console.log(`[SST] Skipped (no session_type match): ${totalSkippedNoMatch}`);
-  console.log(`[SST] Successfully upserted: ${totalSynced}`);
+  return { imported, skipped, errors };
+}
 
-  return totalSynced;
+async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, userToken: string) {
+  console.log('[SST] Syncing staff session types via /staff/sessiontypes');
+
+  const { data: allStaff } = await supabase
+    .from("staff")
+    .select("id, mindbody_id, first_name, last_name");
+
+  if (!allStaff || allStaff.length === 0) {
+    console.warn('[SST] No staff found. Run staff sync first.');
+    return { testedStaff: 0, staffWithData: 0, importedRows: 0, emptyStaff: 0, failedStaff: 0 };
+  }
+
+  const realStaff = allStaff.filter(isRealStaff);
+  console.log(`[SST] Total staff: ${allStaff.length}, real staff after filtering: ${realStaff.length}`);
+
+  let testedStaff = 0;
+  let staffWithData = 0;
+  let importedRows = 0;
+  let emptyStaff = 0;
+  let failedStaff = 0;
+
+  for (const staff of realStaff) {
+    testedStaff++;
+    const result = await fetchStaffSessionTypesFromApi(supabase, config, userToken, staff.mindbody_id);
+
+    if (!result.ok) {
+      failedStaff++;
+      continue;
+    }
+
+    if (result.items.length === 0) {
+      emptyStaff++;
+      continue;
+    }
+
+    staffWithData++;
+    const importResult = await importStaffSessionItems(supabase, staff.id, staff.mindbody_id, result.items);
+    importedRows += importResult.imported;
+  }
+
+  const stats = { testedStaff, staffWithData, importedRows, emptyStaff, failedStaff };
+  console.log(`[SST] === SUMMARY ===`);
+  console.log(`[SST] ${JSON.stringify(stats)}`);
+  return stats;
+}
+
+async function syncStaffServicesOne(
+  supabase: any,
+  config: MindbodyConfig,
+  userToken: string,
+  targetStaffId: string,
+) {
+  console.log(`[SST-ONE] Single staff sync for mindbody_id=${targetStaffId}`);
+
+  const { data: staffRow } = await supabase
+    .from("staff")
+    .select("id, mindbody_id, first_name, last_name")
+    .eq("mindbody_id", String(targetStaffId))
+    .maybeSingle();
+
+  if (!staffRow) {
+    return { error: `Staff mindbody_id=${targetStaffId} not found in DB` };
+  }
+
+  const result = await fetchStaffSessionTypesFromApi(supabase, config, userToken, staffRow.mindbody_id);
+
+  if (!result.ok) {
+    return {
+      staff: `${staffRow.first_name} ${staffRow.last_name} (${staffRow.mindbody_id})`,
+      error: result.error,
+      raw: result.raw,
+    };
+  }
+
+  const importResult = await importStaffSessionItems(supabase, staffRow.id, staffRow.mindbody_id, result.items);
+
+  return {
+    staff: `${staffRow.first_name} ${staffRow.last_name} (${staffRow.mindbody_id})`,
+    apiItemsReturned: result.items.length,
+    ...importResult,
+    rawTopLevelKeys: Object.keys(result.raw),
+    firstItem: result.items.length > 0 ? result.items[0] : null,
+  };
 }
 
 async function syncPricingOptions(supabase: any, config: MindbodyConfig, userToken: string) {
@@ -2074,7 +2199,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { syncType = "quick", year, month } = await req.json().catch(() => ({}));
+    const { syncType = "quick", year, month, staffId: requestStaffId } = await req.json().catch(() => ({}));
     const targetYear = year ? parseInt(year) : undefined;
     const targetMonth = month ? parseInt(month) : undefined;
 
@@ -2118,6 +2243,27 @@ Deno.serve(async (req: Request) => {
       const diagResult = await diagStaffSessionTypes(supabase, config, variant);
       return new Response(
         JSON.stringify({ success: true, diagnostic: true, ...diagResult }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (syncType === "staff_services_one") {
+      if (!requestStaffId) {
+        return new Response(
+          JSON.stringify({ error: "staffId is required for staff_services_one" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      const userToken = await getUserToken(supabase, config);
+      if (!userToken) {
+        return new Response(
+          JSON.stringify({ error: "Could not obtain user token. Staff credentials required." }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      const oneResult = await syncStaffServicesOne(supabase, config, userToken, String(requestStaffId));
+      return new Response(
+        JSON.stringify({ success: !oneResult.error, syncType, ...oneResult }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -2199,17 +2345,6 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      if (shouldSyncAll || syncType === "staff_services" || isQuickMode) {
-        try {
-          console.log('\n--- Syncing Staff-Session Type Relationships ---');
-          results.staff_session_types = await syncStaffSessionTypes(supabase, config);
-          console.log(`✅ Staff-Session relationships synced: ${results.staff_session_types}`);
-        } catch (e) {
-          console.error('❌ Staff-Session relationships sync failed:', e);
-          results.staff_session_types = 0;
-        }
-      }
-
       console.log('\n=== Phase 2: Protected Endpoints (User Token Required) ===');
 
       let userToken: string | null = null;
@@ -2217,6 +2352,19 @@ Deno.serve(async (req: Request) => {
         userToken = await getUserToken(supabase, config);
       } catch (e) {
         console.error('❌ Failed to get user token:', e);
+      }
+
+      if (userToken && (shouldSyncAll || syncType === "staff_services" || isQuickMode)) {
+        try {
+          console.log('\n--- Syncing Staff-Session Type Relationships ---');
+          const sstStats = await syncStaffSessionTypes(supabase, config, userToken);
+          results.staff_session_types = sstStats.importedRows;
+          results.staff_session_types_stats = sstStats as any;
+          console.log(`Staff-Session relationships synced: ${JSON.stringify(sstStats)}`);
+        } catch (e) {
+          console.error('Staff-Session relationships sync failed:', e);
+          results.staff_session_types = 0;
+        }
       }
 
       if (userToken && (shouldSyncAll || syncType === "pricing_options" || isQuickMode)) {
