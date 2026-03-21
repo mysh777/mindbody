@@ -1952,6 +1952,119 @@ async function syncProducts(supabase: any, config: MindbodyConfig, userToken?: s
   return totalSynced;
 }
 
+async function diagStaffSessionTypes(supabase: any, config: MindbodyConfig, variant: string) {
+  console.log(`[SST-DIAG] Starting diagnostic variant="${variant}"`);
+
+  const { data: allStaff } = await supabase
+    .from("staff")
+    .select("id, mindbody_id, first_name, last_name")
+    .order("mindbody_id")
+    .limit(3);
+
+  if (!allStaff || allStaff.length === 0) {
+    return { error: "No staff in DB" };
+  }
+
+  let userToken: string | null = null;
+  if (variant === "request_dot_with_token" || variant === "plain_with_token") {
+    userToken = await getUserToken(supabase, config);
+    if (!userToken) {
+      return { error: "Could not obtain user token" };
+    }
+  }
+
+  const probes: any[] = [];
+
+  for (const staff of allStaff) {
+    const staffLabel = `${staff.first_name} ${staff.last_name} (${staff.mindbody_id})`;
+
+    let url: string;
+    if (variant === "request_dot" || variant === "request_dot_with_token") {
+      url = `${MINDBODY_BASE_URL}/staff/sessiontypes?request.staffId=${staff.mindbody_id}`;
+    } else {
+      url = `${MINDBODY_BASE_URL}/staff/staffsessiontypes?staffId=${staff.mindbody_id}`;
+    }
+
+    const headers = userToken
+      ? getUserHeaders(config, userToken)
+      : getSourceHeaders(config);
+
+    console.log(`[SST-DIAG] ${staffLabel} | URL: ${url} | Auth: ${userToken ? 'Bearer token' : 'Source headers'}`);
+
+    const startTime = Date.now();
+    let probe: any = { staff: staffLabel, url, variant, hasToken: !!userToken };
+
+    try {
+      const response = await fetch(url, { headers });
+      const durationMs = Date.now() - startTime;
+      const responseText = await response.text();
+
+      probe.httpStatus = response.status;
+      probe.responseBytes = responseText.length;
+      probe.durationMs = durationMs;
+
+      console.log(`[SST-DIAG] ${staffLabel} | HTTP ${response.status} | ${responseText.length} bytes | ${durationMs}ms`);
+
+      let data: any;
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        probe.parseError = true;
+        probe.rawFirst500 = responseText.substring(0, 500);
+        console.error(`[SST-DIAG] ${staffLabel} | JSON parse failed, raw: ${responseText.substring(0, 500)}`);
+        probes.push(probe);
+        continue;
+      }
+
+      probe.topLevelKeys = Object.keys(data);
+      console.log(`[SST-DIAG] ${staffLabel} | Top-level keys: ${probe.topLevelKeys.join(', ')}`);
+
+      const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
+      if (arrayKey) {
+        const arr = data[arrayKey];
+        probe.arrayKey = arrayKey;
+        probe.arrayLength = arr.length;
+        console.log(`[SST-DIAG] ${staffLabel} | Array "${arrayKey}" length: ${arr.length}`);
+
+        if (arr.length > 0) {
+          probe.firstItemKeys = Object.keys(arr[0]);
+          probe.firstItem = arr[0];
+          console.log(`[SST-DIAG] ${staffLabel} | First item keys: ${probe.firstItemKeys.join(', ')}`);
+          console.log(`[SST-DIAG] ${staffLabel} | First item: ${JSON.stringify(arr[0])}`);
+        }
+      } else {
+        probe.arrayKey = null;
+        probe.note = "No array found in response";
+        console.warn(`[SST-DIAG] ${staffLabel} | No array in response body`);
+      }
+
+      if (data.PaginationResponse) {
+        probe.pagination = data.PaginationResponse;
+      }
+
+      await saveRawData(supabase, `sst_diag_${variant}_staff_${staff.mindbody_id}`, data, probe.arrayLength || 0, data.PaginationResponse);
+      await logApiCall(supabase, url, "GET", { staffId: staff.mindbody_id, diagnostic: true, variant }, response.status, data, null, durationMs);
+
+    } catch (err: any) {
+      probe.fetchError = err.message;
+      console.error(`[SST-DIAG] ${staffLabel} | Fetch error: ${err.message}`);
+    }
+
+    probes.push(probe);
+  }
+
+  const { count: sessionTypesCount } = await supabase
+    .from("session_types")
+    .select("*", { count: "exact", head: true });
+
+  return {
+    variant,
+    staffTested: allStaff.length,
+    sessionTypesInDb: sessionTypesCount,
+    probes,
+  };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -1999,6 +2112,15 @@ Deno.serve(async (req: Request) => {
       sourcePassword: mindbodySourcePassword,
       siteId: mindbodySiteId,
     };
+
+    if (syncType?.startsWith("sst_diag_")) {
+      const variant = syncType.replace("sst_diag_", "");
+      const diagResult = await diagStaffSessionTypes(supabase, config, variant);
+      return new Response(
+        JSON.stringify({ success: true, diagnostic: true, ...diagResult }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     const { data: logData } = await supabase
       .from("sync_logs")

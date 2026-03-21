@@ -5,7 +5,7 @@ interface SyncButtonProps {
   onSyncComplete?: () => void;
 }
 
-type SyncType = 'quick' | 'all' | 'sites' | 'locations' | 'staff' | 'programs' | 'services' | 'staff_services' | 'pricing_options' | 'clients' | 'appointments' | 'sales' | 'retail_products' | 'build_pricing_links' | 'client_services' | 'transactions';
+type SyncType = 'quick' | 'all' | 'sites' | 'locations' | 'staff' | 'programs' | 'services' | 'staff_services' | 'pricing_options' | 'clients' | 'appointments' | 'sales' | 'retail_products' | 'build_pricing_links' | 'client_services' | 'transactions' | 'sst_diag_plain' | 'sst_diag_plain_with_token' | 'sst_diag_request_dot' | 'sst_diag_request_dot_with_token';
 
 interface SyncStatus {
   [key: string]: 'idle' | 'syncing' | 'success' | 'error';
@@ -260,6 +260,34 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
             >
               <Icon className={`w-4 h-4 ${syncStatus[type] === 'syncing' ? 'animate-spin' : ''}`} />
               <span className="text-sm">{label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t pt-4">
+        <h3 className="text-sm font-semibold text-red-700 mb-2">SST Diagnostic (tests first 3 staff, 4 URL variants):</h3>
+        <div className="grid grid-cols-2 gap-2">
+          {([
+            { type: 'sst_diag_plain' as SyncType, label: 'staffsessiontypes?staffId=X', desc: 'Current URL, source headers' },
+            { type: 'sst_diag_plain_with_token' as SyncType, label: 'staffsessiontypes?staffId=X + Token', desc: 'Current URL, Bearer token' },
+            { type: 'sst_diag_request_dot' as SyncType, label: 'sessiontypes?request.staffId=X', desc: 'Alt URL, source headers' },
+            { type: 'sst_diag_request_dot_with_token' as SyncType, label: 'sessiontypes?request.staffId=X + Token', desc: 'Alt URL, Bearer token' },
+          ]).map(({ type, label, desc }) => (
+            <button
+              key={type}
+              onClick={() => handleSync(type)}
+              disabled={syncStatus[type] === 'syncing'}
+              className={`flex flex-col items-start gap-0.5 px-3 py-2 rounded-lg font-medium shadow-sm transition-all duration-200 text-left ${
+                syncStatus[type] === 'syncing' ? 'bg-gray-400 text-white cursor-wait' :
+                syncStatus[type] === 'success' ? 'bg-green-500 text-white' :
+                syncStatus[type] === 'error' ? 'bg-red-500 text-white' :
+                'bg-red-700 hover:bg-red-800 text-white'
+              }`}
+            >
+              <span className="text-xs font-mono leading-tight">{label}</span>
+              <span className="text-[10px] opacity-75">{desc}</span>
+              {syncStatus[type] === 'syncing' && <RefreshCw className="w-3 h-3 animate-spin" />}
             </button>
           ))}
         </div>
