@@ -145,13 +145,13 @@
 ### Source Credentials (Public Endpoints)
 Headers:
 - `Api-Key`: Your API key
-- `SiteId`: Your site ID (197179)
+- `SiteId`: Your site ID
 - `Content-Type`: application/json
 
 ### User Token (Protected Endpoints)
 Headers:
 - `Api-Key`: Your API key
-- `SiteId`: Your site ID (197179)
+- `SiteId`: Your site ID
 - `Authorization`: Bearer {user_token}
 - `Content-Type`: application/json
 

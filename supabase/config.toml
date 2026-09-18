@@ -1,0 +1,11 @@
+[functions.mindbody-sync]
+verify_jwt = false
+
+[functions.daily-sync]
+verify_jwt = false
+
+[functions.get-activation-code]
+verify_jwt = true
+
+[functions.client-audit]
+verify_jwt = false

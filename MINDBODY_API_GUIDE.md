@@ -33,10 +33,10 @@ Authorization: Basic {base64(sourceName:sourcePassword)}
 ```
 
 **Ваши Source Credentials:**
-- API Key: `c4361d92b8844115a8047a410c095a7c`
-- Source Name: `SIAINNOVITA`
-- Source Password: `5G/5BWOrnh4YpKJ/YWljvW3tfF0=`
-- Site ID: `197179` ✓ (активирован)
+- API Key: `<YOUR_API_KEY>`
+- Source Name: `<YOUR_SOURCE_NAME>`
+- Source Password: `<YOUR_SOURCE_PASSWORD>`
+- Site ID: `<YOUR_SITE_ID>` ✓ (активирован)
 
 ### Level 2: User Token (Staff/Client Credentials)
 
@@ -89,7 +89,7 @@ Authorization: {AccessToken}
 - Процесс связывания вашего приложения с конкретным Site ID
 - Без activation code вы не получите доступ к данным студии
 
-**Статус:** ✓ Site ID 197179 уже активирован
+**Статус:** ✓ Site ID активирован
 
 **Как работает activation:**
 
@@ -524,7 +524,7 @@ Mindbody использует разные endpoints в зависимости �
 - **Europe**: `https://api-eu.mindbodyonline.com`
 - **Australia**: `https://api-au.mindbodyonline.com`
 
-Ваш site (197179) использует North America endpoint.
+Ваш site использует North America endpoint.
 
 ---
 
@@ -536,17 +536,17 @@ Mindbody использует разные endpoints в зависимости �
 2. Set environment variables:
    - `apiKey`: Your API key
    - `siteId`: Your site ID
-   - `sourceName`: SIAINNOVITA
-   - `sourcePassword`: 5G/5BWOrnh4YpKJ/YWljvW3tfF0=
+   - `sourceName`: <YOUR_SOURCE_NAME>
+   - `sourcePassword`: <YOUR_SOURCE_PASSWORD>
 
 ### Using curl
 
 ```bash
 # Get locations
 curl -X GET "https://api.mindbodyonline.com/public/v6/site/locations" \
-  -H "Api-Key: c4361d92b8844115a8047a410c095a7c" \
-  -H "SiteId: 197179" \
-  -H "Authorization: Basic $(echo -n 'SIAINNOVITA:5G/5BWOrnh4YpKJ/YWljvW3tfF0=' | base64)"
+  -H "Api-Key: <YOUR_API_KEY>" \
+  -H "SiteId: <YOUR_SITE_ID>" \
+  -H "Authorization: Basic $(echo -n '<YOUR_SOURCE_NAME>:<YOUR_SOURCE_PASSWORD>' | base64)"
 ```
 
 ---
@@ -555,7 +555,7 @@ curl -X GET "https://api.mindbodyonline.com/public/v6/site/locations" \
 
 ### ✓ Configured & Working
 - Source Credentials
-- Site Activation (Site ID: 197179)
+- Site Activation (Site ID configured)
 - Read-only endpoints access
 
 ### Read Operations Available

@@ -62,7 +62,7 @@ export function ApiIntegration({ onSyncComplete }: ApiIntegrationProps) {
                 <div>
                   <h3 className="font-semibold text-blue-900 mb-1">Authentication Status</h3>
                   <p className="text-sm text-blue-800">
-                    System configured with Source Credentials for Site ID: 197179. All read operations are working.
+                    System configured with Source Credentials. All read operations are working.
                   </p>
                   <p className="text-xs text-blue-700 mt-2">
                     Staff credentials are only needed for write operations (booking, payments, etc.)

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
-import { ChevronDown, ChevronRight, Search, Calendar, ArrowUpDown, Download, User, Package, ShoppingCart } from 'lucide-react';
+import { ChevronDown, ChevronRight, Search, Calendar, ArrowUpDown, Download, User, Package, ShoppingCart, AlertTriangle, HelpCircle } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
+import { resolveServicePrices, type PriceSource } from '../utils/resolveServicePrices';
 
 interface ClientService {
   id: string;
@@ -13,6 +14,7 @@ interface ClientService {
   expiration_date: string;
   program_name: string;
   paid_price: number;
+  price_source: PriceSource;
 }
 
 interface SaleItem {
@@ -126,9 +128,21 @@ export function ClientsReport() {
     try {
       const servicesRes = await supabase
         .from('client_services')
-        .select('id, mindbody_id, name, count, remaining, active_date, expiration_date, program_name')
+        .select('id, mindbody_id, name, count, remaining, active_date, expiration_date, program_name, pricing_option_id')
         .eq('client_id', clientId)
         .order('active_date', { ascending: false });
+
+      const pricingOptionIds = (servicesRes.data || [])
+        .map((s: any) => s.pricing_option_id)
+        .filter(Boolean);
+      let pricingOptionsData: any[] = [];
+      if (pricingOptionIds.length > 0) {
+        const { data: poData } = await supabase
+          .from('pricing_options')
+          .select('id, mindbody_id, price')
+          .in('id', pricingOptionIds);
+        pricingOptionsData = poData || [];
+      }
 
       const { data: allClientSales } = await supabase
         .from('sales')
@@ -146,35 +160,39 @@ export function ClientsReport() {
           const batch = allSaleIds.slice(i, i + batchSize);
           const { data } = await supabase
             .from('sale_items')
-            .select('id, sale_id, item_name, description, quantity, total_amount, unit_price')
+            .select('id, sale_id, item_id, item_name, description, quantity, total_amount, unit_price')
             .in('sale_id', batch);
           if (data) allItemsData = allItemsData.concat(data);
         }
       }
 
-      const priceByName = new Map<string, number>();
-      for (const item of allItemsData) {
-        const name = item.item_name || item.description;
-        const amount = Number(item.total_amount) || 0;
-        if (name && amount > 0) {
-          const existing = priceByName.get(name);
-          if (existing === undefined || amount > existing) {
-            priceByName.set(name, amount);
-          }
-        }
-      }
+      const resolvedPrices = resolveServicePrices(
+        (servicesRes.data || []).map((s: any) => ({
+          id: s.id,
+          pricing_option_id: s.pricing_option_id,
+          payment_date: null,
+          active_date: s.active_date,
+        })),
+        pricingOptionsData,
+        allItemsData,
+        allClientSales || [],
+      );
 
-      const services: ClientService[] = (servicesRes.data || []).map((s: any) => ({
-        id: s.id,
-        mindbody_id: s.mindbody_id,
-        name: s.name,
-        count: s.count,
-        remaining: s.remaining,
-        active_date: s.active_date,
-        expiration_date: s.expiration_date,
-        program_name: s.program_name,
-        paid_price: priceByName.get(s.name) || 0,
-      }));
+      const services: ClientService[] = (servicesRes.data || []).map((s: any) => {
+        const resolved = resolvedPrices.get(s.id) || { price: 0, source: 'no_data' as const };
+        return {
+          id: s.id,
+          mindbody_id: s.mindbody_id,
+          name: s.name,
+          count: s.count,
+          remaining: s.remaining,
+          active_date: s.active_date,
+          expiration_date: s.expiration_date,
+          program_name: s.program_name,
+          paid_price: resolved.price,
+          price_source: resolved.source,
+        };
+      });
 
       const periodSaleIds = new Set(
         (allClientSales || [])
@@ -488,6 +506,16 @@ export function ClientsReport() {
                                       </div>
                                       {totalPrice > 0 && (
                                         <div className="flex items-center gap-2 mt-1.5 text-xs">
+                                          {service.price_source === 'catalog_approximate' && (
+                                            <span className="text-amber-500 flex items-center gap-0.5" title="Catalog price — no matching sale found">
+                                              <AlertTriangle className="w-3 h-3" />
+                                            </span>
+                                          )}
+                                          {service.price_source === 'no_data' && (
+                                            <span className="text-slate-400 flex items-center gap-0.5" title="No price data available">
+                                              <HelpCircle className="w-3 h-3" />
+                                            </span>
+                                          )}
                                           <span className="text-slate-500">
                                             Total: <span className="font-semibold text-slate-700">{formatCurrency(totalPrice)}</span>
                                           </span>

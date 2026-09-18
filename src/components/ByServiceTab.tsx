@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { ChevronDown, ChevronRight, AlertTriangle, ArrowUpDown } from 'lucide-react';
+import { ChevronDown, ChevronRight, AlertTriangle, ArrowUpDown, Sparkles } from 'lucide-react';
 import { formatCurrency } from '../utils/salesFilters';
 import type { ByServiceRow, AppointmentRow, NoDataReason } from '../hooks/useSalesMarginData';
 
@@ -60,8 +60,9 @@ export function ByServiceTab({ loading, byService, appointments, onNavigate }: B
         staffCost: acc.staffCost + r.staffCost,
         margin: acc.margin + r.margin,
         visitsNoData: acc.visitsNoData + r.visitsNoData,
+        visitsEstimated: acc.visitsEstimated + r.visitsEstimated,
       }),
-      { visits: 0, revenue: 0, staffCost: 0, margin: 0, visitsNoData: 0 }
+      { visits: 0, revenue: 0, staffCost: 0, margin: 0, visitsNoData: 0, visitsEstimated: 0 }
     );
   }, [byService]);
 
@@ -105,7 +106,8 @@ export function ByServiceTab({ loading, byService, appointments, onNavigate }: B
                 <SortHeader field="staffCost" label="Staff Cost" />
                 <SortHeader field="margin" label="Margin" />
                 <SortHeader field="marginPercent" label="Margin %" />
-                <th className="px-4 py-3 font-semibold text-slate-600 text-right">Data</th>
+                <th className="px-4 py-3 font-semibold text-slate-600 text-right">Est.</th>
+                <th className="px-4 py-3 font-semibold text-slate-600 text-right">N/A</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -142,8 +144,13 @@ export function ByServiceTab({ loading, byService, appointments, onNavigate }: B
                   {totals.revenue > 0 ? `${((totals.margin / totals.revenue) * 100).toFixed(1)}%` : '-'}
                 </td>
                 <td className="px-4 py-3 text-right">
+                  {totals.visitsEstimated > 0 && (
+                    <span className="text-xs text-violet-600">{totals.visitsEstimated}</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-right">
                   {totals.visitsNoData > 0 && (
-                    <span className="text-xs text-amber-600">{totals.visitsNoData} N/A</span>
+                    <span className="text-xs text-amber-600">{totals.visitsNoData}</span>
                   )}
                 </td>
               </tr>
@@ -189,6 +196,14 @@ function ServiceRow({
           {row.revenue > 0 ? `${row.marginPercent.toFixed(1)}%` : '-'}
         </td>
         <td className="px-4 py-3 text-right">
+          {row.visitsEstimated > 0 && (
+            <span className="inline-flex items-center gap-1 text-xs text-violet-600" title={`${row.visitsEstimated} visits with estimated pricing`}>
+              <Sparkles className="w-3 h-3" />
+              {row.visitsEstimated}
+            </span>
+          )}
+        </td>
+        <td className="px-4 py-3 text-right">
           {row.visitsNoData > 0 && (
             <span className="inline-flex items-center gap-1 text-xs text-amber-600" title={`${row.visitsNoData} visits without pricing data`}>
               <AlertTriangle className="w-3 h-3" />
@@ -200,7 +215,7 @@ function ServiceRow({
 
       {isOpen && appts.length > 0 && (
         <tr>
-          <td colSpan={9} className="p-0">
+          <td colSpan={10} className="p-0">
             <div className="bg-slate-50 border-y border-slate-200">
               <table className="w-full text-xs">
                 <thead>
@@ -236,7 +251,9 @@ function ServiceRow({
                       <td className="px-4 py-1.5 text-slate-500">{a.locationName}</td>
                       <td className="px-4 py-1.5 text-right font-mono">
                         {a.hasRevenueData ? (
-                          <span className="text-blue-600">{formatCurrency(a.revenue!)}</span>
+                          <span className={a.isEstimated ? 'text-violet-600 italic' : 'text-blue-600'}>
+                            {a.isEstimated && '~'}{formatCurrency(a.revenue!)}
+                          </span>
                         ) : (
                           <span className="text-amber-500 italic text-[10px]">{noDataLabel[a.noDataReason]}</span>
                         )}
@@ -246,8 +263,8 @@ function ServiceRow({
                       </td>
                       <td className="px-4 py-1.5 text-right font-mono">
                         {a.hasRevenueData ? (
-                          <span className={a.margin! >= 0 ? 'text-emerald-600' : 'text-red-600'}>
-                            {formatCurrency(a.margin!)}
+                          <span className={a.isEstimated ? 'text-violet-600 italic' : a.margin! >= 0 ? 'text-emerald-600' : 'text-red-600'}>
+                            {a.isEstimated && '~'}{formatCurrency(a.margin!)}
                           </span>
                         ) : (
                           <span className="text-amber-500 italic text-[10px]">{noDataLabel[a.noDataReason]}</span>

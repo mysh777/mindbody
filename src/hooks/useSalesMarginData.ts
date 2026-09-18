@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { DateRange } from '../utils/salesFilters';
+import { getSessionTypeMedianPrices } from '../utils/sessionTypeMedianPrice';
+import type { MedianEntry } from '../utils/sessionTypeMedianPrice';
 
 export type NoDataReason = 'ok' | 'cs_not_synced' | 'no_pricing_option' | 'no_client_service';
 
@@ -22,6 +24,7 @@ export interface AppointmentRow {
   staffCost: number;
   margin: number | null;
   hasRevenueData: boolean;
+  isEstimated: boolean;
   noDataReason: NoDataReason;
 }
 
@@ -46,6 +49,8 @@ export interface MarginSummary {
   avgMarginPerVisit: number;
   totalAppointments: number;
   appointmentsWithData: number;
+  appointmentsEstimated: number;
+  estimatedRevenue: number;
   appointmentsNoData: number;
   noDataCsNotSynced: number;
   noDataNoPricingOption: number;
@@ -63,6 +68,8 @@ export interface ByServiceRow {
   marginPercent: number;
   hasRevenueData: boolean;
   visitsNoData: number;
+  visitsEstimated: number;
+  estimatedRevenue: number;
 }
 
 export interface ByStaffRow {
@@ -74,6 +81,8 @@ export interface ByStaffRow {
   margin: number;
   marginPercent: number;
   visitsNoData: number;
+  visitsEstimated: number;
+  estimatedRevenue: number;
 }
 
 export type AppointmentStatusFilter = 'Completed' | 'Booked' | 'all';
@@ -91,11 +100,13 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
   const [summary, setSummary] = useState<MarginSummary>({
     cashIn: 0, revenueEarned: 0, staffCost: 0, grossMargin: 0,
     marginPercent: 0, deferredRevenue: 0, avgMarginPerVisit: 0,
-    totalAppointments: 0, appointmentsWithData: 0, appointmentsNoData: 0,
+    totalAppointments: 0, appointmentsWithData: 0, appointmentsEstimated: 0,
+    estimatedRevenue: 0, appointmentsNoData: 0,
     noDataCsNotSynced: 0, noDataNoPricingOption: 0, noDataNoClientService: 0,
   });
   const [byService, setByService] = useState<ByServiceRow[]>([]);
   const [byStaff, setByStaff] = useState<ByStaffRow[]>([]);
+  const [medianMap, setMedianMap] = useState<Map<string, MedianEntry>>(new Map());
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -150,11 +161,13 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
         });
       }
 
-      const processedAppts: AppointmentRow[] = (apptData || []).map(a => {
+      // First pass: classify without estimates to build the median map from resolved visits
+      const resolvedVisitsForMedian: { session_type_id: string; effective_price: number }[] = [];
+
+      const firstPassAppts = (apptData || []).map(a => {
         const csEntry = a.client_service_id ? csRevenueMap[a.client_service_id] : null;
         let noDataReason: NoDataReason = 'ok';
         let rev: number | null = null;
-        let poName = '';
 
         if (!a.client_service_id) {
           noDataReason = 'no_client_service';
@@ -163,7 +176,33 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
         } else {
           rev = csEntry.revenue;
           noDataReason = csEntry.reason;
-          poName = csEntry.pricingOptionName;
+        }
+
+        if (rev !== null && a.session_type_id) {
+          resolvedVisitsForMedian.push({
+            session_type_id: a.session_type_id,
+            effective_price: rev,
+          });
+        }
+
+        return { ...a, rev, noDataReason, poName: csEntry?.pricingOptionName || '' };
+      });
+
+      const stMedianMap = getSessionTypeMedianPrices(resolvedVisitsForMedian);
+      setMedianMap(stMedianMap);
+
+      // Second pass: apply estimates to unresolved visits
+      const processedAppts: AppointmentRow[] = firstPassAppts.map(a => {
+        let rev = a.rev;
+        let noDataReason = a.noDataReason as NoDataReason;
+        let isEstimated = false;
+
+        if (rev === null && a.session_type_id) {
+          const medianEntry = stMedianMap.get(a.session_type_id);
+          if (medianEntry?.sufficient) {
+            rev = medianEntry.median;
+            isEstimated = true;
+          }
         }
 
         const hasRevenueData = rev !== null;
@@ -193,11 +232,12 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
           clientName: a.client_id ? clientsMap[a.client_id] || a.client_id : '-',
           sessionTypeName: a.session_type_id ? sessionTypesMap[a.session_type_id]?.name || a.session_type_id : '-',
           locationName: a.location_id ? locationsMap[a.location_id] || a.location_id : '-',
-          pricingOptionName: poName,
+          pricingOptionName: a.poName,
           revenue: hasRevenueData ? rev! : null,
           staffCost: cost,
           margin: hasRevenueData ? rev! - cost : null,
           hasRevenueData,
+          isEstimated,
           noDataReason,
         };
       });
@@ -245,8 +285,10 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
 
       const totalCashIn = processedSales.reduce((sum, s) => sum + s.total, 0);
       const apptsWithData = processedAppts.filter(a => a.hasRevenueData);
+      const apptsEstimated = processedAppts.filter(a => a.isEstimated);
       const apptsNoData = processedAppts.filter(a => !a.hasRevenueData);
       const totalRevenue = apptsWithData.reduce((sum, a) => sum + (a.revenue || 0), 0);
+      const estRevenue = apptsEstimated.reduce((sum, a) => sum + (a.revenue || 0), 0);
       const totalStaffCost = processedAppts.reduce((sum, a) => sum + a.staffCost, 0);
       const grossMargin = totalRevenue - totalStaffCost;
 
@@ -260,6 +302,8 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
         avgMarginPerVisit: apptsWithData.length > 0 ? grossMargin / apptsWithData.length : 0,
         totalAppointments: processedAppts.length,
         appointmentsWithData: apptsWithData.length,
+        appointmentsEstimated: apptsEstimated.length,
+        estimatedRevenue: estRevenue,
         appointmentsNoData: apptsNoData.length,
         noDataCsNotSynced: apptsNoData.filter(a => a.noDataReason === 'cs_not_synced').length,
         noDataNoPricingOption: apptsNoData.filter(a => a.noDataReason === 'no_pricing_option').length,
@@ -276,6 +320,7 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
             categoryName: a.session_type_id ? sessionTypesMap[a.session_type_id]?.category || '' : '',
             visits: 0, revenue: 0, staffCost: 0, margin: 0,
             marginPercent: 0, hasRevenueData: false, visitsNoData: 0,
+            visitsEstimated: 0, estimatedRevenue: 0,
           };
         }
         serviceMap[key].visits++;
@@ -284,6 +329,10 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
           serviceMap[key].revenue += a.revenue!;
           serviceMap[key].margin += a.margin!;
           serviceMap[key].hasRevenueData = true;
+          if (a.isEstimated) {
+            serviceMap[key].visitsEstimated++;
+            serviceMap[key].estimatedRevenue += a.revenue!;
+          }
         } else {
           serviceMap[key].visitsNoData++;
         }
@@ -303,6 +352,7 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
             staffName: a.staffName,
             visits: 0, revenue: 0, staffCost: 0, margin: 0,
             marginPercent: 0, visitsNoData: 0,
+            visitsEstimated: 0, estimatedRevenue: 0,
           };
         }
         staffMap2[key].visits++;
@@ -310,6 +360,10 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
         if (a.hasRevenueData) {
           staffMap2[key].revenue += a.revenue!;
           staffMap2[key].margin += a.margin!;
+          if (a.isEstimated) {
+            staffMap2[key].visitsEstimated++;
+            staffMap2[key].estimatedRevenue += a.revenue!;
+          }
         } else {
           staffMap2[key].visitsNoData++;
         }
@@ -331,7 +385,7 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
     loadData();
   }, [loadData]);
 
-  return { loading, appointments, sales, summary, byService, byStaff, reload: loadData };
+  return { loading, appointments, sales, summary, byService, byStaff, medianMap, reload: loadData };
 }
 
 async function loadStaffMap(): Promise<Record<string, string>> {

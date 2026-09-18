@@ -14,6 +14,7 @@ import { AppointmentsView } from './AppointmentsView';
 import { ClientServicesView } from './ClientServicesView';
 import { StaffPricelist } from './StaffPricelist';
 import { ClientActivityReport } from './ClientActivityReport';
+import { DataLinkageHealthTab } from './DataLinkageHealthTab';
 
 interface Stats {
   clients: number;
@@ -38,6 +39,7 @@ const tableNameMap: Record<MenuSection, { tableName: string; displayName: string
   'transactions': { tableName: 'transactions', displayName: 'Transactions' },
   'sale-items': { tableName: 'sale_items', displayName: 'Sale Items' },
   'client-activity': null,
+  'linkage-health': null,
 };
 
 const tableSectionMap: Record<string, MenuSection> = {
@@ -175,6 +177,10 @@ export function Dashboard() {
 
     if (activeSection === 'client-activity') {
       return <ClientActivityReport />;
+    }
+
+    if (activeSection === 'linkage-health') {
+      return <DataLinkageHealthTab />;
     }
 
     const tableConfig = tableNameMap[activeSection];

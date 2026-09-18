@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Database, Settings, BarChart3, Calendar, DollarSign, FileText, ClipboardList, PieChart, Package, ShoppingBag, Wallet, UserCog, Activity } from 'lucide-react';
+import { Database, Settings, BarChart3, Calendar, DollarSign, FileText, ClipboardList, PieChart, Package, ShoppingBag, Wallet, UserCog, Activity, HeartPulse } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export type MenuSection =
@@ -16,7 +16,8 @@ export type MenuSection =
   | 'client-services'
   | 'transactions'
   | 'sale-items'
-  | 'client-activity';
+  | 'client-activity'
+  | 'linkage-health';
 
 interface SidebarProps {
   activeSection: MenuSection;
@@ -47,6 +48,7 @@ const tableNameMap: Record<MenuSection, string | null> = {
   'transactions': 'transactions',
   'sale-items': 'sale_items',
   'client-activity': null,
+  'linkage-health': null,
 };
 
 export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: SidebarProps) {
@@ -60,6 +62,7 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
     { id: 'staff-report', label: 'Staff Report', icon: ClipboardList },
     { id: 'staff-pricelist', label: 'Staff Pricelist', icon: UserCog },
     { id: 'client-activity', label: 'Client Activity', icon: Activity },
+    { id: 'linkage-health', label: 'Linkage Health', icon: HeartPulse, dividerBefore: true },
     { id: 'appointments', label: 'Appointments', icon: Calendar, dividerBefore: true },
     { id: 'client-services', label: 'Client Services', icon: Package },
     { id: 'sales', label: 'Sales Journal', icon: DollarSign, dividerBefore: true },

@@ -7,6 +7,7 @@ import {
   Clock,
   Activity,
   AlertTriangle,
+  Sparkles,
 } from 'lucide-react';
 import {
   BarChart,
@@ -37,6 +38,9 @@ const CHART_COLORS = [
 ];
 
 export function SalesOverviewTab({ loading, summary, appointments, sales }: SalesOverviewTabProps) {
+  const exactWithData = summary.appointmentsWithData - summary.appointmentsEstimated;
+  const exactRevenue = summary.revenueEarned - summary.estimatedRevenue;
+
   const cards = [
     {
       label: 'Cash In',
@@ -50,7 +54,9 @@ export function SalesOverviewTab({ loading, summary, appointments, sales }: Sale
     {
       label: 'Revenue Earned',
       value: formatCurrency(summary.revenueEarned),
-      subtitle: `${summary.appointmentsWithData} visits with data`,
+      subtitle: summary.appointmentsEstimated > 0
+        ? `${exactWithData} exact + ${summary.appointmentsEstimated} estimated visits`
+        : `${summary.appointmentsWithData} visits with data`,
       icon: TrendingUp,
       color: 'text-blue-600',
       bg: 'bg-blue-50',
@@ -136,6 +142,18 @@ export function SalesOverviewTab({ loading, summary, appointments, sales }: Sale
 
   return (
     <div className="space-y-6">
+      {summary.appointmentsEstimated > 0 && (
+        <div className="px-4 py-3 bg-violet-50 border border-violet-200 rounded-lg text-sm text-violet-700 space-y-1">
+          <div className="flex items-center gap-2 font-medium">
+            <Sparkles className="w-4 h-4 flex-shrink-0" />
+            Includes {summary.appointmentsEstimated} estimated visits ({formatCurrency(summary.estimatedRevenue)} revenue)
+          </div>
+          <p className="ml-6 text-xs text-violet-600">
+            Revenue for these visits is estimated from the median price of their service type. Exact data: {exactWithData} visits, {formatCurrency(exactRevenue)} revenue.
+          </p>
+        </div>
+      )}
+
       {summary.appointmentsNoData > 0 && (
         <div className="px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700 space-y-1">
           <div className="flex items-center gap-2 font-medium">

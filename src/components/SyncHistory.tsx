@@ -1,13 +1,11 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Clock, CheckCircle, XCircle, AlertCircle, Trash2 } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import type { SyncLog } from '../types/mindbody';
 
 export function SyncHistory() {
   const [logs, setLogs] = useState<SyncLog[]>([]);
   const [loading, setLoading] = useState(false);
-  const [clearing, setClearing] = useState(false);
-
   const loadLogs = async () => {
     setLoading(true);
     try {
@@ -24,23 +22,6 @@ export function SyncHistory() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const clearLogs = async () => {
-    if (!confirm('Are you sure you want to clear all sync history?')) {
-      return;
-    }
-
-    setClearing(true);
-    const { error } = await supabase
-      .from('sync_logs')
-      .delete()
-      .neq('id', '00000000-0000-0000-0000-000000000000');
-
-    if (!error) {
-      setLogs([]);
-    }
-    setClearing(false);
   };
 
   useEffect(() => {
@@ -98,16 +79,6 @@ export function SyncHistory() {
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold text-slate-900">Sync History</h2>
-          {logs.length > 0 && (
-            <button
-              onClick={clearLogs}
-              disabled={clearing}
-              className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 font-medium text-sm"
-            >
-              <Trash2 className={`w-4 h-4 ${clearing ? 'animate-pulse' : ''}`} />
-              Clear History
-            </button>
-          )}
         </div>
 
         {logs.length === 0 ? (

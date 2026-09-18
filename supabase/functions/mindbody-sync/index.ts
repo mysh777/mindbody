@@ -577,6 +577,7 @@ async function fetchStaffSessionTypesFromApi(
   config: MindbodyConfig,
   userToken: string,
   mindbodyStaffId: string,
+  skipLogs = false,
 ): Promise<{ ok: boolean; items: any[]; raw: any; error?: string }> {
   const url = `${MINDBODY_BASE_URL}/staff/sessiontypes?request.staffId=${mindbodyStaffId}&request.limit=200&request.offset=0`;
   const startTime = Date.now();
@@ -600,14 +601,18 @@ async function fetchStaffSessionTypesFromApi(
     console.error(`[SST] Staff ${mindbodyStaffId} | PARSE ERROR: ${e.message}`);
   }
 
-  await logApiCall(supabase, url, "GET", { staffId: mindbodyStaffId }, response.status, data, parseError, durationMs);
+  if (!skipLogs) {
+    await logApiCall(supabase, url, "GET", { staffId: mindbodyStaffId }, response.status, data, parseError, durationMs);
+  }
 
   if (!response.ok) {
     console.error(`[SST] Staff ${mindbodyStaffId} | API ERROR ${response.status}: ${responseText.substring(0, 300)}`);
     return { ok: false, items: [], raw: data, error: `HTTP ${response.status}` };
   }
 
-  await saveRawData(supabase, `staff_session_types_staff_${mindbodyStaffId}`, data, 0, data.PaginationResponse);
+  if (!skipLogs) {
+    await saveRawData(supabase, `staff_session_types_staff_${mindbodyStaffId}`, data, 0, data.PaginationResponse);
+  }
 
   const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
   const items = arrayKey ? data[arrayKey] : [];
@@ -626,26 +631,23 @@ async function importStaffSessionItems(
   staffDbId: string,
   mindbodyStaffId: string,
   items: any[],
+  sessionTypeLookup: Map<string, string>,
 ): Promise<{ imported: number; skipped: number; errors: number }> {
   let imported = 0;
   let skipped = 0;
   let errors = 0;
 
+  const batchData: any[] = [];
+
   for (const sst of items) {
     const sstId = extractSessionTypeId(sst);
     if (!sstId) {
-      console.warn(`[SST] Staff ${mindbodyStaffId} | Could not extract session type ID from: ${JSON.stringify(sst).substring(0, 200)}`);
       skipped++;
       continue;
     }
 
-    const { data: sessionType } = await supabase
-      .from("session_types")
-      .select("id")
-      .eq("mindbody_id", sstId)
-      .maybeSingle();
-
-    if (!sessionType) {
+    const sessionTypeDbId = sessionTypeLookup.get(sstId);
+    if (!sessionTypeDbId) {
       console.warn(`[SST] Staff ${mindbodyStaffId} | Session type mindbody_id=${sstId} NOT FOUND in DB`);
       skipped++;
       continue;
@@ -653,37 +655,38 @@ async function importStaffSessionItems(
 
     const payRate = extractPayRate(sst);
     const timeLength = extractTimeLength(sst);
-    console.log(`[SST] Staff ${mindbodyStaffId} | ST ${sstId} -> payRate=${payRate}, timeLength=${timeLength}`);
 
-    const relationId = `${staffDbId}_${sessionType.id}`;
-    const relationData = {
-      id: relationId,
+    batchData.push({
+      id: `${staffDbId}_${sessionTypeDbId}`,
       staff_id: staffDbId,
-      session_type_id: sessionType.id,
+      session_type_id: sessionTypeDbId,
       is_active: true,
       pay_rate: payRate,
       time_length: timeLength,
       raw_data: sst,
       synced_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    };
+    });
+  }
 
-    const { error: upsertErr } = await supabase.from("staff_session_types").upsert(relationData, {
+  if (batchData.length > 0) {
+    const { error: upsertErr } = await supabase.from("staff_session_types").upsert(batchData, {
       onConflict: "staff_id,session_type_id",
     });
 
     if (upsertErr) {
-      console.error(`[SST] Upsert error for ${relationId}: ${upsertErr.message}`);
-      errors++;
+      console.error(`[SST] Batch upsert error for staff ${mindbodyStaffId}: ${upsertErr.message}`);
+      errors = batchData.length;
     } else {
-      imported++;
+      imported = batchData.length;
     }
   }
 
+  console.log(`[SST] Staff ${mindbodyStaffId} | imported=${imported}, skipped=${skipped}, errors=${errors}`);
   return { imported, skipped, errors };
 }
 
-async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, userToken: string) {
+async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, userToken: string, staffOffset?: number, staffLimit?: number) {
   console.log('[SST] Syncing staff session types via /staff/sessiontypes');
 
   const { data: allStaff } = await supabase
@@ -695,8 +698,23 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, user
     return { testedStaff: 0, staffWithData: 0, importedRows: 0, emptyStaff: 0, failedStaff: 0 };
   }
 
-  const realStaff = allStaff.filter(isRealStaff);
-  console.log(`[SST] Total staff: ${allStaff.length}, real staff after filtering: ${realStaff.length}`);
+  let realStaff = allStaff.filter(isRealStaff);
+  const totalReal = realStaff.length;
+  if (staffOffset != null) {
+    const end = staffLimit != null ? staffOffset + staffLimit : realStaff.length;
+    realStaff = realStaff.slice(staffOffset, end);
+  }
+  console.log(`[SST] Total staff: ${allStaff.length}, real: ${totalReal}, processing slice: ${realStaff.length} (offset=${staffOffset ?? 0}, limit=${staffLimit ?? 'ALL'})`);
+
+  // Pre-load all session types into a lookup map (mindbody_id -> db id)
+  const { data: allSessionTypes } = await supabase.from("session_types").select("id, mindbody_id");
+  const sessionTypeLookup = new Map<string, string>();
+  if (allSessionTypes) {
+    for (const st of allSessionTypes) {
+      sessionTypeLookup.set(st.mindbody_id, st.id);
+    }
+  }
+  console.log(`[SST] Loaded ${sessionTypeLookup.size} session types into lookup`);
 
   let testedStaff = 0;
   let staffWithData = 0;
@@ -706,7 +724,7 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, user
 
   for (const staff of realStaff) {
     testedStaff++;
-    const result = await fetchStaffSessionTypesFromApi(supabase, config, userToken, staff.mindbody_id);
+    const result = await fetchStaffSessionTypesFromApi(supabase, config, userToken, staff.mindbody_id, true);
 
     if (!result.ok) {
       failedStaff++;
@@ -719,7 +737,7 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, user
     }
 
     staffWithData++;
-    const importResult = await importStaffSessionItems(supabase, staff.id, staff.mindbody_id, result.items);
+    const importResult = await importStaffSessionItems(supabase, staff.id, staff.mindbody_id, result.items, sessionTypeLookup);
     importedRows += importResult.imported;
   }
 
@@ -757,7 +775,16 @@ async function syncStaffServicesOne(
     };
   }
 
-  const importResult = await importStaffSessionItems(supabase, staffRow.id, staffRow.mindbody_id, result.items);
+  // Pre-load session types lookup for the single-staff variant
+  const { data: allSessionTypes } = await supabase.from("session_types").select("id, mindbody_id");
+  const sessionTypeLookup = new Map<string, string>();
+  if (allSessionTypes) {
+    for (const st of allSessionTypes) {
+      sessionTypeLookup.set(st.mindbody_id, st.id);
+    }
+  }
+
+  const importResult = await importStaffSessionItems(supabase, staffRow.id, staffRow.mindbody_id, result.items, sessionTypeLookup);
 
   return {
     staff: `${staffRow.first_name} ${staffRow.last_name} (${staffRow.mindbody_id})`,
@@ -768,10 +795,12 @@ async function syncStaffServicesOne(
   };
 }
 
-async function syncPricingOptions(supabase: any, config: MindbodyConfig, userToken: string) {
-  console.log('Syncing pricing options');
+async function syncPricingOptions(supabase: any, config: MindbodyConfig, userToken: string, pageOffset?: number, pageLimit?: number) {
+  const startOffset = pageOffset ?? 0;
+  const maxRecords = pageLimit ?? Infinity;
+  console.log(`Syncing pricing options (startOffset=${startOffset}, maxRecords=${maxRecords === Infinity ? 'ALL' : maxRecords})`);
 
-  let offset = 0;
+  let offset = startOffset;
   const limit = 100;
   let totalSynced = 0;
 
@@ -878,6 +907,10 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
     offset += limit;
 
     if (services.length < limit) break;
+    if (totalSynced >= maxRecords) {
+      console.log(`Reached pageLimit (${maxRecords}), stopping`);
+      break;
+    }
   }
 
   return totalSynced;
@@ -1197,16 +1230,24 @@ async function syncClients(supabase: any, config: MindbodyConfig, userToken?: st
   return totalSynced;
 }
 
-async function syncSales(supabase: any, config: MindbodyConfig, userToken: string, year?: number, month?: number) {
+async function syncSales(supabase: any, config: MindbodyConfig, userToken: string, year?: number, month?: number, monthFrom?: number, monthTo?: number) {
   const targetYear = year || new Date().getFullYear();
   const hasMonthFilter = month && month > 0;
-  const periodLabel = hasMonthFilter ? `${targetYear}-${String(month).padStart(2, '0')}` : String(targetYear);
+  const hasRangeFilter = monthFrom && monthTo;
+  const periodLabel = hasRangeFilter
+    ? `${targetYear} months ${monthFrom}-${monthTo}`
+    : hasMonthFilter ? `${targetYear}-${String(month).padStart(2, '0')}` : String(targetYear);
   console.log(`=== SALES SYNC START for period ${periodLabel} ===`);
 
   let startDate: Date;
   let endDate: Date;
 
-  if (hasMonthFilter) {
+  if (hasRangeFilter) {
+    startDate = new Date(targetYear, monthFrom! - 1, 1);
+    endDate = monthTo === 12
+      ? new Date(targetYear, 11, 31, 23, 59, 59)
+      : new Date(targetYear, monthTo!, 0, 23, 59, 59);
+  } else if (hasMonthFilter) {
     startDate = new Date(targetYear, month! - 1, 1);
     endDate = new Date(targetYear, month!, 0, 23, 59, 59);
   } else {
@@ -1434,21 +1475,34 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
       return 0;
     }
   } else {
+    // Variant A: only sync clients who have appointments in the last 6 months
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - 6);
+    const cutoffStr = cutoff.toISOString();
+    console.log(`[CLIENT_SERVICES] Fetching clients with appointments since ${cutoffStr}`);
+
+    const clientIdSet = new Set<string>();
     let offset = 0;
     const pageSize = 1000;
 
     while (true) {
       const { data: batch } = await supabase
-        .from("clients")
-        .select("id, mindbody_id")
+        .from("appointments")
+        .select("client_id")
+        .gte("start_datetime", cutoffStr)
+        .not("client_id", "is", null)
         .range(offset, offset + pageSize - 1);
 
       if (!batch || batch.length === 0) break;
-      allClients = allClients.concat(batch);
-      console.log(`[CLIENT_SERVICES] Loaded ${allClients.length} clients so far...`);
+      for (const row of batch) {
+        if (row.client_id) clientIdSet.add(row.client_id);
+      }
       if (batch.length < pageSize) break;
       offset += pageSize;
     }
+
+    allClients = [...clientIdSet].map(id => ({ mindbody_id: id }));
+    console.log(`[CLIENT_SERVICES] Found ${allClients.length} unique clients with recent appointments`);
   }
 
   const uniqueClientIds = allClients.map((c: any) => c.mindbody_id);
@@ -1456,17 +1510,17 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
 
   const { data: pricingOptions } = await supabase
     .from("pricing_options")
-    .select("id, product_id");
+    .select("id, product_id, mindbody_id");
 
   const pricingByProductId = new Map<string, string>();
+  const pricingByMindbodyId = new Map<string, string>();
   if (pricingOptions) {
     for (const po of pricingOptions) {
-      if (po.product_id) {
-        pricingByProductId.set(po.product_id, po.id);
-      }
+      if (po.product_id) pricingByProductId.set(po.product_id, po.id);
+      if (po.mindbody_id) pricingByMindbodyId.set(po.mindbody_id, po.id);
     }
   }
-  console.log(`[CLIENT_SERVICES] Loaded ${pricingByProductId.size} pricing options for product_id linking`);
+  console.log(`[CLIENT_SERVICES] Loaded ${pricingByProductId.size} pricing options for product_id linking (${pricingByMindbodyId.size} by mindbody_id fallback)`);
 
   let totalSynced = 0;
   let totalLinked = 0;
@@ -1474,7 +1528,7 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
   const BATCH_SIZE = 25;
   const MAX_RETRIES = 1;
   const TIMEOUT_MS = 5000;
-  const MAX_EXECUTION_TIME_MS = 45000;
+  const MAX_EXECUTION_TIME_MS = 120000;
 
   async function fetchClientServicesWithTimeout(clientId: string, retryCount = 0): Promise<{ clientId: string; services: any[] }> {
     const url = `${MINDBODY_BASE_URL}/client/clientservices?clientId=${clientId}`;
@@ -1522,7 +1576,9 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
 
       for (const cs of services) {
         const productId = cs.ProductId ? String(cs.ProductId) : null;
-        const pricingOptionId = productId ? pricingByProductId.get(productId) : null;
+        const pricingOptionId = productId
+          ? (pricingByProductId.get(productId) || pricingByMindbodyId.get(productId))
+          : null;
 
         const csData: any = {
           mindbody_id: String(cs.Id),
@@ -1574,6 +1630,156 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
   const totalTimeSec = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`=== CLIENT_SERVICES SYNC COMPLETE: ${totalSynced} records from ${processedClients} clients in ${totalTimeSec}s, ${totalLinked} linked to pricing_options ===`);
   return totalSynced;
+}
+
+
+async function backfillOrphanedClientServices(
+  supabase: any,
+  config: MindbodyConfig,
+  userToken: string,
+  clientIds: string[],
+  batchSize = 50
+): Promise<{
+  processed: number;
+  servicesUpserted: number;
+  linked: number;
+  rateLimitHits: number;
+  errors: string[];
+  lastProcessedClientId: string | null;
+}> {
+  console.log(`=== BACKFILL ORPHANED CLIENT_SERVICES: ${clientIds.length} clients, batchSize=${batchSize} ===`);
+
+  const { data: pricingOptions } = await supabase
+    .from("pricing_options")
+    .select("id, product_id, mindbody_id");
+
+  const pricingByProductId = new Map<string, string>();
+  const pricingByMindbodyId = new Map<string, string>();
+  if (pricingOptions) {
+    for (const po of pricingOptions) {
+      if (po.product_id) pricingByProductId.set(po.product_id, po.id);
+      if (po.mindbody_id) pricingByMindbodyId.set(po.mindbody_id, po.id);
+    }
+  }
+
+  let processed = 0;
+  let servicesUpserted = 0;
+  let linked = 0;
+  let rateLimitHits = 0;
+  const errors: string[] = [];
+  let lastProcessedClientId: string | null = null;
+  const TIMEOUT_MS = 8000;
+  const MAX_429_RETRIES = 4;
+  const BASE_BACKOFF_MS = 2000;
+
+  async function fetchWithBackoff(clientId: string): Promise<{ clientId: string; services: any[] }> {
+    const url = `${MINDBODY_BASE_URL}/client/clientservices?clientId=${clientId}`;
+
+    for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+      try {
+        const response = await fetch(url, {
+          headers: getUserHeaders(config, userToken),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (response.status === 429) {
+          rateLimitHits++;
+          if (attempt < MAX_429_RETRIES) {
+            const delay = BASE_BACKOFF_MS * Math.pow(2, attempt);
+            console.log(`[BACKFILL] 429 for client ${clientId}, retry ${attempt + 1}/${MAX_429_RETRIES} after ${delay}ms`);
+            await new Promise(r => setTimeout(r, delay));
+            continue;
+          }
+          errors.push(`Client ${clientId}: 429 after ${MAX_429_RETRIES} retries`);
+          return { clientId, services: [] };
+        }
+
+        if (!response.ok) {
+          errors.push(`Client ${clientId}: HTTP ${response.status}`);
+          return { clientId, services: [] };
+        }
+
+        const data = await response.json();
+        return { clientId, services: data.ClientServices || [] };
+      } catch (err: any) {
+        clearTimeout(timeoutId);
+        if (err.name === 'AbortError' && attempt < MAX_429_RETRIES) {
+          console.log(`[BACKFILL] Timeout for client ${clientId}, retry ${attempt + 1}`);
+          await new Promise(r => setTimeout(r, 1000));
+          continue;
+        }
+        errors.push(`Client ${clientId}: ${err.message}`);
+        return { clientId, services: [] };
+      }
+    }
+    return { clientId, services: [] };
+  }
+
+  for (let i = 0; i < clientIds.length; i += batchSize) {
+    const batch = clientIds.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch.map(fetchWithBackoff));
+
+    const syncedAt = new Date().toISOString();
+    const allServicesData: any[] = [];
+
+    for (const { clientId, services } of batchResults) {
+      processed++;
+      lastProcessedClientId = clientId;
+
+      for (const cs of services) {
+        const productId = cs.ProductId ? String(cs.ProductId) : null;
+        const pricingOptionId = productId
+          ? (pricingByProductId.get(productId) || pricingByMindbodyId.get(productId))
+          : null;
+
+        const csData: any = {
+          mindbody_id: String(cs.Id),
+          client_id: clientId,
+          product_id: productId || String(cs.Id),
+          name: cs.Name,
+          payment_date: cs.PaymentDate,
+          active_date: cs.ActiveDate,
+          expiration_date: cs.ExpirationDate,
+          count: cs.Count,
+          remaining: cs.Remaining,
+          current: cs.Current || false,
+          program_id: cs.Program?.Id ? String(cs.Program.Id) : null,
+          program_name: cs.Program?.Name || cs.Program,
+          status: cs.Active ? 'Active' : 'Inactive',
+          activation_type: cs.ActivationType,
+          raw_data: cs,
+          synced_at: syncedAt,
+        };
+
+        if (pricingOptionId) {
+          csData.pricing_option_id = pricingOptionId;
+          linked++;
+        }
+
+        allServicesData.push(csData);
+      }
+    }
+
+    if (allServicesData.length > 0) {
+      const { error: upsertError } = await supabase.from("client_services").upsert(allServicesData, {
+        onConflict: "mindbody_id",
+      });
+      if (upsertError) {
+        errors.push(`Upsert batch error: ${upsertError.message}`);
+      } else {
+        servicesUpserted += allServicesData.length;
+      }
+    }
+
+    console.log(`[BACKFILL] Progress: ${processed}/${clientIds.length} clients, ${servicesUpserted} services upserted, ${linked} linked`);
+  }
+
+  console.log(`=== BACKFILL COMPLETE: ${processed} clients, ${servicesUpserted} services, ${linked} linked, ${errors.length} errors ===`);
+  return { processed, servicesUpserted, linked, rateLimitHits, errors, lastProcessedClientId };
 }
 
 
@@ -2199,9 +2405,15 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { syncType = "quick", year, month, staffId: requestStaffId } = await req.json().catch(() => ({}));
+    const { syncType = "quick", year, month, monthFrom, monthTo, staffId: requestStaffId, clientIds, batchSize, pageOffset, pageLimit, staffOffset, staffLimit } = await req.json().catch(() => ({}));
     const targetYear = year ? parseInt(year) : undefined;
     const targetMonth = month ? parseInt(month) : undefined;
+    const targetMonthFrom = monthFrom ? parseInt(monthFrom) : undefined;
+    const targetMonthTo = monthTo ? parseInt(monthTo) : undefined;
+    const pricingPageOffset = pageOffset != null ? parseInt(pageOffset) : undefined;
+    const pricingPageLimit = pageLimit != null ? parseInt(pageLimit) : undefined;
+    const sstStaffOffset = staffOffset != null ? parseInt(staffOffset) : undefined;
+    const sstStaffLimit = staffLimit != null ? parseInt(staffLimit) : undefined;
 
     if (syncType === "ping") {
       return new Response(
@@ -2268,6 +2480,66 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    if (syncType === "backfill_orphaned_client_services") {
+      if (!clientIds || !Array.isArray(clientIds) || clientIds.length === 0) {
+        return new Response(
+          JSON.stringify({ error: "clientIds array is required for backfill_orphaned_client_services" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const userToken = await getUserToken(supabase, config);
+      if (!userToken) {
+        return new Response(
+          JSON.stringify({ error: "Could not obtain user token. Staff credentials required." }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const { data: logData } = await supabase
+        .from("sync_logs")
+        .insert({
+          sync_type: "backfill_orphaned_client_services",
+          status: "started",
+          started_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+      const backfillLogId = logData?.id;
+
+      try {
+        const result = await backfillOrphanedClientServices(
+          supabase, config, userToken, clientIds, batchSize || 50
+        );
+
+        if (backfillLogId) {
+          await supabase.from("sync_logs").update({
+            status: "completed",
+            completed_at: new Date().toISOString(),
+            records_synced: result.servicesUpserted,
+            raw_response: result,
+          }).eq("id", backfillLogId);
+        }
+
+        return new Response(
+          JSON.stringify({ success: true, syncType, ...result }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      } catch (err: any) {
+        if (backfillLogId) {
+          await supabase.from("sync_logs").update({
+            status: "failed",
+            completed_at: new Date().toISOString(),
+            error_message: err.message,
+          }).eq("id", backfillLogId);
+        }
+        return new Response(
+          JSON.stringify({ error: err.message }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
     const { data: logData } = await supabase
       .from("sync_logs")
       .insert({
@@ -2280,7 +2552,10 @@ Deno.serve(async (req: Request) => {
 
     const logId = logData?.id;
 
-    try {
+    const HARD_TIMEOUT_MS = 140000; // 10s safety margin before Pro-tier 150s runtime limit
+    const functionStartTime = Date.now();
+
+    async function runSync() {
       console.log('=== Starting Mindbody Sync (Appointment-Driven Model) ===');
       console.log(`Sync Type: ${syncType}`);
 
@@ -2357,7 +2632,7 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "staff_services" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Staff-Session Type Relationships ---');
-          const sstStats = await syncStaffSessionTypes(supabase, config, userToken);
+          const sstStats = await syncStaffSessionTypes(supabase, config, userToken, sstStaffOffset, sstStaffLimit);
           results.staff_session_types = sstStats.importedRows;
           results.staff_session_types_stats = sstStats as any;
           console.log(`Staff-Session relationships synced: ${JSON.stringify(sstStats)}`);
@@ -2370,7 +2645,7 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "pricing_options" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Pricing Options ---');
-          results.pricing_options = await syncPricingOptions(supabase, config, userToken);
+          results.pricing_options = await syncPricingOptions(supabase, config, userToken, pricingPageOffset, pricingPageLimit);
           console.log(`✅ Pricing options synced: ${results.pricing_options}`);
         } catch (e) {
           console.error('❌ Pricing options sync failed:', e);
@@ -2403,7 +2678,7 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "sales" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Sales ---');
-          results.sales = await syncSales(supabase, config, userToken, targetYear, targetMonth);
+          results.sales = await syncSales(supabase, config, userToken, targetYear, targetMonth, targetMonthFrom, targetMonthTo);
           console.log(`✅ Sales synced: ${results.sales}`);
         } catch (e) {
           console.error('❌ Sales sync failed:', e);
@@ -2478,11 +2753,26 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      const totalRecords = Object.values(results).reduce((sum, count) => sum + count, 0);
+      const totalRecords = Object.values(results).reduce((sum, count) => sum + (typeof count === 'number' ? count : 0), 0);
 
       console.log('\n=== Sync Completed Successfully ===');
       console.log('Results:', JSON.stringify(results, null, 2));
       console.log(`Total records synced: ${totalRecords}`);
+
+      return {
+        success: true,
+        message: "Sync completed successfully",
+        results,
+        totalRecords,
+      };
+    }
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('__TIMEOUT__')), HARD_TIMEOUT_MS);
+    });
+
+    try {
+      const syncResult = await Promise.race([runSync(), timeoutPromise]);
 
       if (logId) {
         await supabase
@@ -2490,33 +2780,43 @@ Deno.serve(async (req: Request) => {
           .update({
             status: "completed",
             completed_at: new Date().toISOString(),
-            records_synced: totalRecords,
-            raw_response: results,
+            records_synced: syncResult.totalRecords,
+            raw_response: syncResult.results,
           })
           .eq("id", logId);
       }
 
       return new Response(
-        JSON.stringify({
-          success: true,
-          message: "Sync completed successfully",
-          results,
-          totalRecords,
-        }),
-        {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
+        JSON.stringify(syncResult),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     } catch (error) {
+      const isTimeout = error.message === '__TIMEOUT__';
+      const elapsedSec = ((Date.now() - functionStartTime) / 1000).toFixed(1);
+
       if (logId) {
         await supabase
           .from("sync_logs")
           .update({
-            status: "failed",
+            status: isTimeout ? "timeout" : "failed",
             completed_at: new Date().toISOString(),
-            error_message: error.message,
+            error_message: isTimeout
+              ? `Approaching Pro-tier 150s runtime limit (elapsed: ${elapsedSec}s). Sync was interrupted to save state.`
+              : error.message,
           })
           .eq("id", logId);
+      }
+
+      if (isTimeout) {
+        console.warn(`[TIMEOUT] Sync interrupted after ${elapsedSec}s to avoid runtime kill`);
+        return new Response(
+          JSON.stringify({
+            success: false,
+            message: `Sync timed out after ${elapsedSec}s (Pro-tier limit: 150s)`,
+            error: "timeout",
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
       }
 
       throw error;

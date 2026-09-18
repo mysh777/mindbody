@@ -49,6 +49,8 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
           'Staff Cost': r.staffCost,
           'Margin': r.margin,
           'Margin %': r.revenue > 0 ? `${r.marginPercent.toFixed(1)}%` : '',
+          'Visits Estimated': r.visitsEstimated,
+          'Estimated Revenue': r.estimatedRevenue,
           'Visits No Data': r.visitsNoData,
         }));
         exportToExcel(exportData, `margin_by_service_${dateRange.start}_to_${dateRange.end}`);
@@ -60,6 +62,8 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
           'Staff Cost': r.staffCost,
           'Margin': r.margin,
           'Margin %': r.revenue > 0 ? `${r.marginPercent.toFixed(1)}%` : '',
+          'Visits Estimated': r.visitsEstimated,
+          'Estimated Revenue': r.estimatedRevenue,
           'Visits No Data': r.visitsNoData,
         }));
         exportToExcel(exportData, `margin_by_staff_${dateRange.start}_to_${dateRange.end}`);
@@ -76,6 +80,7 @@ export function SalesReportPage({ onNavigate }: SalesReportPageProps) {
           'Staff Cost': Number(a.staffCost.toFixed(2)),
           'Margin': a.hasRevenueData ? Number((a.margin || 0).toFixed(2)) : 'N/A',
           'Margin %': a.hasRevenueData && a.revenue ? `${(((a.margin || 0) / a.revenue) * 100).toFixed(1)}%` : '',
+          'Estimated': a.isEstimated ? 'Yes' : '',
           'Data Issue': a.noDataReason === 'ok' ? '' : a.noDataReason,
         }));
         exportToExcel(exportData, `profitability_detail_${dateRange.start}_to_${dateRange.end}`);
