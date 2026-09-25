@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, ReactNode } from 'react';
+import { toLocalISO } from '../utils/datePresets';
 
 type FilterPreset = 'today' | 'this_week' | 'this_month' | 'last_month' | 'this_year' | 'custom';
 
@@ -69,8 +70,8 @@ function getDefaultDateRange(): DateRange {
   const today = new Date();
   const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
   return {
-    start: firstDay.toISOString().split('T')[0],
-    end: today.toISOString().split('T')[0],
+    start: toLocalISO(firstDay),
+    end: toLocalISO(today),
   };
 }
 

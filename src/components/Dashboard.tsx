@@ -15,6 +15,12 @@ import { ClientServicesView } from './ClientServicesView';
 import { StaffPricelist } from './StaffPricelist';
 import { ClientActivityReport } from './ClientActivityReport';
 import { DataLinkageHealthTab } from './DataLinkageHealthTab';
+import { ClientCard } from './ClientCard';
+import { ExpiringPackages } from './ExpiringPackages';
+import { MarginByService } from './MarginByService';
+import { MarginByStaff } from './MarginByStaff';
+import { SleepingClients } from './SleepingClients';
+import { useHashRouter } from '../hooks/useHashRouter';
 
 interface Stats {
   clients: number;
@@ -39,7 +45,12 @@ const tableNameMap: Record<MenuSection, { tableName: string; displayName: string
   'transactions': { tableName: 'transactions', displayName: 'Transactions' },
   'sale-items': { tableName: 'sale_items', displayName: 'Sale Items' },
   'client-activity': null,
+  'client-card': null,
+  'expiring-packages': null,
   'linkage-health': null,
+  'margin-by-service': null,
+  'margin-by-staff': null,
+  'sleeping-clients': null,
 };
 
 const tableSectionMap: Record<string, MenuSection> = {
@@ -60,7 +71,7 @@ const tableSectionMap: Record<string, MenuSection> = {
 };
 
 export function Dashboard() {
-  const [activeSection, setActiveSection] = useState<MenuSection>('api-integration');
+  const { section: activeSection, params: urlParams, navigate, setParams } = useHashRouter();
   const [stats, setStats] = useState<Stats>({
     clients: 0,
     appointments: 0,
@@ -112,13 +123,21 @@ export function Dashboard() {
     setSelectedId(null);
   }, [activeSection]);
 
+  const handleViewClient = useCallback((clientId: string) => {
+    navigate('client-card', { client: clientId });
+  }, [navigate]);
+
   const handleNavigate = (tableName: string, id: string) => {
     const section = tableSectionMap[tableName];
     if (section) {
-      setActiveSection(section);
+      navigate(section);
       setTimeout(() => setSelectedId(id), 100);
     }
   };
+
+  const handleSectionChange = useCallback((section: MenuSection) => {
+    navigate(section);
+  }, [navigate]);
 
   const renderContent = () => {
     if (activeSection === 'api-integration') {
@@ -179,8 +198,28 @@ export function Dashboard() {
       return <ClientActivityReport />;
     }
 
+    if (activeSection === 'expiring-packages') {
+      return <ExpiringPackages onViewClient={handleViewClient} urlParams={urlParams} onParamsChange={setParams} />;
+    }
+
+    if (activeSection === 'client-card') {
+      return <ClientCard urlParams={urlParams} onParamsChange={setParams} />;
+    }
+
     if (activeSection === 'linkage-health') {
       return <DataLinkageHealthTab />;
+    }
+
+    if (activeSection === 'margin-by-service') {
+      return <MarginByService urlParams={urlParams} onParamsChange={setParams} />;
+    }
+
+    if (activeSection === 'margin-by-staff') {
+      return <MarginByStaff urlParams={urlParams} onParamsChange={setParams} />;
+    }
+
+    if (activeSection === 'sleeping-clients') {
+      return <SleepingClients onViewClient={handleViewClient} urlParams={urlParams} onParamsChange={setParams} />;
     }
 
     const tableConfig = tableNameMap[activeSection];
@@ -202,7 +241,7 @@ export function Dashboard() {
     <div className="flex h-screen bg-slate-50 overflow-hidden">
       <Sidebar
         activeSection={activeSection}
-        onSectionChange={setActiveSection}
+        onSectionChange={handleSectionChange}
         refreshTrigger={refreshTrigger}
       />
       <div className="flex-1 overflow-auto">

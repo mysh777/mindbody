@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
+import { toLocalISO } from '../utils/datePresets';
 import {
   ChevronDown,
   ChevronRight,
@@ -123,8 +124,8 @@ export function ClientBalance() {
   useEffect(() => {
     const today = new Date();
     const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-    setStartDate(firstDay.toISOString().split('T')[0]);
-    setEndDate(today.toISOString().split('T')[0]);
+    setStartDate(toLocalISO(firstDay));
+    setEndDate(toLocalISO(today));
   }, []);
 
   useEffect(() => {
@@ -219,7 +220,7 @@ export function ClientBalance() {
           const batch = allSaleIds.slice(i, i + batchSize);
           const { data } = await supabase
             .from('sale_items')
-            .select('id, sale_id, item_id, item_name, description, quantity, total_amount, unit_price')
+            .select('id, sale_id, item_id, item_name, description, quantity, total_amount, unit_price, payment_ref_id')
             .in('sale_id', batch);
           if (data) allItemsData = allItemsData.concat(data);
         }
@@ -268,6 +269,7 @@ export function ClientBalance() {
       const resolvedPrices = resolveServicePrices(
         (servicesRes.data || []).map((s: any) => ({
           id: s.id,
+          mindbody_id: s.mindbody_id,
           pricing_option_id: s.pricing_option_id,
           payment_date: null,
           active_date: s.active_date,
@@ -428,7 +430,7 @@ export function ClientBalance() {
             const batch = saleIds.slice(i, i + 200);
             const { data } = await supabase
               .from('sale_items')
-              .select('id, sale_id, item_id, item_name, total_amount')
+              .select('id, sale_id, item_id, item_name, total_amount, payment_ref_id')
               .in('sale_id', batch);
             if (data) items = items.concat(data);
           }
@@ -453,12 +455,13 @@ export function ClientBalance() {
         const exportResolved = resolveServicePrices(
           (services || []).map((s: any) => ({
             id: s.id,
+            mindbody_id: s.mindbody_id,
             pricing_option_id: s.pricing_option_id,
             payment_date: null,
             active_date: null,
           })),
           exportPricingOptions,
-          items.map((it: any) => ({ item_id: it.item_id, sale_id: it.sale_id, total_amount: it.total_amount })),
+          items.map((it: any) => ({ item_id: it.item_id, sale_id: it.sale_id, total_amount: it.total_amount, payment_ref_id: it.payment_ref_id })),
           (sales || []).map((s: any) => ({ id: s.id, sale_datetime: s.sale_datetime })),
         );
 

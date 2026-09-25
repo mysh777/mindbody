@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
+import { toLocalISO } from '../utils/datePresets';
 import { ChevronDown, ChevronRight, Search, Calendar, ArrowUpDown, Download, User, Package, ShoppingCart, AlertTriangle, HelpCircle } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 import { resolveServicePrices, type PriceSource } from '../utils/resolveServicePrices';
@@ -61,8 +62,8 @@ export function ClientsReport() {
   useEffect(() => {
     const today = new Date();
     const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-    setStartDate(firstDay.toISOString().split('T')[0]);
-    setEndDate(today.toISOString().split('T')[0]);
+    setStartDate(toLocalISO(firstDay));
+    setEndDate(toLocalISO(today));
   }, []);
 
   useEffect(() => {
@@ -160,7 +161,7 @@ export function ClientsReport() {
           const batch = allSaleIds.slice(i, i + batchSize);
           const { data } = await supabase
             .from('sale_items')
-            .select('id, sale_id, item_id, item_name, description, quantity, total_amount, unit_price')
+            .select('id, sale_id, item_id, item_name, description, quantity, total_amount, unit_price, payment_ref_id')
             .in('sale_id', batch);
           if (data) allItemsData = allItemsData.concat(data);
         }
@@ -169,6 +170,7 @@ export function ClientsReport() {
       const resolvedPrices = resolveServicePrices(
         (servicesRes.data || []).map((s: any) => ({
           id: s.id,
+          mindbody_id: s.mindbody_id,
           pricing_option_id: s.pricing_option_id,
           payment_date: null,
           active_date: s.active_date,
@@ -247,15 +249,12 @@ export function ClientsReport() {
     let result = [...clients];
 
     if (debouncedSearch) {
-      const searchLower = debouncedSearch.toLowerCase();
-      result = result.filter(client =>
-        client.first_name?.toLowerCase().includes(searchLower) ||
-        client.last_name?.toLowerCase().includes(searchLower) ||
-        client.email?.toLowerCase().includes(searchLower) ||
-        client.mobile_phone?.includes(debouncedSearch) ||
-        client.home_phone?.includes(debouncedSearch) ||
-        client.mindbody_id?.includes(debouncedSearch)
-      );
+      const terms = debouncedSearch.toLowerCase().split(/\s+/).filter(t => t.length >= 1);
+      result = result.filter(client => {
+        const fullName = `${client.first_name || ''} ${client.last_name || ''}`.toLowerCase();
+        const fields = [fullName, client.email?.toLowerCase() || '', client.mobile_phone || '', client.home_phone || '', client.mindbody_id || ''];
+        return terms.every(term => fields.some(f => f.includes(term)));
+      });
     }
 
     result.sort((a, b) => {

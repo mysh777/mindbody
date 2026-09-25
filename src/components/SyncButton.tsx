@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { RefreshCw, Users, Calendar, DollarSign, MapPin, UserCog, Package, Database, Grid3x3, Tag, ShoppingCart, Link2, CreditCard, FileText, ChevronDown } from 'lucide-react';
+import { useState, useRef } from 'react';
+import { RefreshCw, Users, Calendar, DollarSign, MapPin, UserCog, Package, Database, Grid3x3, Tag, ShoppingCart, Link2, CreditCard, FileText, ChevronDown, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 
 interface SyncButtonProps {
   onSyncComplete?: () => void;
@@ -10,6 +10,37 @@ type SyncType = 'quick' | 'all' | 'sites' | 'locations' | 'staff' | 'programs' |
 interface SyncStatus {
   [key: string]: 'idle' | 'syncing' | 'success' | 'error';
 }
+
+interface QuickSyncStep {
+  label: string;
+  payload: Record<string, unknown>;
+}
+
+interface QuickStepResult {
+  label: string;
+  status: 'success' | 'error' | 'pending' | 'running';
+  records?: number;
+  durationSec?: number;
+  error?: string;
+}
+
+const QUICK_SYNC_STEPS: QuickSyncStep[] = [
+  { label: 'Sites', payload: { syncType: 'sites' } },
+  { label: 'Locations', payload: { syncType: 'locations' } },
+  { label: 'Staff', payload: { syncType: 'staff' } },
+  { label: 'Service Categories', payload: { syncType: 'programs' } },
+  { label: 'Session Types', payload: { syncType: 'services' } },
+  { label: 'Staff Services', payload: { syncType: 'staff_services' } },
+  { label: 'Pricing Options (1/3)', payload: { syncType: 'pricing_options', pageOffset: 0, pageLimit: 100 } },
+  { label: 'Pricing Options (2/3)', payload: { syncType: 'pricing_options', pageOffset: 100, pageLimit: 100 } },
+  { label: 'Pricing Options (3/3)', payload: { syncType: 'pricing_options', pageOffset: 200, pageLimit: 100 } },
+  { label: 'Price-Service Links', payload: { syncType: 'build_pricing_links' } },
+  { label: 'Clients', payload: { syncType: 'clients' } },
+  { label: 'Appointments', payload: { syncType: 'appointments', month: new Date().getMonth() + 1 } },
+  { label: 'Sales', payload: { syncType: 'sales', month: new Date().getMonth() + 1 } },
+  { label: 'Client Services', payload: { syncType: 'client_services', month: new Date().getMonth() + 1 } },
+  { label: 'Retail Products', payload: { syncType: 'retail_products' } },
+];
 
 const currentYear = new Date().getFullYear();
 const currentMonth = new Date().getMonth() + 1;
@@ -30,6 +61,33 @@ const months = [
   { value: 12, label: 'December' },
 ];
 
+async function callEdgeFunction(payload: Record<string, unknown>): Promise<{ ok: boolean; data?: any; error?: string }> {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+  const response = await fetch(`${supabaseUrl}/functions/v1/mindbody-sync`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${supabaseAnonKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const text = await response.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!response.ok || data?.error) {
+    return { ok: false, error: data?.error || data?.message || `HTTP ${response.status}` };
+  }
+  return { ok: true, data };
+}
+
 export function SyncButton({ onSyncComplete }: SyncButtonProps) {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({});
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +105,11 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     client_services: currentMonth,
   });
 
+  const [quickSteps, setQuickSteps] = useState<QuickStepResult[]>([]);
+  const [quickRunning, setQuickRunning] = useState(false);
+  const [quickSummary, setQuickSummary] = useState<string | null>(null);
+  const abortRef = useRef(false);
+
   const handleYearChange = (syncType: string, year: number) => {
     setSelectedYears(prev => ({ ...prev, [syncType]: year }));
   };
@@ -55,7 +118,66 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     setSelectedMonths(prev => ({ ...prev, [syncType]: month }));
   };
 
+  const handleQuickSync = async () => {
+    if (quickRunning) return;
+    abortRef.current = false;
+    setQuickRunning(true);
+    setQuickSummary(null);
+    setError(null);
+    setSyncResult(null);
+
+    const steps: QuickStepResult[] = QUICK_SYNC_STEPS.map(s => ({
+      label: s.label,
+      status: 'pending' as const,
+    }));
+    setQuickSteps([...steps]);
+
+    const overallStart = Date.now();
+    let successCount = 0;
+    let errorCount = 0;
+    let totalRecords = 0;
+
+    for (let i = 0; i < QUICK_SYNC_STEPS.length; i++) {
+      if (abortRef.current) break;
+
+      steps[i] = { ...steps[i], status: 'running' };
+      setQuickSteps([...steps]);
+
+      const stepStart = Date.now();
+      const result = await callEdgeFunction(QUICK_SYNC_STEPS[i].payload);
+      const durationSec = Math.round((Date.now() - stepStart) / 1000);
+
+      if (result.ok) {
+        const records = result.data?.totalRecords ?? result.data?.records_synced ?? 0;
+        steps[i] = { ...steps[i], status: 'success', records, durationSec };
+        successCount++;
+        totalRecords += typeof records === 'number' ? records : 0;
+      } else {
+        steps[i] = { ...steps[i], status: 'error', error: result.error, durationSec };
+        errorCount++;
+      }
+      setQuickSteps([...steps]);
+    }
+
+    const totalSec = Math.round((Date.now() - overallStart) / 1000);
+    const totalMin = Math.floor(totalSec / 60);
+    const remainSec = totalSec % 60;
+    const timeStr = totalMin > 0 ? `${totalMin}m ${remainSec}s` : `${totalSec}s`;
+
+    setQuickSummary(
+      `Done in ${timeStr}: ${successCount} succeeded, ${errorCount} failed, ${totalRecords} records total`
+    );
+    setQuickRunning(false);
+
+    if (onSyncComplete) onSyncComplete();
+  };
+
   const handleSync = async (syncType: SyncType, year?: number, month?: number) => {
+    if (syncType === 'quick') {
+      handleQuickSync();
+      return;
+    }
+
     const monthLabel = month ? `-${String(month).padStart(2, '0')}` : '';
     console.log(`Starting sync for: ${syncType}${year ? ` (period: ${year}${monthLabel})` : ''}`);
     setSyncStatus(prev => ({ ...prev, [syncType]: 'syncing' }));
@@ -63,54 +185,24 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     setSyncResult(null);
 
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+      const payload: Record<string, unknown> = { syncType };
+      if (year) payload.year = year;
+      if (month && month > 0) payload.month = month;
 
-      const payload: { syncType: string; year?: number; month?: number } = { syncType };
-      if (year) {
-        payload.year = year;
-      }
-      if (month && month > 0) {
-        payload.month = month;
-      }
+      const result = await callEdgeFunction(payload);
 
-      console.log(`Calling edge function with payload:`, payload);
-
-      const response = await fetch(`${supabaseUrl}/functions/v1/mindbody-sync`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${supabaseAnonKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      console.log(`Response status: ${response.status}`);
-
-      const responseText = await response.text();
-      console.log(`Response text:`, responseText);
-
-      if (!response.ok) {
-        throw new Error(`Sync failed with status ${response.status}: ${responseText}`);
-      }
-
-      const result = JSON.parse(responseText);
-      console.log(`Result:`, result);
-
-      if (result.error) {
-        throw new Error(result.error);
+      if (!result.ok) {
+        throw new Error(result.error || 'Sync failed');
       }
 
       setSyncStatus(prev => ({ ...prev, [syncType]: 'success' }));
-      setSyncResult(JSON.stringify(result, null, 2));
+      setSyncResult(JSON.stringify(result.data, null, 2));
 
       setTimeout(() => {
         setSyncStatus(prev => ({ ...prev, [syncType]: 'idle' }));
       }, 3000);
 
-      if (onSyncComplete) {
-        onSyncComplete();
-      }
+      if (onSyncComplete) onSyncComplete();
     } catch (err) {
       console.error(`Sync error:`, err);
       setSyncStatus(prev => ({ ...prev, [syncType]: 'error' }));
@@ -173,26 +265,87 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     return `${baseClass} ${colorClasses[color] || 'bg-gray-600 hover:bg-gray-700'} text-white`;
   };
 
+  const currentStepIndex = quickSteps.findIndex(s => s.status === 'running');
+  const quickProgressLabel = quickRunning && currentStepIndex >= 0
+    ? `Step ${currentStepIndex + 1} of ${QUICK_SYNC_STEPS.length}: ${quickSteps[currentStepIndex].label}...`
+    : null;
+
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex gap-3">
-        <button
-          onClick={() => handleSync('quick')}
-          disabled={syncStatus['quick'] === 'syncing'}
-          className={getButtonClass('quick', 'blue')}
-        >
-          <RefreshCw className={`w-5 h-5 ${syncStatus['quick'] === 'syncing' ? 'animate-spin' : ''}`} />
-          {syncStatus['quick'] === 'syncing' ? 'Quick Syncing...' : 'Quick Sync (Main Tables)'}
-        </button>
+      {/* Quick Sync */}
+      <div className="flex flex-col gap-3">
+        <div className="flex gap-3">
+          <button
+            onClick={() => handleSync('quick')}
+            disabled={quickRunning}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium shadow-sm transition-all duration-200 ${
+              quickRunning
+                ? 'bg-gray-400 text-white cursor-wait'
+                : 'bg-blue-600 hover:bg-blue-700 text-white'
+            }`}
+          >
+            <RefreshCw className={`w-5 h-5 ${quickRunning ? 'animate-spin' : ''}`} />
+            {quickRunning ? 'Quick Syncing...' : 'Quick Sync (Main Tables)'}
+          </button>
 
-        <button
-          onClick={() => handleSync('all')}
-          disabled={syncStatus['all'] === 'syncing'}
-          className={getButtonClass('all', 'slate')}
-        >
-          <RefreshCw className={`w-5 h-5 ${syncStatus['all'] === 'syncing' ? 'animate-spin' : ''}`} />
-          {syncStatus['all'] === 'syncing' ? 'Full Syncing...' : 'Full Sync (All Data)'}
-        </button>
+          <button
+            onClick={() => handleSync('all')}
+            disabled={syncStatus['all'] === 'syncing' || quickRunning}
+            className={getButtonClass('all', 'slate')}
+          >
+            <RefreshCw className={`w-5 h-5 ${syncStatus['all'] === 'syncing' ? 'animate-spin' : ''}`} />
+            {syncStatus['all'] === 'syncing' ? 'Full Syncing...' : 'Full Sync (All Data)'}
+          </button>
+        </div>
+
+        {/* Quick Sync progress panel */}
+        {(quickSteps.length > 0) && (
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">
+            {quickProgressLabel && (
+              <div className="flex items-center gap-2 text-sm font-medium text-blue-700">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                {quickProgressLabel}
+              </div>
+            )}
+
+            <div className="grid grid-cols-3 gap-1.5">
+              {quickSteps.map((step, i) => (
+                <div
+                  key={i}
+                  className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded ${
+                    step.status === 'success' ? 'bg-green-50 text-green-700' :
+                    step.status === 'error' ? 'bg-red-50 text-red-700' :
+                    step.status === 'running' ? 'bg-blue-50 text-blue-700' :
+                    'bg-gray-100 text-gray-400'
+                  }`}
+                >
+                  {step.status === 'success' && <CheckCircle2 className="w-3 h-3 flex-shrink-0" />}
+                  {step.status === 'error' && <XCircle className="w-3 h-3 flex-shrink-0" />}
+                  {step.status === 'running' && <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />}
+                  {step.status === 'pending' && <div className="w-3 h-3 rounded-full border border-gray-300 flex-shrink-0" />}
+                  <span className="truncate">{step.label}</span>
+                  {step.durationSec != null && (
+                    <span className="ml-auto text-[10px] opacity-70 flex-shrink-0">{step.durationSec}s</span>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {quickSummary && (
+              <div className="text-xs font-medium text-gray-600 pt-1 border-t border-gray-200">
+                {quickSummary}
+              </div>
+            )}
+
+            {quickSteps.some(s => s.status === 'error' && s.error) && (
+              <div className="text-xs text-red-600 space-y-0.5 pt-1">
+                {quickSteps.filter(s => s.status === 'error' && s.error).map((s, i) => (
+                  <div key={i}><span className="font-medium">{s.label}:</span> {s.error}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="border-t pt-4">
@@ -235,7 +388,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
               <p className="text-xs text-gray-500">{description}</p>
               <button
                 onClick={() => handleSync(type, selectedYears[type], selectedMonths[type])}
-                disabled={syncStatus[type] === 'syncing'}
+                disabled={syncStatus[type] === 'syncing' || quickRunning}
                 className={`${getButtonClass(type, color)} w-full justify-center`}
               >
                 <RefreshCw className={`w-4 h-4 ${syncStatus[type] === 'syncing' ? 'animate-spin' : ''}`} />
@@ -255,7 +408,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
             <button
               key={type}
               onClick={() => handleSync(type)}
-              disabled={syncStatus[type] === 'syncing'}
+              disabled={syncStatus[type] === 'syncing' || quickRunning}
               className={getButtonClass(type, color)}
             >
               <Icon className={`w-4 h-4 ${syncStatus[type] === 'syncing' ? 'animate-spin' : ''}`} />
@@ -277,7 +430,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
             <button
               key={type}
               onClick={() => handleSync(type)}
-              disabled={syncStatus[type] === 'syncing'}
+              disabled={syncStatus[type] === 'syncing' || quickRunning}
               className={`flex flex-col items-start gap-0.5 px-3 py-2 rounded-lg font-medium shadow-sm transition-all duration-200 text-left ${
                 syncStatus[type] === 'syncing' ? 'bg-gray-400 text-white cursor-wait' :
                 syncStatus[type] === 'success' ? 'bg-green-500 text-white' :

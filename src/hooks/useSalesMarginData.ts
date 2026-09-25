@@ -20,6 +20,7 @@ export interface AppointmentRow {
   sessionTypeName: string;
   locationName: string;
   pricingOptionName: string;
+  revenueCategory: string;
   revenue: number | null;
   staffCost: number;
   margin: number | null;
@@ -60,6 +61,8 @@ export interface MarginSummary {
 export interface ByServiceRow {
   sessionTypeId: string;
   sessionTypeName: string;
+  pricingOptionKey: string;
+  pricingOptionName: string;
   categoryName: string;
   visits: number;
   revenue: number;
@@ -185,7 +188,7 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
           });
         }
 
-        return { ...a, rev, noDataReason, poName: csEntry?.pricingOptionName || '' };
+        return { ...a, rev, noDataReason, poName: csEntry?.pricingOptionName || '', poCategory: csEntry?.category || '' };
       });
 
       const stMedianMap = getSessionTypeMedianPrices(resolvedVisitsForMedian);
@@ -233,6 +236,7 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
           sessionTypeName: a.session_type_id ? sessionTypesMap[a.session_type_id]?.name || a.session_type_id : '-',
           locationName: a.location_id ? locationsMap[a.location_id] || a.location_id : '-',
           pricingOptionName: a.poName,
+          revenueCategory: a.poCategory,
           revenue: hasRevenueData ? rev! : null,
           staffCost: cost,
           margin: hasRevenueData ? rev! - cost : null,
@@ -312,12 +316,15 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
 
       const serviceMap: Record<string, ByServiceRow> = {};
       processedAppts.forEach(a => {
-        const key = a.session_type_id || 'unknown';
+        const poName = a.pricingOptionName;
+        const key = poName ? `po__${poName}` : `st__${a.session_type_id || 'unknown'}`;
         if (!serviceMap[key]) {
           serviceMap[key] = {
-            sessionTypeId: key,
+            sessionTypeId: a.session_type_id || 'unknown',
             sessionTypeName: a.sessionTypeName,
-            categoryName: a.session_type_id ? sessionTypesMap[a.session_type_id]?.category || '' : '',
+            pricingOptionKey: key,
+            pricingOptionName: poName || '',
+            categoryName: a.revenueCategory || (a.session_type_id ? sessionTypesMap[a.session_type_id]?.category || '' : ''),
             visits: 0, revenue: 0, staffCost: 0, margin: 0,
             marginPercent: 0, hasRevenueData: false, visitsNoData: 0,
             visitsEstimated: 0, estimatedRevenue: 0,
@@ -448,16 +455,17 @@ async function loadStaffRatesMap(): Promise<Record<string, number>> {
   return map;
 }
 
-async function loadPricingMap(): Promise<Record<string, { price: number; sessionCount: number; name: string }>> {
-  const map: Record<string, { price: number; sessionCount: number; name: string }> = {};
+async function loadPricingMap(): Promise<Record<string, { price: number; sessionCount: number; name: string; category: string }>> {
+  const map: Record<string, { price: number; sessionCount: number; name: string; category: string }> = {};
   const { data } = await supabase
     .from('pricing_options')
-    .select('id, name, price, session_count');
+    .select('id, name, price, session_count, revenue_category');
   (data || []).forEach(po => {
     map[po.id] = {
       price: Number(po.price) || 0,
       sessionCount: po.session_count || 1,
       name: po.name || '',
+      category: po.revenue_category || '',
     };
   });
   return map;
@@ -467,17 +475,20 @@ interface CsRevenueEntry {
   revenue: number | null;
   reason: NoDataReason;
   pricingOptionName: string;
+  category: string;
 }
 
 async function loadClientServiceRevenue(
   clientServiceIds: string[],
-  pricingMap: Record<string, { price: number; sessionCount: number; name: string }>
+  pricingMap: Record<string, { price: number; sessionCount: number; name: string; category: string }>
 ): Promise<Record<string, CsRevenueEntry>> {
   const revenueMap: Record<string, CsRevenueEntry> = {};
   if (clientServiceIds.length === 0) return revenueMap;
 
   const uniqueIds = [...new Set(clientServiceIds)];
+  const orphanedCsIds: string[] = [];
 
+  let allCsData: { mindbody_id: string | null; pricing_option_id: string | null }[] = [];
   for (let i = 0; i < uniqueIds.length; i += 500) {
     const batch = uniqueIds.slice(i, i + 500);
     const { data } = await supabase
@@ -486,25 +497,91 @@ async function loadClientServiceRevenue(
       .in('mindbody_id', batch);
 
     const foundIds = new Set((data || []).map(cs => cs.mindbody_id));
-
     batch.forEach(id => {
       if (!foundIds.has(id)) {
-        revenueMap[id] = { revenue: null, reason: 'cs_not_synced', pricingOptionName: '' };
+        orphanedCsIds.push(id);
+      }
+    });
+    if (data) allCsData = allCsData.concat(data);
+  }
+
+  // Priority 0: for orphaned client_service_ids (no client_services row),
+  // try sale_items.payment_ref_id as direct price source.
+  // item_id maps to pricing_options.mindbody_id for session_count + name lookup.
+  if (orphanedCsIds.length > 0) {
+    // Build mindbody_id -> pricing info map for session_count lookup
+    const poByMbId = new Map<string, { sessionCount: number; name: string; category: string }>();
+    const { data: poMbData } = await supabase
+      .from('pricing_options')
+      .select('mindbody_id, session_count, name, revenue_category');
+    (poMbData || []).forEach(po => {
+      if (po.mindbody_id != null) {
+        poByMbId.set(String(po.mindbody_id), {
+          sessionCount: Math.max(po.session_count || 1, 1),
+          name: po.name || '',
+          category: po.revenue_category || '',
+        });
       }
     });
 
-    (data || []).forEach(cs => {
-      if (cs.pricing_option_id && pricingMap[cs.pricing_option_id]) {
-        const po = pricingMap[cs.pricing_option_id];
-        revenueMap[cs.mindbody_id!] = {
-          revenue: po.sessionCount > 0 ? po.price / po.sessionCount : po.price,
-          reason: 'ok',
-          pricingOptionName: po.name,
-        };
-      } else {
-        revenueMap[cs.mindbody_id!] = { revenue: null, reason: 'no_pricing_option', pricingOptionName: '' };
+    for (let i = 0; i < orphanedCsIds.length; i += 500) {
+      const batch = orphanedCsIds.slice(i, i + 500);
+      const { data: directItems } = await supabase
+        .from('sale_items')
+        .select('payment_ref_id, total_amount, item_id')
+        .not('payment_ref_id', 'is', null)
+        .not('total_amount', 'is', null)
+        .in('payment_ref_id', batch);
+      (directItems || []).forEach(si => {
+        if (si.payment_ref_id != null && si.total_amount != null) {
+          const amt = Number(si.total_amount);
+          if (amt > 0) {
+            const poInfo = si.item_id ? poByMbId.get(String(si.item_id)) : null;
+            const sc = poInfo?.sessionCount ?? 1;
+            const poName = poInfo?.name ?? '';
+            revenueMap[String(si.payment_ref_id)] = { revenue: amt / sc, reason: 'ok', pricingOptionName: poName, category: poInfo?.category ?? '' };
+          }
+        }
+      });
+    }
+    orphanedCsIds.forEach(id => {
+      if (!revenueMap[id]) {
+        revenueMap[id] = { revenue: null, reason: 'cs_not_synced', pricingOptionName: '', category: '' };
       }
     });
+  }
+
+  const csMbIds = allCsData.map(cs => cs.mindbody_id).filter(Boolean) as string[];
+  const refAmountMap = new Map<string, number>();
+  for (let i = 0; i < csMbIds.length; i += 500) {
+    const batch = csMbIds.slice(i, i + 500);
+    const { data: refItems } = await supabase
+      .from('sale_items')
+      .select('payment_ref_id, total_amount')
+      .not('payment_ref_id', 'is', null)
+      .not('total_amount', 'is', null)
+      .in('payment_ref_id', batch);
+    (refItems || []).forEach(si => {
+      if (si.payment_ref_id != null && si.total_amount != null) {
+        refAmountMap.set(String(si.payment_ref_id), Number(si.total_amount));
+      }
+    });
+  }
+
+  for (const cs of allCsData) {
+    const mbId = cs.mindbody_id!;
+    const po = cs.pricing_option_id ? pricingMap[cs.pricing_option_id] : null;
+    if (!po) {
+      revenueMap[mbId] = { revenue: null, reason: 'no_pricing_option', pricingOptionName: '', category: '' };
+      continue;
+    }
+    const sc = po.sessionCount > 0 ? po.sessionCount : 1;
+    const directAmount = refAmountMap.get(mbId);
+    if (directAmount !== undefined) {
+      revenueMap[mbId] = { revenue: directAmount / sc, reason: 'ok', pricingOptionName: po.name, category: po.category };
+    } else {
+      revenueMap[mbId] = { revenue: po.price / sc, reason: 'ok', pricingOptionName: po.name, category: po.category };
+    }
   }
 
   return revenueMap;

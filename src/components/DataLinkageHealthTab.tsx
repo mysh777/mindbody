@@ -24,6 +24,7 @@ import {
 import * as XLSX from 'xlsx';
 import { getSessionTypeMedianPrices } from '../utils/sessionTypeMedianPrice';
 import type { MedianEntry } from '../utils/sessionTypeMedianPrice';
+import { toLocalISO } from '../utils/datePresets';
 
 type PeriodPreset = '3m' | '6m' | '12m' | 'custom';
 
@@ -75,9 +76,9 @@ function getDateRange(preset: PeriodPreset, customStart: string, customEnd: stri
   }
   const months = preset === '3m' ? 3 : preset === '6m' ? 6 : 12;
   const now = new Date();
-  const end = now.toISOString().split('T')[0];
+  const end = toLocalISO(now);
   const startDate = new Date(now.getFullYear(), now.getMonth() - months, 1);
-  const start = startDate.toISOString().split('T')[0];
+  const start = toLocalISO(startDate);
   return { start, end };
 }
 
@@ -347,7 +348,22 @@ export function DataLinkageHealthTab() {
       ws3['!cols'] = [{ wch: 40 }, { wch: 18 }, { wch: 20 }, { wch: 35 }];
       XLSX.utils.book_append_sheet(wb, ws3, 'Insufficient Types');
     }
-    XLSX.writeFile(wb, `linkage_health_${new Date().toISOString().split('T')[0]}.xlsx`);
+    const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    const base64 = btoa(binary);
+    const dataUri = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${base64}`;
+    try {
+      const link = document.createElement('a');
+      link.href = dataUri;
+      link.download = `linkage_health_${new Date().toISOString().split('T')[0]}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch {
+      window.open(dataUri, '_blank');
+    }
   };
 
   const chartData = useMemo(() =>

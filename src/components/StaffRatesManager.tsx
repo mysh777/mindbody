@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { toLocalISO } from '../utils/datePresets';
 import { Save, Plus, Trash2, UserCog, AlertCircle, RefreshCw, Download } from 'lucide-react';
 
 interface StaffMember {
@@ -168,7 +169,7 @@ export function StaffRatesManager() {
           session_type_id: rate.session_type_id || null,
           rate_per_appointment: rate.rate_per_appointment,
           rate_type: 'fixed',
-          effective_from: new Date().toISOString().split('T')[0],
+          effective_from: toLocalISO(new Date()),
           updated_at: new Date().toISOString(),
         };
         if (rate.id && !rate.isNew) {

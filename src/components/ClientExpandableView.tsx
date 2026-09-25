@@ -298,7 +298,14 @@ export function ClientExpandableView() {
         .order('last_name');
 
       if (debouncedSearch) {
-        query = query.or(`first_name.ilike.%${debouncedSearch}%,last_name.ilike.%${debouncedSearch}%,email.ilike.%${debouncedSearch}%`);
+        const terms = debouncedSearch.trim().split(/\s+/).filter(t => t.length >= 1);
+        if (terms.length === 1) {
+          query = query.or(`first_name.ilike.%${terms[0]}%,last_name.ilike.%${terms[0]}%,email.ilike.%${terms[0]}%`);
+        } else {
+          for (const term of terms) {
+            query = query.or(`first_name.ilike.%${term}%,last_name.ilike.%${term}%`);
+          }
+        }
       }
 
       if (filterMode === 'with_packages' || filterMode === 'active_only') {

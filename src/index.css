@@ -1,3 +1,37 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@media print {
+  body > * { visibility: hidden !important; }
+  .print-report,
+  .print-report * { visibility: visible !important; }
+  .print-report {
+    position: absolute; left: 0; top: 0; width: 100%;
+    font-family: Georgia, 'Times New Roman', serif;
+    color: #1a1a1a; font-size: 11px; line-height: 1.5;
+    padding: 20px;
+  }
+  @page { size: landscape; margin: 12mm 10mm; }
+  .print-report h1 { font-size: 18px; margin-bottom: 4px; }
+  .print-report .pr-sub { color: #666; margin-bottom: 20px; font-size: 12px; }
+  .print-report h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 1px;
+    border-bottom: 2px solid #333; padding-bottom: 4px; margin: 20px 0 8px;
+  }
+  .print-report table { border-collapse: collapse; width: 100%; margin-bottom: 12px; }
+  .print-report th,
+  .print-report td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; font-size: 10px; }
+  .print-report th { background: #f0f0f0; font-weight: bold; }
+  .print-report .pr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 24px; max-width: 380px; }
+  .print-report .pr-grid dt { color: #666; }
+  .print-report .pr-grid dd { font-weight: bold; text-align: right; margin: 0; }
+  .print-report .text-right { text-align: right; }
+  .print-report tfoot td { font-weight: bold; background: #f0f0f0; }
+  .print-report .pr-staff-section { page-break-inside: avoid; margin-top: 16px; }
+  .print-report .pr-grand-total {
+    margin-top: 24px; padding-top: 12px;
+    border-top: 3px double #333;
+  }
+  .print-report .pr-grand-total .pr-grid dd { font-size: 12px; }
+}

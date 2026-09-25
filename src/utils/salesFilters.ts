@@ -1,3 +1,5 @@
+import { toLocalISO } from './datePresets';
+
 export type FilterPreset = 'today' | 'this_week' | 'this_month' | 'last_month' | 'this_year' | 'custom';
 
 export interface DateRange {
@@ -13,7 +15,7 @@ export const formatPercent = (value: number): string =>
 
 export function getFilterPresetDates(preset: FilterPreset): DateRange {
   const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
+  const todayStr = toLocalISO(today);
 
   switch (preset) {
     case 'today':
@@ -22,20 +24,20 @@ export function getFilterPresetDates(preset: FilterPreset): DateRange {
       const dayOfWeek = today.getDay();
       const monday = new Date(today);
       monday.setDate(today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
-      return { start: monday.toISOString().split('T')[0], end: todayStr };
+      return { start: toLocalISO(monday), end: todayStr };
     }
     case 'this_month': {
       const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-      return { start: firstDay.toISOString().split('T')[0], end: todayStr };
+      return { start: toLocalISO(firstDay), end: todayStr };
     }
     case 'last_month': {
       const firstDay = new Date(today.getFullYear(), today.getMonth() - 1, 1);
       const lastDay = new Date(today.getFullYear(), today.getMonth(), 0);
-      return { start: firstDay.toISOString().split('T')[0], end: lastDay.toISOString().split('T')[0] };
+      return { start: toLocalISO(firstDay), end: toLocalISO(lastDay) };
     }
     case 'this_year': {
       const firstDay = new Date(today.getFullYear(), 0, 1);
-      return { start: firstDay.toISOString().split('T')[0], end: todayStr };
+      return { start: toLocalISO(firstDay), end: todayStr };
     }
     default:
       return { start: todayStr, end: todayStr };
@@ -51,8 +53,8 @@ export function getMonthsForTimeline(): { label: string; start: string; end: str
     const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0);
     months.push({
       label: date.toLocaleString('en-US', { month: 'short', year: '2-digit' }),
-      start: date.toISOString().split('T')[0],
-      end: lastDay.toISOString().split('T')[0],
+      start: toLocalISO(date),
+      end: toLocalISO(lastDay),
     });
   }
 

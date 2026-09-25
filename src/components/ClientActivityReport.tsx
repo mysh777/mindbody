@@ -6,6 +6,7 @@ import {
   Download, ArrowUpCircle, ArrowDownCircle, X, Loader2,
 } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
+import { getFilterPresetDates as salesGetFilterPresetDates, getMonthsForTimeline as salesGetMonthsForTimeline } from '../utils/salesFilters';
 
 type FilterPreset = 'today' | 'this_week' | 'this_month' | 'last_month' | 'this_year' | 'custom';
 
@@ -25,48 +26,11 @@ interface ActivityRow {
 }
 
 function getFilterPresetDates(preset: FilterPreset): { start: string; end: string } {
-  const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
-  switch (preset) {
-    case 'today':
-      return { start: todayStr, end: todayStr };
-    case 'this_week': {
-      const d = today.getDay();
-      const mon = new Date(today);
-      mon.setDate(today.getDate() - (d === 0 ? 6 : d - 1));
-      return { start: mon.toISOString().split('T')[0], end: todayStr };
-    }
-    case 'this_month': {
-      const f = new Date(today.getFullYear(), today.getMonth(), 1);
-      return { start: f.toISOString().split('T')[0], end: todayStr };
-    }
-    case 'last_month': {
-      const f = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-      const l = new Date(today.getFullYear(), today.getMonth(), 0);
-      return { start: f.toISOString().split('T')[0], end: l.toISOString().split('T')[0] };
-    }
-    case 'this_year': {
-      const f = new Date(today.getFullYear(), 0, 1);
-      return { start: f.toISOString().split('T')[0], end: todayStr };
-    }
-    default:
-      return { start: todayStr, end: todayStr };
-  }
+  return salesGetFilterPresetDates(preset);
 }
 
 function getMonthsTimeline(): { label: string; start: string; end: string }[] {
-  const months: { label: string; start: string; end: string }[] = [];
-  const today = new Date();
-  for (let i = 11; i >= 0; i--) {
-    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
-    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-    months.push({
-      label: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
-      start: d.toISOString().split('T')[0],
-      end: end.toISOString().split('T')[0],
-    });
-  }
-  return months;
+  return salesGetMonthsForTimeline();
 }
 
 const PAGE_SIZE = 50;

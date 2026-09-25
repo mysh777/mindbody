@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Database, Settings, BarChart3, Calendar, DollarSign, FileText, ClipboardList, PieChart, Package, ShoppingBag, Wallet, UserCog, Activity, HeartPulse } from 'lucide-react';
+import { Database, Settings, BarChart3, Calendar, DollarSign, FileText, ClipboardList, PieChart, Package, ShoppingBag, Wallet, UserCog, Activity, HeartPulse, UserCircle, Flame, TrendingUp, UserCheck, Moon } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export type MenuSection =
@@ -17,7 +17,12 @@ export type MenuSection =
   | 'transactions'
   | 'sale-items'
   | 'client-activity'
-  | 'linkage-health';
+  | 'client-card'
+  | 'expiring-packages'
+  | 'linkage-health'
+  | 'margin-by-service'
+  | 'margin-by-staff'
+  | 'sleeping-clients';
 
 interface SidebarProps {
   activeSection: MenuSection;
@@ -35,6 +40,7 @@ interface MenuItem {
 
 const tableNameMap: Record<MenuSection, string | null> = {
   'api-integration': null,
+  'sleeping-clients': null,
   'references': null,
   'pivot-reports': null,
   'clients-report': null,
@@ -48,7 +54,11 @@ const tableNameMap: Record<MenuSection, string | null> = {
   'transactions': 'transactions',
   'sale-items': 'sale_items',
   'client-activity': null,
+  'client-card': null,
+  'expiring-packages': null,
   'linkage-health': null,
+  'margin-by-service': null,
+  'margin-by-staff': null,
 };
 
 export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: SidebarProps) {
@@ -62,10 +72,15 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
     { id: 'staff-report', label: 'Staff Report', icon: ClipboardList },
     { id: 'staff-pricelist', label: 'Staff Pricelist', icon: UserCog },
     { id: 'client-activity', label: 'Client Activity', icon: Activity },
+    { id: 'client-card', label: 'Client Card', icon: UserCircle },
+    { id: 'expiring-packages', label: 'Expiring Packages', icon: Flame },
+    { id: 'sleeping-clients', label: 'Sleeping Clients', icon: Moon },
     { id: 'linkage-health', label: 'Linkage Health', icon: HeartPulse, dividerBefore: true },
     { id: 'appointments', label: 'Appointments', icon: Calendar, dividerBefore: true },
     { id: 'client-services', label: 'Client Services', icon: Package },
     { id: 'sales', label: 'Sales Journal', icon: DollarSign, dividerBefore: true },
+    { id: 'margin-by-service', label: 'Margin by Service', icon: TrendingUp },
+    { id: 'margin-by-staff', label: 'Margin by Staff', icon: UserCheck },
     { id: 'sales-report', label: 'Profitability', icon: PieChart },
     { id: 'sales-by-pricing', label: 'Sales by Pricing', icon: FileText },
     { id: 'transactions', label: 'Transactions', icon: ShoppingBag },

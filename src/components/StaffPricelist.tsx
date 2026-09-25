@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
+import { toLocalISO } from '../utils/datePresets';
 import { UserCog, Calendar, Download, ChevronDown } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 
@@ -57,8 +58,8 @@ export function StaffPricelist() {
   useEffect(() => {
     const today = new Date();
     const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-    setStartDate(firstDay.toISOString().split('T')[0]);
-    setEndDate(today.toISOString().split('T')[0]);
+    setStartDate(toLocalISO(firstDay));
+    setEndDate(toLocalISO(today));
   }, []);
 
   useEffect(() => {

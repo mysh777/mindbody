@@ -1,4 +1,4 @@
-export type PriceSource = 'actual' | 'catalog_approximate' | 'session_type_estimate' | 'no_data';
+export type PriceSource = 'actual' | 'direct_sale_item' | 'catalog_approximate' | 'session_type_estimate' | 'no_data';
 
 export interface ResolvedPrice {
   price: number;
@@ -7,6 +7,7 @@ export interface ResolvedPrice {
 
 interface ServiceInput {
   id: string;
+  mindbody_id?: string | null;
   pricing_option_id: string | null;
   payment_date: string | null;
   active_date: string | null;
@@ -23,6 +24,7 @@ interface SaleItemInput {
   item_id: string;
   sale_id: string;
   total_amount: number | null;
+  payment_ref_id?: string | number | null;
 }
 
 interface SaleDateInput {
@@ -62,6 +64,14 @@ export function resolveServicePrices(
     arr.push({ total_amount: Number(si.total_amount), saleTime });
   }
 
+  // Direct lookup: payment_ref_id -> sale_item amount
+  const amountByPaymentRef = new Map<string, number>();
+  for (const si of saleItems) {
+    if (si.payment_ref_id != null && si.total_amount != null) {
+      amountByPaymentRef.set(String(si.payment_ref_id), Number(si.total_amount));
+    }
+  }
+
   for (const svc of services) {
     if (!svc.pricing_option_id) {
       const estimate = trySessionTypeEstimate(svc.session_type_id, sessionTypeMedians);
@@ -84,6 +94,16 @@ export function resolveServicePrices(
       continue;
     }
 
+    // Priority 1: direct match via payment_ref_id = client_services.mindbody_id
+    if (svc.mindbody_id) {
+      const directAmount = amountByPaymentRef.get(svc.mindbody_id);
+      if (directAmount !== undefined) {
+        result.set(svc.id, { price: directAmount, source: 'actual' });
+        continue;
+      }
+    }
+
+    // Priority 2: heuristic — closest sale_item by date for same pricing option
     const candidates = itemsByMindbodyId.get(po.mindbody_id);
     if (candidates && candidates.length > 0) {
       const refDate = svc.payment_date || svc.active_date;

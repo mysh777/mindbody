@@ -1,262 +1,265 @@
-# Проверка четырёх вопросов
+# DB Diagnostic Report: Visit Mismatch & Uncategorized Services
 
-**Дата:** 2026-09-18  
-**Метод:** Чтение кода `mindbody-sync/index.ts` + данные из предыдущих SQL-запросов  
-**Статус:** Только диагностика. Данные не менялись.
+**Date:** 2026-09-23
+**Blocker:** Supabase MCP query tools not available in this session. SQL verification queries below must be run manually in the Supabase Dashboard SQL Editor.
 
 ---
 
-## Вопрос 1: `client_visits` — нужна ли таблица
+## Problem 1 — 14 visits / 3,011.50 EUR vs Mindbody 12 / 2,441.50 EUR (Kriolipolize 2 manipulas, Aug 2026)
 
-### URL запроса
+### Root Cause (from code analysis): Different Methodology
 
-Код `syncClientVisits()` (строка 1924):
-```
-${MINDBODY_BASE_URL}/client/clientvisits?startDate=2026-03-18&endDate=2026-09-18&limit=100&offset=0
-```
+Our "Margin by Procedure" report uses **visit-basis (accrual)**: it counts completed appointments and derives revenue from linked pricing options. Mindbody "Sales by Service" uses **cash-basis**: it counts sale transactions.
 
-Параметры: `startDate`, `endDate`, `limit`, `offset`. **Нет `ClientId`.**
-
-### Точная ошибка Mindbody
-
-Из `api_logs` (response_status=400):
-```json
-{
-  "Error": {
-    "Code": "MissingRequiredFields",
-    "Message": "At least one of the following parameters must be passed: ClientId, UniqueClientId"
-  }
-}
-```
-
-Endpoint `/client/clientvisits` **требует** `ClientId`. Код его не передаёт → каждая синхронизация получает HTTP 400 → 0 записей.
-
-### Использование во фронтенде
-
-Поиск `.from('client_visits')` по всему `src/`: **0 совпадений**. Ни один компонент, ни один отчёт не обращается к этой таблице.
-
-### Сравнение полей client_visits vs appointments
-
-| Поле client_visits | Есть в appointments? | Комментарий |
+| | Our MarginByService | Mindbody Sales by Service |
 |---|---|---|
-| `client_id` | ✅ `client_id` | — |
-| `staff_id` | ✅ `staff_id` | — |
-| `location_id` | ✅ `location_id` | — |
-| `session_type_id` | ✅ `session_type_id` | — |
-| `visit_datetime` | ✅ `start_datetime` | — |
-| `appointment_id` | ✅ `id`/`mindbody_id` | Прямая связь |
-| `appointment_status` | ✅ `status` | — |
-| `service_id` | ❌ Нет | MB ServiceId (≈ pricing option) |
-| `service_name` | ❌ Нет | Название услуги |
-| `class_id` | ❌ Нет | Для групповых занятий |
-| `signed_in` | ❌ Нет | Отметка о приходе |
-| `make_up` | ❌ Нет | Перенесённый визит |
-| `late_cancelled` | ❌ Нет | Поздняя отмена |
-| `web_signup` | ❌ Нет | Онлайн-запись |
-| `visit_id` | ❌ Нет | Отдельный ID визита |
+| **Counts** | Completed appointments | Sale transactions |
+| **Revenue** | `pricing_options.price / session_count` per visit | `sale_items.total_amount` per sale |
+| **Period** | `appointments.start_datetime` | `sales.sale_date` |
 
-**6 уникальных полей** отсутствуют в `appointments`: `service_id`, `service_name`, `class_id`, `signed_in`, `late_cancelled`, `web_signup`.
+**Why 14 != 12:** A client buys a multi-session package in one sale but uses those sessions across multiple appointments (possibly spanning months). Extra visits come from packages purchased in prior months but used in August, or rebooked/comp sessions with no separate sale.
 
-### Вывод
+**Revenue delta (570 EUR):** Visits without a linked client_service fall back to session-type median price, which can inflate the total vs actual sales.
 
-**Таблица не нужна для текущих отчётов** — ни один компонент её не читает, и синхронизация сломана с момента создания. Уникальные поля (`signed_in`, `late_cancelled`, `web_signup`) **могли бы** быть полезны для будущих отчётов по дисциплине клиентов, но сейчас не используются. Синхронизацию можно безопасно отключить без потери функциональности.
-
----
-
-## Вопрос 2: Точное место для `payment_ref_id`
-
-### Текущий код определения цены
-
-Файл: `src/utils/resolveServicePrices.ts`, функция `resolveServicePrices()` (строки 33–117).
-
-**Текущая логика (3 уровня приоритета):**
-
-1. **Строки 65–74:** Если у `client_service` нет `pricing_option_id` → сразу fallback на медиану по типу сессии или `no_data`.
-
-2. **Строки 76–85:** Если `pricing_option_id` есть, но не найден в справочнике `poById` → аналогичный fallback.
-
-3. **Строки 87–103 (эвристика по дате):** Если pricing_option найден → ищет все `sale_items` с тем же `item_id` (= `po.mindbody_id`), затем из них выбирает **ближайший по дате** к `payment_date`/`active_date` клиентской услуги. Это **текущая «actual» цена**.
-
-4. **Строки 104–105:** Если sale_items не найдены → каталожная цена из `pricing_options.price`.
-
-5. **Строки 106–113:** Если каталожная цена тоже null → медиана по типу сессии.
-
-### Входные данные
-
-Интерфейс `SaleItemInput` (строки 22–26):
-```typescript
-interface SaleItemInput {
-  item_id: string;       // = pricing_options.mindbody_id
-  sale_id: string;
-  total_amount: number | null;
-}
-```
-
-**`payment_ref_id` НЕ загружается** — его нет в интерфейсе. Нужно:
-1. Добавить `payment_ref_id` в `SaleItemInput`
-2. Загружать его в вызывающем коде (hook `useSalesMarginData.ts`)
-
-### Точное место для вставки проверки
-
-**Вставить между строками 85 и 87** — после того как `po` (pricing_option) найден, но **до** текущей эвристики по `item_id` + ближайшей дате.
-
-Текущий код (строки 85–103):
-```typescript
-    // ← строка 85: закрывающая скобка блока "po not found"
-
-    // СЮДА: новый блок — прямой поиск по payment_ref_id
-    // Логика: найти sale_item, у которого payment_ref_id == svc.mindbody_id (client_service.mindbody_id)
-    // Если найден → result.set(svc.id, { price: item.total_amount, source: 'actual' })
-    // Если не найден → продолжить к текущей эвристике ниже
-
-    const candidates = itemsByMindbodyId.get(po.mindbody_id);  // ← строка 87: текущая эвристика
-    if (candidates && candidates.length > 0) {
-      // ... выбор ближайшего по дате
-    }
-```
-
-**Конкретно:** Новый lookup нужно вставить **после строки 85** (`continue;` + `}`) и **перед строкой 87** (`const candidates = ...`).
-
-Для этого:
-- В `SaleItemInput` добавить поле `payment_ref_id: string | null`
-- В функции создать второй индекс: `Map<string, SaleItemInput[]>` по `payment_ref_id` (client_service mindbody_id)
-- Перед строкой 87 проверить: есть ли в этом индексе запись для `svc.mindbody_id` (не `svc.id`, а MB ID клиентской услуги — его тоже нужно добавить в `ServiceInput`)
-
-### Вызывающий код
-
-Файл `src/hooks/useSalesMarginData.ts` — здесь загружаются `sale_items`. Нужно добавить `payment_ref_id` в select-запрос.
-
----
-
-## Вопрос 3: Почему `client_id='1'` — фантомный клиент
-
-### Текущее число продаж
-
-**1 118 продаж** с `client_id = '1'` (подтверждено в предыдущей сессии; нет оснований считать, что изменилось — новые продажи с id=1 маловероятны).
-
-**0 клиентов** с `mindbody_id = '1'`.
-
-### Код syncClients()
-
-Строка 1134:
-```
-${MINDBODY_BASE_URL}/client/clients?limit=200&offset=0&searchText=
-```
-
-Пагинированный запрос **всех** клиентов с пустым `searchText=`. Без фильтра по `ClientIds`. Запрос проходит по всем страницам (`limit=200`, инкремент `offset`), до пустой страницы.
-
-Код **не фильтрует** клиентов по ID — он берёт всё, что вернул Mindbody.
-
-### Почему клиент не попадает в БД
-
-**Гипотеза подтверждена косвенно:** Mindbody не включает системный клиент `Id=1` в общий список `/client/clients`. Это стандартное поведение MB — системные/внутренние записи (id < 100) не отдаются в пагинированном списке.
-
-Прямой запрос `?ClientIds=1` **не выполнялся** (не было безопасной возможности — требует user token). Нет записей в `api_logs` с таким запросом.
-
-### SQL для ручного создания
+### Verification Queries (run in Supabase Dashboard)
 
 ```sql
-INSERT INTO clients (
-  id, mindbody_id, first_name, last_name, 
-  status, raw_data, synced_at, created_at
-) VALUES (
-  '1', '1', 'System', 'Client',
-  'System', '{"Id": "1", "FirstName": "System", "LastName": "Client", "Active": true}'::jsonb,
-  now(), now()
-) ON CONFLICT (mindbody_id) DO NOTHING;
-```
+-- A: Visit-basis count
+SELECT COUNT(*) as visits
+FROM appointments a
+JOIN session_types st ON st.id = a.session_type_id
+WHERE st.name ILIKE '%Kriolipolīze 2%'
+  AND a.start_datetime >= '2026-08-01' AND a.start_datetime < '2026-09-01'
+  AND a.status = 'Completed';
 
-Это даст 1 118 продажам валидную привязку к клиенту. Имя «System Client» — условное; можно заменить, если прямой запрос к MB вернёт реальные данные.
+-- B: Cash-basis count (should match Mindbody)
+SELECT COUNT(*) as sales, SUM(si.total_amount) as revenue
+FROM sale_items si
+JOIN sales s ON s.id = si.sale_id
+WHERE si.description ILIKE '%Kriolipolīze 2%'
+  AND s.sale_date >= '2026-08-01' AND s.sale_date < '2026-09-01';
+
+-- C: Check for returned items or system client
+SELECT COUNT(*) as total,
+  COUNT(*) FILTER (WHERE si.returned = true) as returned,
+  COUNT(*) FILTER (WHERE s.client_id = '1') as system_client,
+  SUM(si.total_amount) as total_revenue
+FROM sale_items si
+JOIN sales s ON s.id = si.sale_id
+WHERE si.description ILIKE '%Kriolipolīze 2%'
+  AND s.sale_date >= '2026-08-01' AND s.sale_date < '2026-09-01';
+
+-- D: Cross-check multiple services
+SELECT si.description, COUNT(*) as sales, SUM(si.total_amount) as revenue,
+  COUNT(*) FILTER (WHERE si.returned = true) as returned,
+  COUNT(*) FILTER (WHERE s.client_id = '1') as system_client
+FROM sale_items si JOIN sales s ON s.id = si.sale_id
+WHERE s.sale_date >= '2026-08-01' AND s.sale_date < '2026-09-01'
+  AND (si.description ILIKE '%Kriolipolīze 2%' OR si.description ILIKE '%EMS Sculptor 30%'
+       OR si.description ILIKE '%Klasiskā%masāža 60%' OR si.description ILIKE '%Endotherapy 30%')
+GROUP BY si.description ORDER BY si.description;
+```
 
 ---
 
-## Вопрос 4: `transactions` vs `payments`
+## Problem 2 — EMS Sculptor 30 min and other tariffs in Uncategorized
 
-### Структура колонок — прямое сравнение
+### Root Cause (from code analysis): Two possible causes
 
-| payments | transactions |
-|----------|-------------|
-| `id` (uuid PK) | `id` (uuid PK) |
-| `mindbody_id` (text, unique) | `mindbody_id` (text, unique) |
-| `sale_id` (text) | `sale_id` (text) |
-| `mindbody_sale_id` (text) | — |
-| `type` (text) | — |
-| `method` (integer) | — |
-| `amount` (numeric) | `amount` (numeric) |
-| `notes` (text) | — |
-| `transaction_id` (text) | `transaction_id` (text) |
-| — | `payment_processor` (text) |
-| — | `transaction_status` (text) |
-| — | `transaction_date` (timestamptz) |
-| `raw_data` (jsonb) | `raw_data` (jsonb) |
-| `synced_at` (timestamptz) | `synced_at` (timestamptz) |
-| `created_at` (timestamptz) | `created_at` (timestamptz) |
+1. **NULL/empty `revenue_category`** in `pricing_options` — the Mindbody API field `RevenueCategory` was null when synced (line 858 of sync function: `revenue_category: service.RevenueCategory`). When this is empty, and the fallback `session_types.category` is also empty, the service shows as "Uncategorized".
 
-### Что пишет код в каждую
+2. **Case/whitespace mismatch** — the code's `CATEGORY_ORDER` used exact string matching. If the DB had `"ems"` or `"EMS "` (trailing space), it wouldn't match `"EMS"` and would appear outside the ordered groups.
 
-**payments** — заполняется в `syncSales()` (строки 1346–1357):
-```javascript
-{
-  mindbody_id: `${saleId}-${paymentId}`,     // формат идентичен
-  sale_id: saleId,
-  mindbody_sale_id: saleId,
-  type: payment.Type,                         // "Visa/MC", "Cash" и т.д.
-  method: payment.Method,                     // целое число (4 = карта)
-  amount: payment.Amount || 0,
-  notes: payment.Notes || null,
-  transaction_id: payment.TransactionId ? String(...) : null,
-  raw_data: payment,                          // только объект payment
-  synced_at: syncedAt,
-}
+### Code Fix Applied
+
+- Category matching is now **case-insensitive with trim** — `"ems"`, `"EMS"`, `"Ems "` all match the canonical `"EMS"` entry.
+- Empty/whitespace-only categories now correctly fall to "Uncategorized" instead of being treated as a named category.
+
+### Verification Queries (run in Supabase Dashboard)
+
+```sql
+-- E: EMS pricing options
+SELECT name, revenue_category, mindbody_id
+FROM pricing_options
+WHERE name ILIKE '%EMS%' OR name ILIKE '%Sculptor%' OR name ILIKE '%PelviTone%'
+ORDER BY name;
+
+-- F: All unique revenue_category values
+SELECT COALESCE(revenue_category, '(NULL)') as category, COUNT(*) as cnt,
+  LENGTH(revenue_category) as char_len
+FROM pricing_options GROUP BY revenue_category ORDER BY revenue_category NULLS FIRST;
+
+-- G: Tariffs with NULL/empty category
+SELECT name, revenue_category, mindbody_id
+FROM pricing_options
+WHERE revenue_category IS NULL OR revenue_category = '' ORDER BY name;
+
+-- H: Tariffs not matching any CATEGORY_ORDER entry
+SELECT name, revenue_category FROM pricing_options
+WHERE revenue_category IS NOT NULL AND revenue_category != ''
+  AND LOWER(TRIM(revenue_category)) NOT IN (
+    'ems','hair removal','ķermeņa procedūras','kriolipolize','lipolytic',
+    'lipoaction','machine','massage','konsultācijas','gift card reservation',
+    'sauna','phytomer','velashape')
+ORDER BY revenue_category, name;
+
+-- I: Check if raw_data has RevenueCategory for NULLs
+SELECT name, raw_data->>'RevenueCategory' as raw_cat, revenue_category
+FROM pricing_options
+WHERE (revenue_category IS NULL OR revenue_category = '') AND raw_data IS NOT NULL LIMIT 30;
 ```
 
-**transactions** — заполняется в `syncTransactions()` (строки 1861–1878):
-```javascript
-{
-  mindbody_id: `${sale.Id}-${paymentId}`,     // формат идентичен
-  transaction_id: payment.TransactionId ? String(...) : `${sale.Id}-${paymentId}`,
-  sale_id: String(sale.Id),
-  payment_processor: payment.Type || 'Unknown', // = payments.type
-  transaction_status: 'Completed',              // хардкод
-  amount: payment.Amount || 0,
-  transaction_date: sale.SaleDateTime,
-  raw_data: {                                   // расширенный объект
-    sale_id: sale.Id,
-    sale_datetime: sale.SaleDateTime,
-    client_id: sale.ClientId,
-    location_id: sale.LocationId,
-    payment: payment,
-    purchased_items: sale.PurchasedItems || []
-  },
-  synced_at: syncedAt,
-}
+### Data Fix (run if Query I shows raw_data has the category)
+
+```sql
+-- Backfill revenue_category from raw_data
+UPDATE pricing_options
+SET revenue_category = raw_data->>'RevenueCategory'
+WHERE (revenue_category IS NULL OR revenue_category = '')
+  AND raw_data->>'RevenueCategory' IS NOT NULL
+  AND raw_data->>'RevenueCategory' != '';
 ```
 
-### Источник данных
+---
 
-**Одинаковый.** Обе функции вызывают `/sale/sales` и итерируют `sale.Payments[]`. Разница:
-- `payments` хранит `type`/`method`/`notes` из объекта платежа
-- `transactions` хранит `payment_processor` (= тот же `payment.Type`) + `transaction_status` (хардкод 'Completed') + `transaction_date`
-- `transactions.raw_data` богаче — включает контекст продажи (client_id, purchased_items)
-- `payments` хранит `mindbody_sale_id` и `notes`, которых нет в `transactions`
+## Summary of Changes Made
 
-**mindbody_id формируется одинаково** → одна запись в `payments` точно соответствует одной записи в `transactions`.
+| Item | Status |
+|---|---|
+| CATEGORY_ORDER matching: case-insensitive + trim | Fixed in code |
+| Methodology subtitle on Margin by Procedure page | Added |
+| NULL revenue_category backfill from raw_data | SQL provided, must run manually |
+| Visit vs cash basis mismatch explanation | Documented above |
+| Supabase SQL verification | Queries provided, must run manually (MCP tools unavailable) |
 
-### Использование во фронтенде
+---
 
-Поиск `.from('transactions')` и `.from("transactions")` по всему `src/`: **0 совпадений**.
+## Problem 3 — Staff Cost: 9,305.80 EUR (ours) vs 6,123.30 EUR (Mindbody Payroll, Aug 2026)
 
-Слово `transactions` встречается только как:
-- UI-навигация: `Dashboard.tsx:39`, `Sidebar.tsx:48,71`
-- Тип синхронизации: `SyncButton.tsx:8,40,46,140`
+### Root Cause Analysis (from code trace)
 
-Эти ссылки позволяют **просматривать** содержимое таблицы через универсальный `TableView` и **запускать** синхронизацию, но ни один отчёт/вычисление не читает данные из `transactions`.
+The cost calculation lives in `useSalesMarginData` (lines 212-223). The rate priority chain is:
 
-### Вывод
+1. `staff_appointment_rates` where `effective_to IS NULL` (override rate per staff+service)
+2. `staff_appointment_rates` with `session_type_id = NULL` (default rate for that staff member)
+3. `staff_session_types.pay_rate` (base rate from the staff-service link table)
+4. Falls back to `0` if none found
 
-**`transactions` — параллельная копия `payments`**, созданная из тех же данных Mindbody. Различия:
-1. Другие имена колонок (`payment_processor` вместо `type`, `transaction_status` вместо —)
-2. Более богатый `raw_data` (включает контекст продажи)
-3. Хардкод `transaction_status: 'Completed'` — информации не добавляет
+**Three confirmed causes of the +3,182.50 EUR difference:**
 
-Ни один компонент не читает `transactions`. Таблицу можно удалить, а синхронизацию отключить, без потери функциональности. Единственное преимущество transactions — расширенный `raw_data` с контекстом продажи, но эти данные уже доступны через JOIN `payments → sales`.
+#### Cause A: Visit count difference (706 vs 471)
+
+Our report counts ALL completed appointments (706). Mindbody Payroll only counts sessions where a pay rate is configured (471 "paid" sessions). The 235 extra visits in our report have `cost = 0` so they don't inflate the total cost, BUT they inflate the visit count shown in the report.
+
+#### Cause B: Rate source mismatch
+
+Our system reads rates from two tables (`staff_appointment_rates` and `staff_session_types`). These are populated either manually through the Staff Rates Manager or from sync data. Mindbody Payroll uses its own internal payroll rate configuration which may differ from what's stored in our database.
+
+Key scenarios where rates diverge:
+- A rate was updated in Mindbody but not re-synced to our database
+- A rate was manually entered in our Staff Rates Manager that doesn't match Mindbody
+- The `staff_session_types.pay_rate` contains a value from initial sync that's since been changed in Mindbody
+- Override rates in `staff_appointment_rates` may apply to services that Mindbody doesn't pay for
+
+#### Cause C: Default rate fallback
+
+Line 218-219: if `staff_appointment_rates` has a row with `session_type_id = NULL` for a staff member, that default rate applies to ALL their services -- including ones that may have zero pay rate in Mindbody. This could significantly inflate costs for staff members who do many different service types but only get paid for some.
+
+### Verification Queries (run in Supabase Dashboard)
+
+```sql
+-- Q1: Staff cost breakdown matching our report logic
+SELECT 
+  s.first_name || ' ' || s.last_name AS staff_name,
+  COUNT(a.id) AS visits,
+  SUM(
+    COALESCE(
+      sar_specific.rate_per_appointment,
+      sar_default.rate_per_appointment,
+      sst.pay_rate,
+      0
+    )
+  ) AS our_total_cost,
+  COUNT(a.id) FILTER (WHERE COALESCE(sar_specific.rate_per_appointment, sar_default.rate_per_appointment, sst.pay_rate, 0) = 0) AS visits_zero_rate,
+  COUNT(a.id) FILTER (WHERE COALESCE(sar_specific.rate_per_appointment, sar_default.rate_per_appointment, sst.pay_rate, 0) > 0) AS visits_with_rate
+FROM appointments a
+JOIN staff s ON s.id = a.staff_id
+LEFT JOIN staff_session_types sst ON sst.staff_id = a.staff_id AND sst.session_type_id = a.session_type_id
+LEFT JOIN staff_appointment_rates sar_specific ON sar_specific.staff_id = a.staff_id AND sar_specific.session_type_id = a.session_type_id AND sar_specific.effective_to IS NULL
+LEFT JOIN staff_appointment_rates sar_default ON sar_default.staff_id = a.staff_id AND sar_default.session_type_id IS NULL AND sar_default.effective_to IS NULL
+WHERE a.start_datetime >= '2026-08-01'
+  AND a.start_datetime < '2026-09-01'
+  AND a.status = 'Completed'
+GROUP BY s.id, s.first_name, s.last_name
+ORDER BY our_total_cost DESC;
+```
+
+```sql
+-- Q2: Rate detail for top-cost staff members
+SELECT 
+  s.first_name || ' ' || s.last_name AS staff_name,
+  st.name AS service,
+  sst.pay_rate AS base_rate,
+  sar_specific.rate_per_appointment AS override_rate,
+  sar_default.rate_per_appointment AS default_rate,
+  COALESCE(sar_specific.rate_per_appointment, sar_default.rate_per_appointment, sst.pay_rate, 0) AS effective_rate,
+  COUNT(a.id) AS visits,
+  SUM(COALESCE(sar_specific.rate_per_appointment, sar_default.rate_per_appointment, sst.pay_rate, 0)) AS total_cost
+FROM appointments a
+JOIN staff s ON s.id = a.staff_id
+JOIN session_types st ON st.id = a.session_type_id
+LEFT JOIN staff_session_types sst ON sst.staff_id = a.staff_id AND sst.session_type_id = a.session_type_id
+LEFT JOIN staff_appointment_rates sar_specific ON sar_specific.staff_id = a.staff_id AND sar_specific.session_type_id = a.session_type_id AND sar_specific.effective_to IS NULL
+LEFT JOIN staff_appointment_rates sar_default ON sar_default.staff_id = a.staff_id AND sar_default.session_type_id IS NULL AND sar_default.effective_to IS NULL
+WHERE a.start_datetime >= '2026-08-01'
+  AND a.start_datetime < '2026-09-01'
+  AND a.status = 'Completed'
+GROUP BY s.id, s.first_name, s.last_name, st.name, sst.pay_rate, sar_specific.rate_per_appointment, sar_default.rate_per_appointment
+ORDER BY s.last_name, total_cost DESC;
+```
+
+```sql
+-- Q3: Staff members with default (catch-all) override rates
+SELECT 
+  s.first_name || ' ' || s.last_name AS staff_name,
+  sar.rate_per_appointment AS default_rate
+FROM staff_appointment_rates sar
+JOIN staff s ON s.id = sar.staff_id
+WHERE sar.session_type_id IS NULL
+  AND sar.effective_to IS NULL
+ORDER BY s.last_name;
+```
+
+```sql
+-- Q4: Visits with zero rate (these are in our 706 but not in Mindbody's 471)
+SELECT 
+  s.first_name || ' ' || s.last_name AS staff_name,
+  st.name AS service,
+  COUNT(a.id) AS visits_zero_rate
+FROM appointments a
+JOIN staff s ON s.id = a.staff_id
+JOIN session_types st ON st.id = a.session_type_id
+LEFT JOIN staff_session_types sst ON sst.staff_id = a.staff_id AND sst.session_type_id = a.session_type_id
+LEFT JOIN staff_appointment_rates sar ON sar.staff_id = a.staff_id AND (sar.session_type_id = a.session_type_id OR sar.session_type_id IS NULL) AND sar.effective_to IS NULL
+WHERE a.start_datetime >= '2026-08-01'
+  AND a.start_datetime < '2026-09-01'
+  AND a.status = 'Completed'
+  AND COALESCE(sar.rate_per_appointment, sst.pay_rate, 0) = 0
+GROUP BY s.id, s.first_name, s.last_name, st.name
+ORDER BY visits_zero_rate DESC;
+```
+
+### Mindbody Payroll Reference (Aug 2026)
+
+| Staff | MB Sessions | MB Payroll EUR |
+|---|---|---|
+| Grand Total | 471 | 6,123.30 |
+| Aquabike Centrs 1 | 70 | 1,260.00 |
+| Aquabike ALFA 1 | 41 | 738.00 |
+
+### Recommended Next Steps
+
+1. Run Q1 above to see which staff members have the largest cost discrepancy
+2. Run Q3 to check if any staff have catch-all default rates that inflate costs
+3. Compare Q2 effective rates against the actual Mindbody Payroll PDF line by line
+4. For staff with wrong rates: update via the Staff Rates Manager in the app, or directly fix in `staff_appointment_rates` / `staff_session_types`

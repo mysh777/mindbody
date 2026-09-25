@@ -839,68 +839,52 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
 
     if (services.length === 0) break;
 
-    for (const service of services) {
-      const pricingData = {
-        mindbody_id: String(service.Id),
-        name: service.Name,
-        service_type: service.Type,
-        service_category: service.ProgramName || service.CategoryName,
-        price: service.Price || service.OnlinePrice,
-        online_price: service.OnlinePrice,
-        duration: service.DefaultTimeLength,
-        tax_included: service.TaxIncluded || false,
-        tax_rate: service.TaxRate,
-        sold_online: service.SellOnline || false,
-        bookable_online: service.BookableOnline || false,
-        is_introductory: service.IsIntro || false,
-        session_count: service.Count || null,
-        expiration_days: service.ExpirationDays,
-        revenue_category: service.RevenueCategory,
-        active: service.Active !== false,
-        product_id: service.ProductId ? String(service.ProductId) : null,
-        program_id: service.ProgramId ? String(service.ProgramId) : null,
-        program_name: service.Program,
-        priority: service.Priority,
-        discontinued: service.Discontinued || false,
-        is_intro_offer: service.IsIntroOffer || false,
-        membership_id: service.MembershipId ? String(service.MembershipId) : null,
-        expiration_type: service.ExpirationType,
-        expiration_unit: service.ExpirationUnit,
-        expiration_length: service.ExpirationLength,
-        intro_offer_type: service.IntroOfferType,
-        use_at_location_ids: service.UseAtLocationIds ? JSON.stringify(service.UseAtLocationIds) : null,
-        sell_at_location_ids: service.SellAtLocationIds ? JSON.stringify(service.SellAtLocationIds) : null,
-        sale_in_contract_only: service.SaleInContractOnly || false,
-        restrict_to_membership_ids: service.RestrictToMembershipIds ? JSON.stringify(service.RestrictToMembershipIds) : null,
-        is_third_party_discount_pricing: service.IsThirdPartyDiscountPricing || false,
-        apply_member_discounts_of_membership_ids: service.ApplyMemberDiscountsOfMembershipIds ? JSON.stringify(service.ApplyMemberDiscountsOfMembershipIds) : null,
-        raw_data: service,
-        synced_at: new Date().toISOString(),
-      };
+    const syncedAt = new Date().toISOString();
+    const batchData = services.map((service: any) => ({
+      mindbody_id: String(service.Id),
+      name: service.Name,
+      service_type: service.Type,
+      service_category: service.ProgramName || service.CategoryName,
+      price: service.Price || service.OnlinePrice,
+      online_price: service.OnlinePrice,
+      duration: service.DefaultTimeLength,
+      tax_included: service.TaxIncluded || false,
+      tax_rate: service.TaxRate,
+      sold_online: service.SellOnline || false,
+      bookable_online: service.BookableOnline || false,
+      is_introductory: service.IsIntro || false,
+      session_count: service.Count || null,
+      expiration_days: service.ExpirationDays,
+      revenue_category: service.RevenueCategory,
+      active: service.Active !== false,
+      product_id: service.ProductId ? String(service.ProductId) : null,
+      program_id: service.ProgramId ? String(service.ProgramId) : null,
+      program_name: service.Program,
+      priority: service.Priority,
+      discontinued: service.Discontinued || false,
+      is_intro_offer: service.IsIntroOffer || false,
+      membership_id: service.MembershipId ? String(service.MembershipId) : null,
+      expiration_type: service.ExpirationType,
+      expiration_unit: service.ExpirationUnit,
+      expiration_length: service.ExpirationLength,
+      intro_offer_type: service.IntroOfferType,
+      use_at_location_ids: service.UseAtLocationIds ? JSON.stringify(service.UseAtLocationIds) : null,
+      sell_at_location_ids: service.SellAtLocationIds ? JSON.stringify(service.SellAtLocationIds) : null,
+      sale_in_contract_only: service.SaleInContractOnly || false,
+      restrict_to_membership_ids: service.RestrictToMembershipIds ? JSON.stringify(service.RestrictToMembershipIds) : null,
+      is_third_party_discount_pricing: service.IsThirdPartyDiscountPricing || false,
+      apply_member_discounts_of_membership_ids: service.ApplyMemberDiscountsOfMembershipIds ? JSON.stringify(service.ApplyMemberDiscountsOfMembershipIds) : null,
+      raw_data: service,
+      synced_at: syncedAt,
+    }));
 
-      const { data: insertedPricing } = await supabase.from("pricing_options").upsert(pricingData, {
-        onConflict: "mindbody_id",
-      }).select().single();
-
-      if (insertedPricing && service.ProgramId) {
-        const { data: sessionTypesForProgram } = await supabase
-          .from("session_types")
-          .select("id")
-          .eq("program_id", String(service.ProgramId));
-
-        if (sessionTypesForProgram && sessionTypesForProgram.length > 0) {
-          for (const st of sessionTypesForProgram) {
-            await supabase.from("pricing_option_session_types").upsert({
-              pricing_option_id: insertedPricing.id,
-              session_type_id: st.id,
-            }, {
-              onConflict: "pricing_option_id,session_type_id",
-              ignoreDuplicates: true,
-            });
-          }
-          console.log(`Linked pricing option ${service.Name} to ${sessionTypesForProgram.length} session types`);
-        }
-      }
+    const { error: upsertError } = await supabase.from("pricing_options").upsert(batchData, {
+      onConflict: "mindbody_id",
+    });
+    if (upsertError) {
+      console.error(`[PRICING] Batch upsert error:`, upsertError.message);
+    } else {
+      console.log(`[PRICING] Batch upsert: ${batchData.length} records`);
     }
 
     totalSynced += services.length;
