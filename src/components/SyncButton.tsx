@@ -5,7 +5,7 @@ interface SyncButtonProps {
   onSyncComplete?: () => void;
 }
 
-type SyncType = 'quick' | 'all' | 'sites' | 'locations' | 'staff' | 'programs' | 'services' | 'staff_services' | 'pricing_options' | 'clients' | 'appointments' | 'sales' | 'retail_products' | 'build_pricing_links' | 'client_services' | 'transactions' | 'sst_diag_plain' | 'sst_diag_plain_with_token' | 'sst_diag_request_dot' | 'sst_diag_request_dot_with_token';
+type SyncType = 'quick' | 'all' | 'sites' | 'locations' | 'staff' | 'programs' | 'services' | 'staff_services' | 'pricing_options' | 'clients' | 'appointments' | 'sales' | 'retail_products' | 'staff_schedule' | 'build_pricing_links' | 'client_services' | 'transactions' | 'sst_diag_plain' | 'sst_diag_plain_with_token' | 'sst_diag_request_dot' | 'sst_diag_request_dot_with_token';
 
 interface SyncStatus {
   [key: string]: 'idle' | 'syncing' | 'success' | 'error';
@@ -40,6 +40,7 @@ const QUICK_SYNC_STEPS: QuickSyncStep[] = [
   { label: 'Sales', payload: { syncType: 'sales', month: new Date().getMonth() + 1 } },
   { label: 'Client Services', payload: { syncType: 'client_services', month: new Date().getMonth() + 1 } },
   { label: 'Retail Products', payload: { syncType: 'retail_products' } },
+  { label: 'Staff Schedule', payload: { syncType: 'staff_schedule' } },
 ];
 
 const currentYear = new Date().getFullYear();

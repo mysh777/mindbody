@@ -1,5 +1,8 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { handlePrint } from '../utils/printReport';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAllPages';
+import { fetchByIds } from '../lib/fetchByIds';
 import {
   Search,
   Printer,
@@ -15,8 +18,15 @@ import {
 } from 'lucide-react';
 import { CopyLinkButton } from './CopyLinkButton';
 import { resolveServicePrices, type PriceSource } from '../utils/resolveServicePrices';
+import { formatApptDate, formatApptTime } from '../utils/formatDateTime';
 import { exportMultiSheetExcel } from '../utils/exportExcel';
-import { isPackageActive, toLocalISO } from '../utils/packageStatus';
+import { isPackageActive, toLocalISO, PACKAGE_STATUS_COLUMNS } from '../utils/packageStatus';
+import { computeObligations, packageObligation } from '../utils/obligations';
+import { priceMarginVisits, summarizeVisits, type MarginAppointment } from '../hooks/useSalesMarginData';
+import { getMonthsForTimeline } from '../utils/salesFilters';
+import { PagePurpose } from './PageHeader';
+import { LocationFilter } from './LocationFilter';
+import { StudioObligationsPanel } from './StudioObligationsPanel';
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -38,6 +48,8 @@ interface ClientService {
   expiration_date: string | null;
   program_name: string;
   pricing_option_id: string | null;
+  current: boolean | null;
+  returned: boolean | null;
   paid_price: number;
   price_source: PriceSource;
 }
@@ -55,6 +67,7 @@ interface TimelineEvent {
   revenuePerVisit: number | null;
   staffPay: number | null;
   clientServiceId: string | null;
+  locationId: string | null;
 }
 
 interface BalanceSummary {
@@ -73,14 +86,8 @@ type ViewMode = 'summary' | 'detail';
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-const formatDate = (dateStr: string | null) => {
-  if (!dateStr) return '-';
-  try {
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return dateStr;
-    return `${d.getDate().toString().padStart(2, '0')}.${(d.getMonth() + 1).toString().padStart(2, '0')}.${d.getFullYear()}`;
-  } catch { return dateStr; }
-};
+const formatDate = formatApptDate;
+const formatTime = formatApptTime;
 
 const formatCurrency = (amount: number) =>
   new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
@@ -147,57 +154,21 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
 
   // Data
   const [services, setServices] = useState<ClientService[]>([]);
-  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [allEvents, setAllEvents] = useState<TimelineEvent[]>([]);
+  const [locationId, setLocationId] = useState(urlParams?.location || 'all');
+  const [locationName, setLocationName] = useState('');
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const months = useMemo(() => getMonthsForTimeline(), []);
   const [balance, setBalance] = useState<BalanceSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [generated, setGenerated] = useState(false);
+  const [loadedAt, setLoadedAt] = useState<string | null>(null);
   const [expandedServiceId, setExpandedServiceId] = useState<string | null>(null);
   const [showExpiredPackages, setShowExpiredPackages] = useState(false);
   const [pendingAutoGenerate, setPendingAutoGenerate] = useState(false);
 
   // Print ref
   const printRef = useRef<HTMLDivElement>(null);
-
-  // Studio overview (loaded once on mount)
-  const [studioOverview, setStudioOverview] = useState<{
-    clients: number; obligationsEur: number; remainingVisits: number;
-  } | null>(null);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const { data: csData } = await supabase
-          .from('client_services')
-          .select('client_id, count, remaining, pricing_option_id, expiration_date')
-          .gt('remaining', 0);
-        if (!csData) return;
-        const overviewToday = toLocalISO(new Date());
-        const active = csData.filter(cs => isPackageActive({ current: true, remaining: cs.remaining, expiration_date: cs.expiration_date }, overviewToday));
-        const poIds = [...new Set(active.map(cs => cs.pricing_option_id).filter(Boolean))] as string[];
-        const poMap = new Map<string, number>();
-        if (poIds.length > 0) {
-          const { data: poData } = await supabase
-            .from('pricing_options').select('id, price').in('id', poIds);
-          for (const po of (poData || [])) poMap.set(po.id, Number(po.price) || 0);
-        }
-        const clients = new Set(active.map(cs => cs.client_id));
-        let totalObl = 0, totalRem = 0;
-        for (const cs of active) {
-          totalRem += cs.remaining;
-          if (cs.pricing_option_id && cs.count > 0) {
-            totalObl += (cs.remaining / cs.count) * (poMap.get(cs.pricing_option_id) || 0);
-          }
-        }
-        setStudioOverview({
-          clients: clients.size,
-          obligationsEur: Math.round(totalObl * 100) / 100,
-          remainingVisits: totalRem,
-        });
-      } catch (err) {
-        console.error('Error loading studio overview:', err);
-      }
-    })();
-  }, []);
 
   // ── Client search ──
 
@@ -234,13 +205,27 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
     setGenerated(false);
   };
 
+  const openClientById = async (id: string) => {
+    const { data, error } = await supabase
+      .from('clients')
+      .select('id, first_name, last_name, email, mobile_phone')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !data) {
+      setLoadError('This client was not found.');
+      return;
+    }
+    selectClient(data);
+    setPendingAutoGenerate(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   // ── Date presets ──
 
   const applyPreset = (preset: DatePreset, range: { start: string; end: string }) => {
     setDatePreset(preset);
     setStartDate(range.start);
     setEndDate(range.end);
-    setGenerated(false);
   };
 
   // ── Generate report ──
@@ -249,100 +234,52 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
     if (!selectedClient) return;
     setLoading(true);
     setGenerated(false);
+    setLoadError(null);
     try {
       const clientId = selectedClient.id;
 
-      // 1. Client services (ALL, not filtered by date — for balances)
-      const { data: svcData } = await supabase
-        .from('client_services')
-        .select('id, mindbody_id, name, count, remaining, active_date, expiration_date, program_name, pricing_option_id')
-        .eq('client_id', clientId)
-        .order('active_date', { ascending: false });
+      const [svcData, salesData, apptData] = await Promise.all([
+        fetchAllPages<any>((from, to) => supabase
+          .from('client_services')
+          .select(`id, mindbody_id, name, count, remaining, active_date, expiration_date, program_name, pricing_option_id, ${PACKAGE_STATUS_COLUMNS}`)
+          .eq('client_id', clientId)
+          .order('active_date', { ascending: false })
+          .order('id')
+          .range(from, to)),
+        fetchAllPages<{ id: string; sale_datetime: string; location_id: string | null }>((from, to) => supabase
+          .from('sales')
+          .select('id, sale_datetime, location_id')
+          .eq('client_id', clientId)
+          .order('sale_datetime', { ascending: false })
+          .order('id')
+          .range(from, to)),
+        fetchAllPages<MarginAppointment>((from, to) => supabase
+          .from('appointments')
+          .select('id, client_id, staff_id, session_type_id, location_id, start_datetime, end_datetime, status, client_service_id')
+          .eq('client_id', clientId)
+          .eq('stale', false)
+          .order('start_datetime', { ascending: false })
+          .order('id')
+          .range(from, to)),
+      ]);
 
-      // 2. Pricing options for those services
-      const poIds = (svcData || []).map((s: any) => s.pricing_option_id).filter(Boolean);
-      let poData: any[] = [];
-      if (poIds.length > 0) {
-        const { data } = await supabase.from('pricing_options').select('id, mindbody_id, price').in('id', poIds);
-        poData = data || [];
-      }
+      const poIds = svcData.map((s: any) => s.pricing_option_id).filter(Boolean);
+      const staffIds = [...new Set(apptData.map(a => a.staff_id).filter(Boolean))] as string[];
+      const stIds = [...new Set(apptData.map(a => a.session_type_id).filter(Boolean))] as string[];
 
-      // 3. ALL sales for this client (for price resolution + timeline)
-      const { data: salesData } = await supabase
-        .from('sales')
-        .select('id, sale_datetime')
-        .eq('client_id', clientId)
-        .order('sale_datetime', { ascending: false });
+      const [poData, allItems, staffData, stData, pricedVisits] = await Promise.all([
+        fetchByIds<any>('pricing_options', 'id', poIds, 'id, mindbody_id, price'),
+        fetchByIds<any>('sale_items', 'sale_id', salesData.map(s => s.id), 'id, sale_id, item_id, item_name, description, quantity, total_amount, unit_price, payment_ref_id'),
+        fetchByIds<any>('staff', 'id', staffIds, 'id, first_name, last_name'),
+        fetchByIds<any>('session_types', 'id', stIds, 'id, name'),
+        priceMarginVisits(apptData.filter(a => a.status === 'Completed')),
+      ]);
+      const staffMap = new Map<string, string>(staffData.map((s: any) => [s.id, `${s.first_name} ${s.last_name}`]));
+      const stMap = new Map<string, string>(stData.map((st: any) => [st.id, st.name]));
+      const pricedById = new Map(pricedVisits.map(v => [v.id, v]));
 
-      // 4. Sale items (batched)
-      const allSaleIds = (salesData || []).map(s => s.id);
-      let allItems: any[] = [];
-      for (let i = 0; i < allSaleIds.length; i += 200) {
-        const batch = allSaleIds.slice(i, i + 200);
-        const { data } = await supabase
-          .from('sale_items')
-          .select('id, sale_id, item_id, item_name, description, quantity, total_amount, unit_price, payment_ref_id')
-          .in('sale_id', batch);
-        if (data) allItems = allItems.concat(data);
-      }
-
-      // 5. Appointments with joins
-      const { data: apptData } = await supabase
-        .from('appointments')
-        .select('id, staff_id, session_type_id, client_service_id, start_datetime, end_datetime, status, duration_minutes')
-        .eq('client_id', clientId)
-        .order('start_datetime', { ascending: false });
-
-      // 6. Staff names + rates
-      const staffIds = [...new Set((apptData || []).map(a => a.staff_id).filter(Boolean))];
-      let staffMap = new Map<string, string>();
-      const staffRates = new Map<string, Map<string, number>>();
-
-      if (staffIds.length > 0) {
-        const { data: staffData } = await supabase
-          .from('staff')
-          .select('id, first_name, last_name')
-          .in('id', staffIds);
-        for (const s of (staffData || [])) {
-          staffMap.set(s.id, `${s.first_name} ${s.last_name}`);
-        }
-
-        const { data: syncedRates } = await supabase
-          .from('staff_session_types')
-          .select('staff_id, session_type_id, pay_rate')
-          .in('staff_id', staffIds);
-        for (const r of (syncedRates || [])) {
-          if (Number(r.pay_rate) > 0) {
-            if (!staffRates.has(r.staff_id)) staffRates.set(r.staff_id, new Map());
-            staffRates.get(r.staff_id)!.set(r.session_type_id, Number(r.pay_rate));
-          }
-        }
-
-        const { data: overrides } = await supabase
-          .from('staff_appointment_rates')
-          .select('staff_id, session_type_id, rate_per_appointment')
-          .in('staff_id', staffIds)
-          .is('effective_to', null);
-        for (const r of (overrides || [])) {
-          if (!staffRates.has(r.staff_id)) staffRates.set(r.staff_id, new Map());
-          staffRates.get(r.staff_id)!.set(r.session_type_id || '_default', Number(r.rate_per_appointment) || 0);
-        }
-      }
-
-      // 7. Session type names
-      const stIds = [...new Set((apptData || []).map(a => a.session_type_id).filter(Boolean))];
-      let stMap = new Map<string, string>();
-      if (stIds.length > 0) {
-        const { data: stData } = await supabase
-          .from('session_types')
-          .select('id, name')
-          .in('id', stIds);
-        for (const st of (stData || [])) stMap.set(st.id, st.name);
-      }
-
-      // 8. Resolve prices
       const resolvedPrices = resolveServicePrices(
-        (svcData || []).map((s: any) => ({
+        svcData.map((s: any) => ({
           id: s.id,
           mindbody_id: s.mindbody_id,
           pricing_option_id: s.pricing_option_id,
@@ -351,11 +288,10 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
         })),
         poData,
         allItems,
-        salesData || [],
+        salesData,
       );
 
-      // Build services with prices
-      const resolvedServices: ClientService[] = (svcData || []).map((s: any) => {
+      const resolvedServices: ClientService[] = svcData.map((s: any) => {
         const rp = resolvedPrices.get(s.id) || { price: 0, source: 'no_data' as const };
         return {
           id: s.id,
@@ -367,55 +303,22 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
           expiration_date: s.expiration_date,
           program_name: s.program_name,
           pricing_option_id: s.pricing_option_id,
+          current: s.current,
+          returned: s.returned === true,
           paid_price: rp.price,
           price_source: rp.source,
         };
       });
-
-      // Build per-visit revenue map: client_service mindbody_id -> revenue_per_visit
-      const poById = new Map(poData.map((p: any) => [p.id, p]));
-      const revenuePerVisitMap = new Map<string, { rpv: number; source: PriceSource }>();
-      for (const svc of resolvedServices) {
-        const sessionCount = svc.count > 0 ? svc.count : 1;
-        revenuePerVisitMap.set(svc.mindbody_id, {
-          rpv: svc.paid_price / sessionCount,
-          source: svc.price_source,
-        });
-      }
-
-      // Priority 0: direct sale_item fallback for orphaned visits
-      // (client_service_id exists on appointment but no client_services row)
-      const directSaleItemMap = new Map<string, number>();
-      for (const si of allItems) {
-        if (si.payment_ref_id != null && si.total_amount != null && Number(si.total_amount) > 0) {
-          directSaleItemMap.set(String(si.payment_ref_id), Number(si.total_amount));
-        }
-      }
-      const resolvedMindbodyIds = new Set(resolvedServices.map(s => s.mindbody_id));
-      for (const appt of (apptData || [])) {
-        const csId = appt.client_service_id;
-        if (csId && !resolvedMindbodyIds.has(csId) && !revenuePerVisitMap.has(csId)) {
-          const directAmt = directSaleItemMap.get(csId);
-          if (directAmt !== undefined) {
-            revenuePerVisitMap.set(csId, { rpv: directAmt, source: 'direct_sale_item' });
-          }
-        }
-      }
-
-      // Build timeline (filtered by date range)
-      const periodStart = `${startDate}T00:00:00`;
-      const periodEnd = `${endDate}T23:59:59`;
+      const serviceByMbId = new Map(resolvedServices.map(s => [s.mindbody_id, s]));
 
       const events: TimelineEvent[] = [];
-
-      // Purchase events
-      const saleDateMap = new Map((salesData || []).map(s => [s.id, s.sale_datetime]));
+      const saleById = new Map(salesData.map(s => [s.id, s]));
       for (const item of allItems) {
-        const saleDate = saleDateMap.get(item.sale_id);
-        if (!saleDate || saleDate < periodStart || saleDate > periodEnd) continue;
+        const sale = saleById.get(item.sale_id);
+        if (!sale) continue;
         events.push({
           id: `purchase-${item.id}`,
-          date: saleDate,
+          date: sale.sale_datetime,
           type: 'purchase',
           description: item.item_name || item.description || '-',
           amount: Number(item.total_amount) || 0,
@@ -426,83 +329,90 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
           revenuePerVisit: null,
           staffPay: null,
           clientServiceId: null,
+          locationId: sale.location_id,
         });
       }
 
-      // Visit events
-      for (const appt of (apptData || [])) {
-        if (appt.start_datetime < periodStart || appt.start_datetime > periodEnd) continue;
+      for (const appt of apptData) {
         const csId = appt.client_service_id;
-        const rpvEntry = csId ? revenuePerVisitMap.get(csId) : null;
-
-        let pay: number | null = null;
-        if (appt.staff_id && staffRates.has(appt.staff_id)) {
-          const rates = staffRates.get(appt.staff_id)!;
-          pay = rates.get(appt.session_type_id) ?? rates.get('_default') ?? null;
+        const svc = csId ? serviceByMbId.get(csId) : undefined;
+        const priced = pricedById.get(appt.id);
+        let priceSource: PriceSource | null = null;
+        if (priced) {
+          if (priced.revenue === null) priceSource = 'no_data';
+          else if (priced.isEstimated) priceSource = 'session_type_estimate';
+          else priceSource = svc?.price_source ?? 'direct_sale_item';
         }
-
         events.push({
           id: `visit-${appt.id}`,
           date: appt.start_datetime,
           type: 'visit',
-          description: stMap.get(appt.session_type_id) || 'Unknown session',
+          description: (appt.session_type_id && stMap.get(appt.session_type_id)) || 'Unknown session',
           amount: null,
-          staffName: staffMap.get(appt.staff_id) || null,
-          serviceName: csId
-            ? (resolvedServices.find(s => s.mindbody_id === csId)?.name || null)
-            : null,
+          staffName: (appt.staff_id && staffMap.get(appt.staff_id)) || null,
+          serviceName: svc?.name || null,
           status: appt.status,
-          priceSource: rpvEntry?.source || null,
-          revenuePerVisit: rpvEntry?.rpv || null,
-          staffPay: pay,
+          priceSource,
+          revenuePerVisit: priced?.revenue ?? null,
+          staffPay: priced ? priced.staffCost : null,
           clientServiceId: csId || null,
+          locationId: appt.location_id,
         });
       }
 
       events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-      // Compute balances (ALL time, not filtered)
-      const genToday = toLocalISO(new Date());
+      // Balances are all-time and all locations; only the timeline follows the period and location filters.
       let totalPurchased = 0;
       let totalSpent = 0;
-      let totalRemaining = 0;
       for (const svc of resolvedServices) {
         const b = computeServiceBalance(svc);
         totalPurchased += b.total;
         totalSpent += b.spent;
-        if (isPackageActive({ current: true, remaining: svc.remaining, expiration_date: svc.expiration_date }, genToday)) {
-          totalRemaining += b.remaining;
-        }
       }
-
-      // Recognized revenue = sum of per-visit revenue for completed visits (all time)
-      let recognizedRevenue = 0;
-      for (const appt of (apptData || [])) {
-        if (appt.status !== 'Completed') continue;
-        const rpvEntry = appt.client_service_id ? revenuePerVisitMap.get(appt.client_service_id) : null;
-        if (rpvEntry) recognizedRevenue += rpvEntry.rpv;
-      }
-
-      const allCompletedVisits = (apptData || []).filter((a: any) => a.status === 'Completed').length;
+      const totalRemaining = computeObligations(resolvedServices).total;
+      const visitTotals = summarizeVisits(pricedVisits);
 
       setServices(resolvedServices);
-      setTimeline(events);
+      setAllEvents(events);
       setBalance({
         totalPurchased,
         totalSpent,
         totalRemaining,
-        recognizedRevenue,
+        recognizedRevenue: visitTotals.revenueEarned,
         obligations: totalRemaining,
-        allCompletedVisits,
+        allCompletedVisits: pricedVisits.length,
       });
       setGenerated(true);
-      onParamsChange?.({ client: clientId, from: startDate, to: endDate, view: viewMode });
+      setLoadedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
       console.error('Error generating client card:', err);
+      setLoadError('Client data could not be loaded. Please try again.');
     } finally {
       setLoading(false);
     }
-  }, [selectedClient, startDate, endDate]);
+  }, [selectedClient]);
+
+  const sentParamsRef = useRef('');
+  useEffect(() => {
+    if (!generated || !selectedClient) return;
+    const params: Record<string, string> = { client: selectedClient.id, from: startDate, to: endDate, view: viewMode };
+    if (locationId !== 'all') params.location = locationId;
+    const key = JSON.stringify(params);
+    if (key === sentParamsRef.current) return;
+    sentParamsRef.current = key;
+    onParamsChange?.(params);
+    // onParamsChange changes identity when another page becomes active; it must not trigger a write.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generated, selectedClient, startDate, endDate, viewMode, locationId]);
+
+  const timeline = useMemo(() => {
+    const periodStart = `${startDate}T00:00:00`;
+    const periodEnd = `${endDate}T23:59:59`;
+    return allEvents.filter(e =>
+      e.date >= periodStart && e.date <= periodEnd &&
+      (locationId === 'all' || e.locationId === locationId));
+  }, [allEvents, startDate, endDate, locationId]);
 
   // ── Auto-load client from URL ──
 
@@ -537,13 +447,21 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
   const today = useMemo(() => toLocalISO(new Date()), []);
 
   const activeServices = useMemo(() =>
-    services.filter(s => isPackageActive({ current: true, remaining: s.remaining, expiration_date: s.expiration_date }, today)), [services, today]);
+    services.filter(s => isPackageActive(s, today)), [services, today]);
 
   const expiredOrUsedServices = useMemo(() =>
-    services.filter(s => !isPackageActive({ current: true, remaining: s.remaining, expiration_date: s.expiration_date }, today)), [services, today]);
+    services.filter(s => !isPackageActive(s, today)), [services, today]);
 
-  const completedVisitsInPeriod = useMemo(() =>
-    timeline.filter(e => e.type === 'visit' && e.status === 'Completed'), [timeline]);
+  const expiredUnused = useMemo(() => {
+    let visits = 0;
+    let value = 0;
+    for (const svc of expiredOrUsedServices) {
+      if (svc.returned || svc.remaining <= 0 || !svc.expiration_date || svc.expiration_date.slice(0, 10) >= today) continue;
+      visits += svc.remaining;
+      value += packageObligation(svc);
+    }
+    return { visits, value };
+  }, [expiredOrUsedServices, today]);
 
   const expiringSoonServices = useMemo(() => {
     // Group active services by name
@@ -586,6 +504,16 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
     return [...map.values()];
   }, [activeServices]);
 
+  const visitsByPackage = useMemo(() => {
+    const map = new Map<string, TimelineEvent[]>();
+    for (const e of timeline) {
+      if (e.type !== 'visit' || !e.clientServiceId) continue;
+      const list = map.get(e.clientServiceId);
+      if (list) list.push(e); else map.set(e.clientServiceId, [e]);
+    }
+    return map;
+  }, [timeline]);
+
   const purchasesInPeriod = useMemo(() =>
     timeline.filter(e => e.type === 'purchase'), [timeline]);
 
@@ -599,7 +527,7 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
       { Metric: 'Spent', Value: `${balance.totalSpent.toFixed(2)} EUR` },
       { Metric: 'Remaining', Value: `${balance.totalRemaining.toFixed(2)} EUR` },
       { Metric: 'Obligations', Value: `${balance.obligations.toFixed(2)} EUR` },
-      { Metric: 'Recognized Revenue', Value: `${balance.recognizedRevenue.toFixed(2)} EUR` },
+      { Metric: 'Revenue earned', Value: `${balance.recognizedRevenue.toFixed(2)} EUR` },
       { Metric: '', Value: '' },
       { Metric: 'Active Packages', Value: '' },
     ];
@@ -607,6 +535,7 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
       const d = daysUntil(svc.expiration_date);
       summaryRows.push({
         Metric: svc.name,
+        'Start': formatDate(svc.active_date),
         'Used': svc.count - svc.remaining,
         'Total': svc.count,
         'Remaining': svc.remaining,
@@ -628,19 +557,42 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
       'Price Source': evt.priceSource ? priceSourceLabel(evt.priceSource) : '',
     }));
 
+    const expiredRows: Record<string, string | number>[] = expiredOrUsedServices.map(svc => {
+      const d = daysUntil(svc.expiration_date);
+      const expiredLeft = d !== null && d < 0 && !svc.returned && svc.remaining > 0;
+      return {
+        Package: svc.name,
+        Start: formatDate(svc.active_date),
+        Expires: svc.expiration_date ? formatDate(svc.expiration_date) : '-',
+        Status: svc.remaining <= 0 ? 'Fully used' : d !== null && d < 0 ? 'Expired' : 'Inactive',
+        Used: svc.count - svc.remaining,
+        Total: svc.count,
+        'Unused visits expired': expiredLeft ? svc.remaining : 0,
+        'Unused value (EUR)': expiredLeft ? Number(packageObligation(svc).toFixed(2)) : 0,
+        'Package total (EUR)': Number(computeServiceBalance(svc).total.toFixed(2)),
+      };
+    });
+    if (expiredRows.length > 0) {
+      expiredRows.push({
+        Package: 'Total expired unused', Start: '', Expires: '', Status: '', Used: '', Total: '',
+        'Unused visits expired': expiredUnused.visits,
+        'Unused value (EUR)': Number(expiredUnused.value.toFixed(2)),
+        'Package total (EUR)': '',
+      });
+    }
+
     const fname = `client_${selectedClient.first_name}_${selectedClient.last_name}`;
     exportMultiSheetExcel(
       [
         { name: 'Summary', data: summaryRows },
         { name: 'Timeline', data: timelineRows },
+        { name: 'Expired or used', data: expiredRows },
       ],
       fname,
     );
   };
 
-  const handlePrint = () => {
-    window.print();
-  };
+  const onPrint = () => handlePrint(printRef);
 
   // ── Date preset buttons ──
 
@@ -653,39 +605,14 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
       {/* Header */}
       <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6 print:shadow-none">
         <h2 className="text-2xl font-bold text-slate-900">Client Card</h2>
-        <p className="text-slate-600 mt-1">
-          Detailed client profile with purchases, visits, and financial balances
-        </p>
+        <PagePurpose section="client-card" />
+      </div>
+
+      <div className="px-6 pt-6 print:hidden">
+        <StudioObligationsPanel onOpenClient={openClientById} />
       </div>
 
       <div className="p-6 print:p-2" ref={printRef}>
-        {/* Studio Overview — always visible */}
-        {studioOverview && (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 mb-6 print:shadow-none print:border-0">
-            <h3 className="text-sm font-semibold text-slate-900 mb-3 flex items-center gap-2">
-              <Package className="w-4 h-4 text-amber-500" />
-              Studio Overview — Total Obligations
-            </h3>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="bg-gradient-to-br from-amber-50 to-amber-100/50 rounded-lg p-4 border border-amber-200/50">
-                <div className="text-xs font-medium text-amber-600 uppercase tracking-wider mb-1">Active Clients</div>
-                <div className="text-2xl font-bold text-amber-900">{studioOverview.clients}</div>
-                <div className="text-xs text-amber-600/70 mt-1">with remaining visits</div>
-              </div>
-              <div className="bg-gradient-to-br from-amber-50 to-amber-100/50 rounded-lg p-4 border border-amber-200/50">
-                <div className="text-xs font-medium text-amber-600 uppercase tracking-wider mb-1">Total Obligations</div>
-                <div className="text-2xl font-bold text-amber-900">{formatCurrency(studioOverview.obligationsEur)}</div>
-                <div className="text-xs text-amber-600/70 mt-1">catalog price estimate</div>
-              </div>
-              <div className="bg-gradient-to-br from-amber-50 to-amber-100/50 rounded-lg p-4 border border-amber-200/50">
-                <div className="text-xs font-medium text-amber-600 uppercase tracking-wider mb-1">Remaining Visits</div>
-                <div className="text-2xl font-bold text-amber-900">{studioOverview.remainingVisits}</div>
-                <div className="text-xs text-amber-600/70 mt-1">across all clients</div>
-              </div>
-            </div>
-            <p className="text-[11px] text-slate-400 mt-3">Based on catalog prices. Actual may differ due to discounts.</p>
-          </div>
-        )}
 
         {/* Configuration Card */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6 print:shadow-none print:border-0">
@@ -771,6 +698,26 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
               label="Period (for timeline only — balances are always all-time)"
               compact
             />
+            <div className="flex flex-wrap items-center gap-3 mt-3 print:hidden">
+              <LocationFilter value={locationId} onChange={(id, name) => { setLocationId(id); setLocationName(name); }} />
+              <span className="text-xs text-slate-400">Location filters the timeline only.</span>
+            </div>
+            <div className="flex gap-2 mt-3 overflow-x-auto pb-1 print:hidden">
+              {months.map(m => {
+                const active = startDate === m.start && endDate === m.end;
+                return (
+                  <button
+                    key={m.start}
+                    onClick={() => applyPreset("custom", { start: m.start, end: m.end })}
+                    className={`px-3 py-1 rounded-full text-xs whitespace-nowrap transition-colors ${
+                      active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Action Buttons */}
@@ -787,6 +734,12 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
               )}
               Generate
             </button>
+            {loadedAt && !loading && (
+              <span className="text-xs text-slate-400">Loaded at {loadedAt}</span>
+            )}
+            {loadError && !loading && (
+              <span className="text-sm text-red-600">{loadError}</span>
+            )}
             {generated && (
               <>
                 <button
@@ -797,7 +750,7 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
                   Excel
                 </button>
                 <button
-                  onClick={handlePrint}
+                  onClick={onPrint}
                   className="px-4 py-2.5 bg-slate-600 text-white rounded-lg font-medium hover:bg-slate-700 transition-colors flex items-center gap-2"
                 >
                   <Printer className="w-4 h-4" />
@@ -843,7 +796,7 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
                   <div className="text-xs text-blue-600/70 mt-1">{services.length} packages total</div>
                 </div>
                 <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/50 rounded-lg p-4 border border-emerald-200/50">
-                  <div className="text-xs font-medium text-emerald-600 uppercase tracking-wider mb-1">Recognized Revenue</div>
+                  <div className="text-xs font-medium text-emerald-600 uppercase tracking-wider mb-1">Revenue earned</div>
                   <div className="text-xl font-bold text-emerald-900">{formatCurrency(balance.recognizedRevenue)}</div>
                   <div className="text-xs text-emerald-600/70 mt-1">{balance.allCompletedVisits} completed visits (all time)</div>
                 </div>
@@ -936,6 +889,8 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
                             </div>
                             <div className="flex items-center gap-2 mt-2 text-xs text-slate-500 flex-wrap">
                               <span>{totalUsed} of {totalCount} used</span>
+                              <span className="text-slate-300">{"\u00b7"}</span>
+                              <span>{formatDate(group.services[0]?.active_date)} {"\u2013"} {group.expDate ? formatDate(group.expDate) : '\u221E'}</span>
                               {days !== null && days >= 0 && (
                                 <><span className="text-slate-300">{"\u00b7"}</span><span>{days}d left</span></>
                               )}
@@ -979,7 +934,7 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
                                     <div className="ml-4 border-l border-slate-200 pl-3 mb-1">
                                       {linkedVisits.map(v => (
                                         <div key={v.id} className="flex items-center gap-3 py-1 text-xs">
-                                          <span className="text-slate-400 w-20">{formatDate(v.date)}</span>
+                                          <span className="text-slate-400 w-28">{formatDate(v.date)} <span className="text-slate-300">{formatTime(v.date)}</span></span>
                                           <span className={`w-16 text-center px-1.5 py-0.5 rounded ${
                                             v.status === 'Completed' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-50 text-slate-500'
                                           }`}>{v.status}</span>
@@ -1016,6 +971,11 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
                     <CheckCircle2 className="w-4 h-4 text-slate-400" />
                     Expired / used packages ({expiredOrUsedServices.length})
                   </h4>
+                  {expiredUnused.visits > 0 && (
+                    <span className="text-xs font-medium text-red-600">
+                      {expiredUnused.visits} unused visit{expiredUnused.visits !== 1 ? "s" : ""} expired · {formatCurrency(expiredUnused.value)} at paid price
+                    </span>
+                  )}
                 </button>
                 {showExpiredPackages && (
                   <div className="divide-y divide-slate-100 border-t border-slate-200">
@@ -1043,8 +1003,11 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
                           </div>
                           <div className="flex items-center gap-4 text-xs text-slate-500 shrink-0">
                             <span>{svc.count - svc.remaining}/{svc.count} used</span>
+                            <span>{formatDate(svc.active_date)} {"\u2013"} {svc.expiration_date ? formatDate(svc.expiration_date) : '\u221E'}</span>
+                            {isExpired && svc.remaining > 0 && (
+                              <span className="text-red-600 font-medium">{svc.remaining} unused · {formatCurrency(packageObligation(svc))}</span>
+                            )}
                             <span className="font-medium text-slate-700">{formatCurrency(b.total)}</span>
-                            <span className="text-slate-400">{formatDate(svc.active_date)}</span>
                           </div>
                         </div>
                       );
@@ -1085,7 +1048,7 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
                       <tbody className="divide-y divide-slate-100">
                         {timeline.map(evt => (
                           <tr key={evt.id} className="hover:bg-slate-50 transition-colors">
-                            <td className="px-4 py-2.5 text-slate-700 whitespace-nowrap">{formatDate(evt.date)}</td>
+                            <td className="px-4 py-2.5 text-slate-700 whitespace-nowrap">{formatDate(evt.date)}{evt.type === 'visit' && <span className="text-slate-400 ml-1.5">{formatTime(evt.date)}</span>}</td>
                             <td className="px-4 py-2.5">
                               <span className={`px-2 py-0.5 rounded text-xs font-medium ${
                                 evt.type === 'purchase'
@@ -1144,66 +1107,153 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
             <p className="text-sm text-slate-600">Loading client data...</p>
           </div>
         )}
-      </div>
-      {/* Print-only structured report (hidden on screen, visible when printing) */}
-      {generated && selectedClient && balance && (
-        <div className="print-report hidden print:block">
-          <h1>Client Report</h1>
-          <div className="pr-sub">
-            Client: <strong>{selectedClient.first_name} {selectedClient.last_name}</strong>
-            {' | '}Generated: {new Date().toLocaleDateString('en-GB')}
-            {' | '}Period: {datePreset === 'alltime' ? 'All Time' : `${formatDate(startDate)} \u2014 ${formatDate(endDate)}`}
+
+        {/* Print-only structured report (hidden on screen, visible when printing) */}
+        {generated && selectedClient && balance && (
+          <div className="print-report hidden print:block">
+            <h1>Client Report</h1>
+            <div className="pr-sub">
+              Client: <strong>{selectedClient.first_name} {selectedClient.last_name}</strong>
+              {' | '}Generated: {new Date().toLocaleDateString('en-GB')}
+              {' | '}Period: {`${formatDate(startDate)} \u2014 ${formatDate(endDate)}`}{locationId !== 'all' ? ` | Location: ${locationName || locationId}` : ''}
+            </div>
+
+            <h2>Summary</h2>
+            <dl className="pr-grid">
+              <dt>Total Purchased</dt><dd>{balance.totalPurchased.toFixed(2)} EUR</dd>
+              <dt>Spent</dt><dd>{balance.totalSpent.toFixed(2)} EUR</dd>
+              <dt>Remaining</dt><dd>{balance.totalRemaining.toFixed(2)} EUR</dd>
+              <dt>Obligations</dt><dd>{balance.obligations.toFixed(2)} EUR</dd>
+              <dt>Revenue earned</dt><dd>{balance.recognizedRevenue.toFixed(2)} EUR</dd>
+            </dl>
+
+            {expiringSoonServices.length > 0 && (
+              <>
+                <h2>Expiring Soon</h2>
+                <table>
+                  <thead><tr><th>Package</th><th>Visits left</th><th>Days left</th></tr></thead>
+                  <tbody>
+                    {expiringSoonServices.map(g => (
+                      <tr key={g.name}>
+                        <td>{g.name}</td>
+                        <td style={{ textAlign: 'center' }}>{g.remaining}</td>
+                        <td style={{ textAlign: 'center' }}>{g.daysLeft ?? '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+
+            <h2>Active Packages ({activeServices.length})</h2>
+            <table>
+              <thead><tr><th>Package</th><th>Start</th><th>End</th><th>Remaining</th><th>Total</th><th>Days Left</th><th>Paid Price</th></tr></thead>
+              <tbody>
+                {activeServices.length === 0 ? (
+                  <tr><td colSpan={7} style={{ textAlign: 'center', color: '#999' }}>No active packages</td></tr>
+                ) : activeServices.map(svc => (
+                  <tr key={svc.id}>
+                    <td>{svc.name}</td>
+                    <td>{formatDate(svc.active_date)}</td>
+                    <td>{svc.expiration_date ? formatDate(svc.expiration_date) : '-'}</td>
+                    <td style={{ textAlign: 'center' }}>{svc.remaining}</td>
+                    <td style={{ textAlign: 'center' }}>{svc.count}</td>
+                    <td style={{ textAlign: 'center' }}>{daysUntil(svc.expiration_date) ?? '-'}</td>
+                    <td style={{ textAlign: 'right' }}>{svc.paid_price.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {expiredOrUsedServices.length > 0 && (
+              <>
+                <h2>Expired / used packages ({expiredOrUsedServices.length})</h2>
+                <table>
+                  <thead><tr><th>Package</th><th>Start</th><th>Expires</th><th>Status</th><th>Used</th><th>Total</th><th>Unused expired</th><th>Unused value</th><th>Package total</th></tr></thead>
+                  <tbody>
+                    {expiredOrUsedServices.map(svc => {
+                      const d = daysUntil(svc.expiration_date);
+                      const expiredLeft = d !== null && d < 0 && !svc.returned && svc.remaining > 0;
+                      return (
+                        <tr key={svc.id}>
+                          <td>{svc.name}</td>
+                          <td>{formatDate(svc.active_date)}</td>
+                          <td>{svc.expiration_date ? formatDate(svc.expiration_date) : '-'}</td>
+                          <td>{svc.remaining <= 0 ? 'Fully used' : d !== null && d < 0 ? 'Expired' : 'Inactive'}</td>
+                          <td style={{ textAlign: 'center' }}>{svc.count - svc.remaining}</td>
+                          <td style={{ textAlign: 'center' }}>{svc.count}</td>
+                          <td style={{ textAlign: 'center' }}>{expiredLeft ? svc.remaining : ''}</td>
+                          <td style={{ textAlign: 'right' }}>{expiredLeft ? packageObligation(svc).toFixed(2) : ''}</td>
+                          <td style={{ textAlign: 'right' }}>{computeServiceBalance(svc).total.toFixed(2)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td colSpan={6}>Total expired unused</td>
+                      <td style={{ textAlign: 'center' }}>{expiredUnused.visits}</td>
+                      <td style={{ textAlign: 'right' }}>{expiredUnused.value.toFixed(2)}</td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                </table>
+              </>
+            )}
+
+            {visitsByPackage.size > 0 && (
+              <>
+                <h2>Visits by package (in period)</h2>
+                {[...activeServices, ...expiredOrUsedServices].filter(svc => visitsByPackage.has(svc.mindbody_id)).map(svc => {
+                  const visits = visitsByPackage.get(svc.mindbody_id)!;
+                  return (
+                    <div key={svc.id} className="pr-staff-section">
+                      <h3>{svc.name} {"\u00b7"} {formatDate(svc.active_date)} {"\u00b7"} {svc.count - svc.remaining}/{svc.count} used {"\u00b7"} {visits.length} visit{visits.length !== 1 ? 's' : ''} in period</h3>
+                      <table className="pr-visit-table">
+                        <thead><tr><th>Date</th><th>Status</th><th>Service</th><th>Staff</th><th>Rev/Visit</th><th>Staff Pay</th></tr></thead>
+                        <tbody>
+                          {visits.map(v => (
+                            <tr key={v.id}>
+                              <td>{formatDate(v.date)} {formatTime(v.date)}</td>
+                              <td>{v.status || ''}</td>
+                              <td>{v.description}</td>
+                              <td>{v.staffName || ''}</td>
+                              <td style={{ textAlign: 'right' }}>{v.revenuePerVisit != null ? v.revenuePerVisit.toFixed(2) : ''}</td>
+                              <td style={{ textAlign: 'right' }}>{v.staffPay != null ? v.staffPay.toFixed(2) : ''}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+
+            <h2>Timeline ({timeline.length} events)</h2>
+            <table>
+              <thead><tr><th>Date</th><th>Type</th><th>Description</th><th>Package</th><th>Staff</th><th>Amount</th><th>Rev/Visit</th><th>Staff Pay</th><th>Source</th></tr></thead>
+              <tbody>
+                {timeline.length === 0 ? (
+                  <tr><td colSpan={9} style={{ textAlign: 'center', color: '#999' }}>No events in period</td></tr>
+                ) : timeline.map(evt => (
+                  <tr key={evt.id}>
+                    <td>{formatDate(evt.date)}{evt.type === 'visit' ? ` ${formatTime(evt.date)}` : ''}</td>
+                    <td>{evt.type === 'purchase' ? 'Purchase' : 'Visit'}</td>
+                    <td>{evt.description}</td>
+                    <td>{evt.serviceName || ''}</td>
+                    <td>{evt.staffName || ''}</td>
+                    <td style={{ textAlign: 'right' }}>{evt.amount != null ? evt.amount.toFixed(2) : ''}</td>
+                    <td style={{ textAlign: 'right' }}>{evt.revenuePerVisit != null ? evt.revenuePerVisit.toFixed(2) : ''}</td>
+                    <td style={{ textAlign: 'right' }}>{evt.staffPay != null ? evt.staffPay.toFixed(2) : ''}</td>
+                    <td>{evt.priceSource ? priceSourceLabel(evt.priceSource) : ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-
-          <h2>Summary</h2>
-          <dl className="pr-grid">
-            <dt>Total Purchased</dt><dd>{balance.totalPurchased.toFixed(2)} EUR</dd>
-            <dt>Spent</dt><dd>{balance.totalSpent.toFixed(2)} EUR</dd>
-            <dt>Remaining</dt><dd>{balance.totalRemaining.toFixed(2)} EUR</dd>
-            <dt>Obligations</dt><dd>{balance.obligations.toFixed(2)} EUR</dd>
-            <dt>Recognized Revenue</dt><dd>{balance.recognizedRevenue.toFixed(2)} EUR</dd>
-          </dl>
-
-          <h2>Active Packages ({activeServices.length})</h2>
-          <table>
-            <thead><tr><th>Package</th><th>Remaining</th><th>Total</th><th>Days Left</th><th>Paid Price</th></tr></thead>
-            <tbody>
-              {activeServices.length === 0 ? (
-                <tr><td colSpan={5} style={{ textAlign: 'center', color: '#999' }}>No active packages</td></tr>
-              ) : activeServices.map(svc => (
-                <tr key={svc.id}>
-                  <td>{svc.name}</td>
-                  <td style={{ textAlign: 'center' }}>{svc.remaining}</td>
-                  <td style={{ textAlign: 'center' }}>{svc.count}</td>
-                  <td style={{ textAlign: 'center' }}>{daysUntil(svc.expiration_date) ?? '-'}</td>
-                  <td style={{ textAlign: 'right' }}>{svc.paid_price.toFixed(2)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <h2>Timeline ({timeline.length} events)</h2>
-          <table>
-            <thead><tr><th>Date</th><th>Type</th><th>Description</th><th>Package</th><th>Staff</th><th>Amount</th><th>Rev/Visit</th><th>Source</th></tr></thead>
-            <tbody>
-              {timeline.length === 0 ? (
-                <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999' }}>No events in period</td></tr>
-              ) : timeline.map(evt => (
-                <tr key={evt.id}>
-                  <td>{formatDate(evt.date)}</td>
-                  <td>{evt.type === 'purchase' ? 'Purchase' : 'Visit'}</td>
-                  <td>{evt.description}</td>
-                  <td>{evt.serviceName || ''}</td>
-                  <td>{evt.staffName || ''}</td>
-                  <td style={{ textAlign: 'right' }}>{evt.amount != null ? evt.amount.toFixed(2) : ''}</td>
-                  <td style={{ textAlign: 'right' }}>{evt.revenuePerVisit != null ? evt.revenuePerVisit.toFixed(2) : ''}</td>
-                  <td>{evt.priceSource ? priceSourceLabel(evt.priceSource) : ''}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

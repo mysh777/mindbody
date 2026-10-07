@@ -1,9 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAllPages';
+import { fetchByIds } from '../lib/fetchByIds';
 import { useReportFilters } from '../lib/reportFiltersContext';
 import { Calendar, Filter, Building2, UserCog, Clock, Tag, Users, ChevronLeft, ChevronRight, Download, X, FileJson } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
+import { formatApptDate, formatApptTime, formatApptDateTime } from '../utils/formatDateTime';
 import { getFilterPresetDates as salesGetFilterPresetDates, getMonthsForTimeline as salesGetMonthsForTimeline } from '../utils/salesFilters';
+import { PagePurpose } from './PageHeader';
 
 interface Appointment {
   id: string;
@@ -87,16 +91,16 @@ export function AppointmentsView() {
   const months = getMonthsForTimeline();
 
   const loadFiltersData = useCallback(async () => {
-    const [locRes, staffRes, statusRes] = await Promise.all([
+    const [locRes, staffRes, statusRows] = await Promise.all([
       supabase.from('locations').select('id, name').order('name'),
       supabase.from('staff').select('id, first_name, last_name').order('last_name'),
-      supabase.from('appointments').select('status'),
+      fetchAllPages<{ status: string | null }>((from, to) => supabase.from('appointments').select('status').order('id').range(from, to)),
     ]);
 
     setLocations(locRes.data || []);
     setStaffList(staffRes.data || []);
 
-    const uniqueStatuses = [...new Set((statusRes.data || []).map((a: any) => a.status).filter(Boolean))];
+    const uniqueStatuses = [...new Set(statusRows.map(a => a.status).filter(Boolean))] as string[];
     setStatuses(uniqueStatuses.sort());
   }, []);
 
@@ -222,40 +226,39 @@ export function AppointmentsView() {
   };
 
   const handleExport = async () => {
-    let query = supabase
-      .from('appointments')
-      .select(`
-        id, mindbody_id, start_datetime, end_datetime, status, duration_minutes, notes, first_appointment, client_service_id,
-        client:clients(id, first_name, last_name),
-        staff:staff(id, first_name, last_name),
-        location:locations(id, name),
-        session_type:session_types(id, name)
-      `)
-      .gte('start_datetime', dateRange.start)
-      .lte('start_datetime', dateRange.end + 'T23:59:59')
-      .order('start_datetime', { ascending: false });
+    const data = await fetchAllPages<any>((from, to) => {
+      let query = supabase
+        .from('appointments')
+        .select(`
+          id, mindbody_id, start_datetime, end_datetime, status, duration_minutes, notes, first_appointment, client_service_id,
+          client:clients(id, first_name, last_name),
+          staff:staff(id, first_name, last_name),
+          location:locations(id, name),
+          session_type:session_types(id, name)
+        `)
+        .gte('start_datetime', dateRange.start)
+        .lte('start_datetime', dateRange.end + 'T23:59:59')
+        .order('start_datetime', { ascending: false })
+        .order('id');
 
-    if (selectedLocation !== 'all') {
-      query = query.eq('location_id', selectedLocation);
-    }
-    if (selectedStaff !== 'all') {
-      query = query.eq('staff_id', selectedStaff);
-    }
-    if (selectedStatus !== 'all') {
-      query = query.eq('status', selectedStatus);
-    }
-
-    const { data } = await query;
+      if (selectedLocation !== 'all') {
+        query = query.eq('location_id', selectedLocation);
+      }
+      if (selectedStaff !== 'all') {
+        query = query.eq('staff_id', selectedStaff);
+      }
+      if (selectedStatus !== 'all') {
+        query = query.eq('status', selectedStatus);
+      }
+      return query.range(from, to);
+    });
 
     const clientServiceIds = [...new Set((data || []).map((a: any) => a.client_service_id).filter(Boolean))];
     let clientServicesMap: Record<string, { name: string; program_name: string | null }> = {};
     if (clientServiceIds.length > 0) {
-      const { data: servicesData } = await supabase
-        .from('client_services')
-        .select('mindbody_id, name, program_name')
-        .in('mindbody_id', clientServiceIds);
+      const servicesData = await fetchByIds<any>('client_services', 'mindbody_id', clientServiceIds, 'mindbody_id, name, program_name');
 
-      (servicesData || []).forEach((s: any) => {
+      servicesData.forEach((s: any) => {
         clientServicesMap[s.mindbody_id] = { name: s.name, program_name: s.program_name };
       });
     }
@@ -264,8 +267,8 @@ export function AppointmentsView() {
       const clientService = a.client_service_id ? clientServicesMap[a.client_service_id] : null;
       return {
         'Appointment ID': a.mindbody_id || '',
-        Date: new Date(a.start_datetime).toLocaleDateString('de-DE'),
-        Time: new Date(a.start_datetime).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }),
+        Date: formatApptDate(a.start_datetime),
+        Time: formatApptTime(a.start_datetime),
         Client: a.client ? `${a.client.first_name} ${a.client.last_name}` : '',
         Staff: a.staff ? `${a.staff.first_name} ${a.staff.last_name}` : '',
         Service: a.session_type?.name || '',
@@ -293,7 +296,7 @@ export function AppointmentsView() {
               <Calendar className="w-7 h-7 text-red-600" />
               Appointments
             </h2>
-            <p className="text-slate-600 mt-1">View and filter all appointments</p>
+            <PagePurpose section="appointments" />
           </div>
           <div className="flex items-center gap-3">
             <div className="text-right">
@@ -478,10 +481,10 @@ export function AppointmentsView() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="font-medium text-slate-900">
-                            {new Date(appt.start_datetime).toLocaleDateString('de-DE')}
+                            {formatApptDate(appt.start_datetime)}
                           </div>
                           <div className="text-sm text-slate-500">
-                            {new Date(appt.start_datetime).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                            {formatApptTime(appt.start_datetime)}
                           </div>
                         </td>
                         <td className="px-4 py-3">
@@ -594,7 +597,7 @@ export function AppointmentsView() {
                     Appointment #{selectedAppointment.mindbody_id}
                   </h3>
                   <p className="text-sm text-slate-500">
-                    {selectedAppointment.client?.first_name} {selectedAppointment.client?.last_name} - {new Date(selectedAppointment.start_datetime).toLocaleString('de-DE')}
+                    {selectedAppointment.client?.first_name} {selectedAppointment.client?.last_name} - {formatApptDateTime(selectedAppointment.start_datetime)}
                   </p>
                 </div>
               </div>

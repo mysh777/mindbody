@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { Download, RefreshCw, ChevronDown, ChevronRight, CreditCard, Package, Filter, Building2 } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 import { getFilterPresetDates as salesGetFilterPresetDates, getMonthsForTimeline as salesGetMonthsForTimeline } from '../utils/salesFilters';
+import { PagePurpose } from './PageHeader';
 
 interface SalesExpandableViewProps {
   onNavigate?: (tableName: string, id: string) => void;
@@ -329,7 +330,8 @@ export function SalesExpandableView({ onNavigate }: SalesExpandableViewProps) {
       <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-bold text-slate-900">Sales</h2>
+            <h2 className="text-2xl font-bold text-slate-900">Sales Journal</h2>
+            <PagePurpose section="sales" />
             <p className="text-slate-600 mt-1">
               {loading ? 'Loading...' : `Showing ${filteredSales.length} sales (${totalCount} in period)`}
             </p>

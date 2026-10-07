@@ -8,7 +8,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.app.json"
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "build:overview-job": "esbuild src/jobs/overviewTotalsJob.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=supabase/functions/overview-totals/job.bundle.js --log-level=warning --define:import.meta.env.VITE_SUPABASE_URL=globalThis.__SB_URL --define:import.meta.env.VITE_SUPABASE_ANON_KEY=globalThis.__SB_KEY --define:process.env.NODE_ENV=\\\"production\\\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { RefreshCw, AlertTriangle, ArrowUpDown } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAllPages';
+import { fetchByIds } from '../lib/fetchByIds';
 import { formatCurrency } from '../utils/salesFilters';
 
 interface ExpiredService {
@@ -32,47 +34,37 @@ export function ExpiredServicesTab({ onNavigate }: ExpiredServicesTabProps) {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: csData } = await supabase
+      const csData = await fetchAllPages<any>((from, to) => supabase
         .from('client_services')
         .select('id, client_id, name, count, remaining, expiration_date, payment_date, pricing_option_id')
         .lt('expiration_date', new Date().toISOString())
         .gt('remaining', 0)
-        .order('expiration_date', { ascending: false });
+        .order('expiration_date', { ascending: false })
+        .order('id')
+        .range(from, to));
 
-      if (!csData || csData.length === 0) {
+      if (csData.length === 0) {
         setData([]);
         return;
       }
 
       const clientIds = [...new Set(csData.map(cs => cs.client_id))];
       const clientMap: Record<string, string> = {};
-      for (let i = 0; i < clientIds.length; i += 500) {
-        const batch = clientIds.slice(i, i + 500);
-        const { data: clients } = await supabase
-          .from('clients')
-          .select('id, first_name, last_name')
-          .in('id', batch);
-        (clients || []).forEach(c => {
-          clientMap[c.id] = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id;
-        });
-      }
+      const clients = await fetchByIds<{ id: string; first_name: string | null; last_name: string | null }>('clients', 'id', clientIds, 'id, first_name, last_name');
+      clients.forEach(c => {
+        clientMap[c.id] = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id;
+      });
 
       const poIds = [...new Set(csData.map(cs => cs.pricing_option_id).filter(Boolean))];
       const poMap: Record<string, { price: number; sessionCount: number }> = {};
       if (poIds.length > 0) {
-        for (let i = 0; i < poIds.length; i += 500) {
-          const batch = poIds.slice(i, i + 500);
-          const { data: pos } = await supabase
-            .from('pricing_options')
-            .select('id, price, session_count')
-            .in('id', batch);
-          (pos || []).forEach(po => {
-            poMap[po.id] = {
-              price: Number(po.price) || 0,
-              sessionCount: po.session_count || 1,
-            };
-          });
-        }
+        const pos = await fetchByIds<{ id: string; price: number | null; session_count: number | null }>('pricing_options', 'id', poIds, 'id, price, session_count');
+        pos.forEach(po => {
+          poMap[po.id] = {
+            price: Number(po.price) || 0,
+            sessionCount: po.session_count || 1,
+          };
+        });
       }
 
       const processed: ExpiredService[] = csData.map(cs => {

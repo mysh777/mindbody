@@ -1,28 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Database, Settings, BarChart3, Calendar, DollarSign, FileText, ClipboardList, PieChart, Package, ShoppingBag, Wallet, UserCog, Activity, HeartPulse, UserCircle, Flame, TrendingUp, UserCheck, Moon } from 'lucide-react';
+import {
+  Database, BarChart3, Calendar, DollarSign, FileText, Package, ShoppingBag,
+  UserCog, HeartPulse, UserCircle, Flame, TrendingUp, UserCheck, Moon, Users, LayoutDashboard,
+  RefreshCw, History, ShieldCheck, AlertTriangle, FileJson, ChevronRight, Archive, Settings, ListChecks,
+} from 'lucide-react';
 import { supabase } from '../lib/supabase';
-
-export type MenuSection =
-  | 'api-integration'
-  | 'references'
-  | 'pivot-reports'
-  | 'clients-report'
-  | 'staff-report'
-  | 'staff-pricelist'
-  | 'appointments'
-  | 'sales'
-  | 'sales-report'
-  | 'sales-by-pricing'
-  | 'client-services'
-  | 'transactions'
-  | 'sale-items'
-  | 'client-activity'
-  | 'client-card'
-  | 'expiring-packages'
-  | 'linkage-health'
-  | 'margin-by-service'
-  | 'margin-by-staff'
-  | 'sleeping-clients';
+import { PAGES, MENU_GROUPS, type MenuSection, type MenuGroup } from '../lib/pages';
 
 interface SidebarProps {
   activeSection: MenuSection;
@@ -30,81 +13,62 @@ interface SidebarProps {
   refreshTrigger?: number;
 }
 
-interface MenuItem {
-  id: MenuSection;
-  label: string;
-  icon: any;
-  tableName?: string;
-  dividerBefore?: boolean;
-}
+const ICONS: Record<MenuSection, typeof Database> = {
+  'overview': LayoutDashboard,
+  'client-card': UserCircle,
+  'expiring-packages': Flame,
+  'sleeping-clients': Moon,
+  'client-segments': Users,
+  'margin-by-service': TrendingUp,
+  'margin-by-staff': UserCheck,
+  'references': Database,
+  'service-pricelist': ListChecks,
+  'staff-pricelist': UserCog,
+  'sync': RefreshCw,
+  'sync-history': History,
+  'reconciliation': ShieldCheck,
+  'data-issues': AlertTriangle,
+  'linkage-health': HeartPulse,
+  'appointments': Calendar,
+  'client-services': Package,
+  'sales': DollarSign,
+  'sale-items': FileText,
+  'pivot-reports': BarChart3,
+  'api-logs': FileText,
+  'raw-api': FileJson,
+  'staff-rates': UserCog,
+  'transactions': ShoppingBag,
+};
 
-const tableNameMap: Record<MenuSection, string | null> = {
-  'api-integration': null,
-  'sleeping-clients': null,
-  'references': null,
-  'pivot-reports': null,
-  'clients-report': null,
-  'staff-report': null,
-  'staff-pricelist': null,
+const TABLE_COUNTS: Partial<Record<MenuSection, string>> = {
   'appointments': 'appointments',
   'sales': 'sales',
-  'sales-report': null,
-  'sales-by-pricing': null,
   'client-services': 'client_services',
   'transactions': 'transactions',
   'sale-items': 'sale_items',
-  'client-activity': null,
-  'client-card': null,
-  'expiring-packages': null,
-  'linkage-health': null,
-  'margin-by-service': null,
-  'margin-by-staff': null,
 };
+
+const SECTIONS = Object.keys(PAGES) as MenuSection[];
+const sectionsOf = (group: MenuGroup) => SECTIONS.filter(s => PAGES[s].group === group);
+const isAdminGroup = (s: MenuSection) => PAGES[s].group === 'admin' || PAGES[s].group === 'legacy';
 
 export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: SidebarProps) {
   const [counts, setCounts] = useState<Record<string, number>>({});
+  const [adminOpen, setAdminOpen] = useState(() => isAdminGroup(activeSection));
+  const [legacyOpen, setLegacyOpen] = useState(() => PAGES[activeSection].group === 'legacy');
 
-  const menuItems: MenuItem[] = [
-    { id: 'api-integration', label: 'API Integration', icon: Settings },
-    { id: 'references', label: 'Reference Tables', icon: Database, dividerBefore: true },
-    { id: 'pivot-reports', label: 'Pivot Reports', icon: BarChart3, dividerBefore: true },
-    { id: 'clients-report', label: 'Client Balance', icon: Wallet },
-    { id: 'staff-report', label: 'Staff Report', icon: ClipboardList },
-    { id: 'staff-pricelist', label: 'Staff Pricelist', icon: UserCog },
-    { id: 'client-activity', label: 'Client Activity', icon: Activity },
-    { id: 'client-card', label: 'Client Card', icon: UserCircle },
-    { id: 'expiring-packages', label: 'Expiring Packages', icon: Flame },
-    { id: 'sleeping-clients', label: 'Sleeping Clients', icon: Moon },
-    { id: 'linkage-health', label: 'Linkage Health', icon: HeartPulse, dividerBefore: true },
-    { id: 'appointments', label: 'Appointments', icon: Calendar, dividerBefore: true },
-    { id: 'client-services', label: 'Client Services', icon: Package },
-    { id: 'sales', label: 'Sales Journal', icon: DollarSign, dividerBefore: true },
-    { id: 'margin-by-service', label: 'Margin by Service', icon: TrendingUp },
-    { id: 'margin-by-staff', label: 'Margin by Staff', icon: UserCheck },
-    { id: 'sales-report', label: 'Profitability', icon: PieChart },
-    { id: 'sales-by-pricing', label: 'Sales by Pricing', icon: FileText },
-    { id: 'transactions', label: 'Transactions', icon: ShoppingBag },
-    { id: 'sale-items', label: 'Sale Items', icon: FileText },
-  ];
+  useEffect(() => {
+    if (isAdminGroup(activeSection)) setAdminOpen(true);
+    if (PAGES[activeSection].group === 'legacy') setLegacyOpen(true);
+  }, [activeSection]);
 
   const loadCounts = useCallback(async () => {
     const newCounts: Record<string, number> = {};
-
-    const promises = Object.entries(tableNameMap).map(async ([section, tableName]) => {
-      if (tableName) {
-        try {
-          const { count } = await supabase
-            .from(tableName)
-            .select('*', { count: 'exact', head: true });
-          newCounts[section] = count || 0;
-        } catch (error) {
-          console.error(`Error loading count for ${tableName}:`, error);
-          newCounts[section] = 0;
-        }
-      }
-    });
-
-    await Promise.all(promises);
+    await Promise.all(Object.entries(TABLE_COUNTS).map(async ([section, tableName]) => {
+      const { count, error } = await supabase.from(tableName!).select('*', { count: 'exact', head: true });
+      if (error) console.error(`Error loading count for ${tableName}:`, error);
+      newCounts[section] = count || 0;
+    }));
     setCounts(newCounts);
   }, []);
 
@@ -113,57 +77,86 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
   }, [loadCounts, refreshTrigger]);
 
   const formatCount = (count: number) => {
-    if (count >= 1000000) {
-      return `${(count / 1000000).toFixed(1)}M`;
-    }
-    if (count >= 1000) {
-      return `${(count / 1000).toFixed(1)}K`;
-    }
+    if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
+    if (count >= 1000) return `${(count / 1000).toFixed(1)}K`;
     return count.toString();
   };
 
-  const getItemClass = (itemId: MenuSection) => {
-    const isActive = activeSection === itemId;
-    return `w-full flex items-center gap-3 px-4 py-3 text-left transition-all rounded-lg ${
-      isActive
-        ? 'bg-blue-50 text-blue-900 border-l-4 border-blue-600 font-semibold'
-        : 'text-slate-700 hover:bg-slate-50 border-l-4 border-transparent'
-    }`;
+  const renderItem = (id: MenuSection, compact = false) => {
+    const Icon = ICONS[id];
+    const isActive = activeSection === id;
+    const count = counts[id];
+    return (
+      <button
+        key={id}
+        onClick={() => onSectionChange(id)}
+        className={`w-full flex items-center gap-3 px-4 ${compact ? 'py-2' : 'py-2.5'} text-left transition-all rounded-lg border-l-4 ${
+          isActive
+            ? 'bg-blue-50 text-blue-900 border-blue-600 font-semibold'
+            : 'text-slate-700 hover:bg-slate-50 border-transparent'
+        }`}
+      >
+        <Icon className={`${compact ? 'w-4 h-4' : 'w-5 h-5'} flex-shrink-0`} />
+        <span className="text-sm flex-1 text-left">{PAGES[id].label}</span>
+        {count !== undefined && count > 0 && (
+          <span className="ml-auto text-xs font-semibold px-2 py-0.5 bg-slate-200 text-slate-700 rounded-full">
+            {formatCount(count)}
+          </span>
+        )}
+      </button>
+    );
   };
 
+  const groupHeading = (label: string) => (
+    <div className="px-4 pt-4 pb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">{label}</div>
+  );
+
+  const toggle = (label: string, open: boolean, onClick: () => void, Icon: typeof Database, nested = false) => (
+    <button
+      onClick={onClick}
+      aria-expanded={open}
+      className={`w-full flex items-center gap-2 px-4 py-2 rounded-lg text-left transition-colors hover:bg-slate-50 ${
+        nested ? 'text-xs font-semibold text-slate-500' : 'text-[11px] font-semibold uppercase tracking-wider text-slate-500'
+      }`}
+    >
+      <Icon className="w-4 h-4" />
+      <span className="flex-1">{label}</span>
+      <ChevronRight className={`w-4 h-4 transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
+    </button>
+  );
+
   return (
-    <div className="w-64 bg-white border-r border-slate-200 h-screen overflow-y-auto flex-shrink-0">
-      <div className="sticky top-0 bg-white border-b border-slate-200 p-6 z-10">
+    <div className="w-64 bg-white border-r border-slate-200 h-screen flex flex-col flex-shrink-0">
+      <div className="bg-white border-b border-slate-200 p-6">
         <h1 className="text-2xl font-bold text-slate-900">Mindbody</h1>
         <p className="text-sm text-slate-600 mt-1">Analytics Dashboard</p>
       </div>
 
-      <nav className="p-4 space-y-1">
-        {menuItems.map((item) => {
-          const count = counts[item.id];
-          const hasCount = count !== undefined && count > 0;
-
-          return (
-            <div key={item.id}>
-              {item.dividerBefore && (
-                <div className="my-3 border-t border-slate-200" />
-              )}
-              <button
-                onClick={() => onSectionChange(item.id)}
-                className={getItemClass(item.id)}
-              >
-                <item.icon className="w-5 h-5 flex-shrink-0" />
-                <span className="text-sm flex-1 text-left">{item.label}</span>
-                {hasCount && (
-                  <span className="ml-auto text-xs font-semibold px-2 py-0.5 bg-slate-200 text-slate-700 rounded-full">
-                    {formatCount(count)}
-                  </span>
-                )}
-              </button>
-            </div>
-          );
-        })}
+      <nav className="flex-1 overflow-y-auto p-4 space-y-0.5">
+        {MENU_GROUPS.filter(g => g.id !== 'admin' && g.id !== 'legacy').map(g => (
+          <div key={g.id} className="space-y-0.5">
+            {g.label && groupHeading(g.label)}
+            {sectionsOf(g.id).map(id => renderItem(id))}
+          </div>
+        ))}
       </nav>
+
+      <div className="border-t border-slate-200 p-4 max-h-[55%] overflow-y-auto">
+        {toggle('Admin', adminOpen, () => setAdminOpen(o => !o), Settings)}
+        {adminOpen && (
+          <div className="mt-1 space-y-0.5">
+            {sectionsOf('admin').map(id => renderItem(id, true))}
+            <div className="pt-2">
+              {toggle('Legacy', legacyOpen, () => setLegacyOpen(o => !o), Archive, true)}
+              {legacyOpen && (
+                <div className="mt-1 space-y-0.5 pl-2">
+                  {sectionsOf('legacy').map(id => renderItem(id, true))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

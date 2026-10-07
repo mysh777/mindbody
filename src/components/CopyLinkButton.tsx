@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Link2, Check } from 'lucide-react';
 import { buildReportUrl } from '../hooks/useHashRouter';
-import type { MenuSection } from './Sidebar';
+import type { MenuSection } from '../lib/pages';
 
 interface CopyLinkButtonProps {
   section: MenuSection;

@@ -143,6 +143,110 @@ async function saveRawData(supabase: any, endpointType: string, responseData: an
   }
 }
 
+type SaveReport = Record<string, { received: number; saved: number; errors: string[] }>;
+
+const MAX_ERRORS_PER_TABLE = 10;
+
+// A single bad row rejects the whole batch in Postgres, so on failure we retry row by row to save the rest.
+async function safeUpsert(supabase: any, report: SaveReport, table: string, rows: any[], onConflict: string): Promise<number> {
+  if (rows.length === 0) return 0;
+  const entry = report[table] ??= { received: 0, saved: 0, errors: [] };
+  entry.received += rows.length;
+
+  const { error } = await supabase.from(table).upsert(rows, { onConflict });
+  if (!error) {
+    entry.saved += rows.length;
+    return rows.length;
+  }
+
+  console.error(`[${table}] Batch upsert failed (${rows.length} rows), retrying row by row: ${error.message}`);
+  let saved = 0;
+  for (const row of rows) {
+    const { error: rowError } = await supabase.from(table).upsert(row, { onConflict });
+    if (!rowError) {
+      saved++;
+      continue;
+    }
+    const key = row.mindbody_id ?? row.sale_detail_id ?? row.id ?? "?";
+    console.error(`[${table}] Row ${key} not saved: ${rowError.message}`);
+    if (entry.errors.length < MAX_ERRORS_PER_TABLE) entry.errors.push(`${key}: ${rowError.message}`);
+  }
+  entry.saved += saved;
+  return saved;
+}
+
+async function loadPricingLinkMaps(supabase: any) {
+  const { data, error } = await supabase.from("pricing_options").select("id, product_id, mindbody_id");
+  // Without the map every package would be saved without a tariff, so fail the step instead.
+  if (error || !data || data.length === 0) {
+    throw new Error(`pricing_options lookup failed: ${error?.message ?? "no rows"}`);
+  }
+  const byProductId = new Map<string, string>();
+  const byMindbodyId = new Map<string, string>();
+  for (const po of data) {
+    if (po.product_id) byProductId.set(po.product_id, po.id);
+    if (po.mindbody_id) byMindbodyId.set(po.mindbody_id, po.id);
+  }
+  return { byProductId, byMindbodyId };
+}
+
+// Long .in() lists overflow the request URL.
+const IN_CHUNK_SIZE = 100;
+
+// A multi-row upsert writes NULL for keys missing in some rows, which would wipe tariffs already linked.
+async function keepExistingPricingLinks(supabase: any, rows: any[]) {
+  const unlinked = rows.filter(r => !r.pricing_option_id).map(r => r.mindbody_id);
+  const existing = new Map<string, string>();
+  for (let i = 0; i < unlinked.length; i += IN_CHUNK_SIZE) {
+    const { data, error } = await supabase
+      .from("client_services")
+      .select("mindbody_id, pricing_option_id")
+      .in("mindbody_id", unlinked.slice(i, i + IN_CHUNK_SIZE))
+      .not("pricing_option_id", "is", null);
+    if (error) throw new Error(`client_services pricing lookup failed: ${error.message}`);
+    for (const r of data || []) existing.set(r.mindbody_id, r.pricing_option_id);
+  }
+  for (const r of rows) {
+    if (!r.pricing_option_id) r.pricing_option_id = existing.get(r.mindbody_id) ?? null;
+  }
+}
+
+// Mindbody's session type list omits archived services, but old appointments still reference them.
+async function ensureSessionTypesExist(supabase: any, report: SaveReport, ids: (string | null)[]) {
+  const wanted = [...new Set(ids.filter((id): id is string => !!id))];
+  if (wanted.length === 0) return;
+
+  const known = new Set<string>();
+  for (let i = 0; i < wanted.length; i += IN_CHUNK_SIZE) {
+    const { data: existing, error } = await supabase.from("session_types").select("id").in("id", wanted.slice(i, i + IN_CHUNK_SIZE));
+    if (error) {
+      console.error(`[SESSION_TYPES] Lookup failed: ${error.message}`);
+      return;
+    }
+    for (const r of existing || []) known.add(r.id);
+  }
+  const placeholders = wanted.filter(id => !known.has(id)).map(id => ({
+    id,
+    mindbody_id: id,
+    name: `Archived service #${id}`,
+    active: false,
+    description: "Placeholder: referenced by appointments but not returned by Mindbody (archived service)",
+    raw_data: { placeholder: true, archived: true },
+  }));
+
+  if (placeholders.length > 0) {
+    console.log(`[SESSION_TYPES] Creating ${placeholders.length} archived-service placeholders: ${placeholders.map(p => p.id).join(", ")}`);
+    const { error: insertError } = await supabase.from("session_types").upsert(placeholders, { onConflict: "id", ignoreDuplicates: true });
+    const entry = report["session_types_placeholders"] ??= { received: 0, saved: 0, errors: [] };
+    entry.received += placeholders.length;
+    if (insertError) {
+      entry.errors.push(insertError.message);
+    } else {
+      entry.saved += placeholders.length;
+    }
+  }
+}
+
 async function syncSites(supabase: any, config: MindbodyConfig) {
   console.log('Syncing site information');
   const url = `${MINDBODY_BASE_URL}/site/sites`;
@@ -579,51 +683,65 @@ async function fetchStaffSessionTypesFromApi(
   mindbodyStaffId: string,
   skipLogs = false,
 ): Promise<{ ok: boolean; items: any[]; raw: any; error?: string }> {
-  const url = `${MINDBODY_BASE_URL}/staff/sessiontypes?request.staffId=${mindbodyStaffId}&request.limit=200&request.offset=0`;
-  const startTime = Date.now();
+  const allItems: any[] = [];
+  let offset = 0;
+  const limit = 200;
+  let lastRaw: any = {};
 
-  const response = await fetch(url, {
-    headers: getUserHeaders(config, userToken),
-  });
+  while (true) {
+    const url = `${MINDBODY_BASE_URL}/staff/sessiontypes?request.staffId=${mindbodyStaffId}&request.onlineOnly=false&request.limit=${limit}&request.offset=${offset}`;
+    const startTime = Date.now();
 
-  const durationMs = Date.now() - startTime;
-  const responseText = await response.text();
+    const response = await fetch(url, {
+      headers: getUserHeaders(config, userToken),
+    });
 
-  console.log(`[SST] Staff ${mindbodyStaffId} | HTTP ${response.status} | ${responseText.length} bytes | ${durationMs}ms`);
+    const durationMs = Date.now() - startTime;
+    const responseText = await response.text();
 
-  let data: any;
-  let parseError: string | null = null;
-  try {
-    data = JSON.parse(responseText);
-  } catch (e: any) {
-    parseError = `Failed to parse response: ${e.message}`;
-    data = {};
-    console.error(`[SST] Staff ${mindbodyStaffId} | PARSE ERROR: ${e.message}`);
+    console.log(`[SST] Staff ${mindbodyStaffId} | offset=${offset} | HTTP ${response.status} | ${responseText.length} bytes | ${durationMs}ms`);
+
+    let data: any;
+    let parseError: string | null = null;
+    try {
+      data = JSON.parse(responseText);
+    } catch (e: any) {
+      parseError = `Failed to parse response: ${e.message}`;
+      data = {};
+      console.error(`[SST] Staff ${mindbodyStaffId} | PARSE ERROR: ${e.message}`);
+    }
+
+    if (!skipLogs && offset === 0) {
+      await logApiCall(supabase, url, "GET", { staffId: mindbodyStaffId }, response.status, data, parseError, durationMs);
+    }
+
+    if (!response.ok) {
+      console.error(`[SST] Staff ${mindbodyStaffId} | API ERROR ${response.status}: ${responseText.substring(0, 300)}`);
+      return { ok: false, items: [], raw: data, error: `HTTP ${response.status}` };
+    }
+
+    lastRaw = data;
+
+    if (!skipLogs && offset === 0) {
+      await saveRawData(supabase, `staff_session_types_staff_${mindbodyStaffId}`, data, 0, data.PaginationResponse);
+    }
+
+    const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
+    const pageItems = arrayKey ? data[arrayKey] : [];
+
+    console.log(`[SST] Staff ${mindbodyStaffId} | offset=${offset} | Array key="${arrayKey || 'none'}" length=${pageItems.length}`);
+
+    allItems.push(...pageItems);
+
+    if (pageItems.length < limit) break;
+    offset += limit;
   }
 
-  if (!skipLogs) {
-    await logApiCall(supabase, url, "GET", { staffId: mindbodyStaffId }, response.status, data, parseError, durationMs);
+  if (allItems.length > 0) {
+    console.log(`[SST] Staff ${mindbodyStaffId} | Total items: ${allItems.length} | First item keys: ${Object.keys(allItems[0]).join(', ')}`);
   }
 
-  if (!response.ok) {
-    console.error(`[SST] Staff ${mindbodyStaffId} | API ERROR ${response.status}: ${responseText.substring(0, 300)}`);
-    return { ok: false, items: [], raw: data, error: `HTTP ${response.status}` };
-  }
-
-  if (!skipLogs) {
-    await saveRawData(supabase, `staff_session_types_staff_${mindbodyStaffId}`, data, 0, data.PaginationResponse);
-  }
-
-  const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
-  const items = arrayKey ? data[arrayKey] : [];
-
-  console.log(`[SST] Staff ${mindbodyStaffId} | Array key="${arrayKey || 'none'}" length=${items.length}`);
-  if (items.length > 0) {
-    console.log(`[SST] Staff ${mindbodyStaffId} | First item keys: ${Object.keys(items[0]).join(', ')}`);
-    console.log(`[SST] Staff ${mindbodyStaffId} | First item: ${JSON.stringify(items[0])}`);
-  }
-
-  return { ok: true, items, raw: data };
+  return { ok: true, items: allItems, raw: lastRaw };
 }
 
 async function importStaffSessionItems(
@@ -632,6 +750,7 @@ async function importStaffSessionItems(
   mindbodyStaffId: string,
   items: any[],
   sessionTypeLookup: Map<string, string>,
+  report: SaveReport,
 ): Promise<{ imported: number; skipped: number; errors: number }> {
   let imported = 0;
   let skipped = 0;
@@ -670,23 +789,15 @@ async function importStaffSessionItems(
   }
 
   if (batchData.length > 0) {
-    const { error: upsertErr } = await supabase.from("staff_session_types").upsert(batchData, {
-      onConflict: "staff_id,session_type_id",
-    });
-
-    if (upsertErr) {
-      console.error(`[SST] Batch upsert error for staff ${mindbodyStaffId}: ${upsertErr.message}`);
-      errors = batchData.length;
-    } else {
-      imported = batchData.length;
-    }
+    imported = await safeUpsert(supabase, report, "staff_session_types", batchData, "staff_id,session_type_id");
+    errors = batchData.length - imported;
   }
 
   console.log(`[SST] Staff ${mindbodyStaffId} | imported=${imported}, skipped=${skipped}, errors=${errors}`);
   return { imported, skipped, errors };
 }
 
-async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, userToken: string, staffOffset?: number, staffLimit?: number) {
+async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, staffOffset?: number, staffLimit?: number) {
   console.log('[SST] Syncing staff session types via /staff/sessiontypes');
 
   const { data: allStaff } = await supabase
@@ -737,7 +848,7 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, user
     }
 
     staffWithData++;
-    const importResult = await importStaffSessionItems(supabase, staff.id, staff.mindbody_id, result.items, sessionTypeLookup);
+    const importResult = await importStaffSessionItems(supabase, staff.id, staff.mindbody_id, result.items, sessionTypeLookup, report);
     importedRows += importResult.imported;
   }
 
@@ -784,18 +895,20 @@ async function syncStaffServicesOne(
     }
   }
 
-  const importResult = await importStaffSessionItems(supabase, staffRow.id, staffRow.mindbody_id, result.items, sessionTypeLookup);
+  const report: SaveReport = {};
+  const importResult = await importStaffSessionItems(supabase, staffRow.id, staffRow.mindbody_id, result.items, sessionTypeLookup, report);
 
   return {
     staff: `${staffRow.first_name} ${staffRow.last_name} (${staffRow.mindbody_id})`,
     apiItemsReturned: result.items.length,
     ...importResult,
+    saveReport: report,
     rawTopLevelKeys: Object.keys(result.raw),
     firstItem: result.items.length > 0 ? result.items[0] : null,
   };
 }
 
-async function syncPricingOptions(supabase: any, config: MindbodyConfig, userToken: string, pageOffset?: number, pageLimit?: number) {
+async function syncPricingOptions(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, pageOffset?: number, pageLimit?: number) {
   const startOffset = pageOffset ?? 0;
   const maxRecords = pageLimit ?? Infinity;
   console.log(`Syncing pricing options (startOffset=${startOffset}, maxRecords=${maxRecords === Infinity ? 'ALL' : maxRecords})`);
@@ -878,14 +991,8 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
       synced_at: syncedAt,
     }));
 
-    const { error: upsertError } = await supabase.from("pricing_options").upsert(batchData, {
-      onConflict: "mindbody_id",
-    });
-    if (upsertError) {
-      console.error(`[PRICING] Batch upsert error:`, upsertError.message);
-    } else {
-      console.log(`[PRICING] Batch upsert: ${batchData.length} records`);
-    }
+    const pricingSaved = await safeUpsert(supabase, report, "pricing_options", batchData, "mindbody_id");
+    console.log(`[PRICING] Batch upsert: ${pricingSaved}/${batchData.length} records`);
 
     totalSynced += services.length;
     offset += limit;
@@ -900,7 +1007,7 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
   return totalSynced;
 }
 
-async function syncAppointments(supabase: any, config: MindbodyConfig, userToken: string, year?: number, month?: number) {
+async function syncAppointments(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number) {
   const targetYear = year || new Date().getFullYear();
   const hasMonthFilter = month && month > 0;
   const periodLabel = hasMonthFilter ? `${targetYear}-${String(month).padStart(2, '0')}` : String(targetYear);
@@ -923,12 +1030,14 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
   const endDateStr = endDate.toISOString().split('T')[0];
 
   let totalSynced = 0;
+  const runStartedAt = new Date().toISOString();
+  let fetchComplete = true;
 
   const { data: allStaff } = await supabase.from("staff").select("id, mindbody_id");
 
   if (!allStaff || allStaff.length === 0) {
     console.warn('No staff found. Trying direct appointments endpoint...');
-    return await syncAppointmentsDirect(supabase, config, userToken, startDateStr, endDateStr);
+    return await syncAppointmentsDirect(supabase, config, userToken, report, startDateStr, endDateStr);
   }
 
   console.log(`[APPOINTMENTS] Fetching for ${allStaff.length} staff from ${startDateStr} to ${endDateStr}`);
@@ -964,6 +1073,7 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
 
       if (!response.ok) {
         console.error(`[APPOINTMENTS] Failed for staff ${staff.mindbody_id}: ${response.status}`);
+        fetchComplete = false;
         break;
       }
 
@@ -998,16 +1108,13 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
           first_appointment: appt.FirstAppointment || false,
           raw_data: appt,
           synced_at: syncedAt,
+          last_seen_at: syncedAt,
+          stale: false,
         };
       });
 
-      const { error: upsertError } = await supabase.from("appointments").upsert(appointmentsData, {
-        onConflict: "mindbody_id",
-      });
-
-      if (upsertError) {
-        console.error(`[APPOINTMENTS] Batch upsert error:`, upsertError.message);
-      }
+      await ensureSessionTypesExist(supabase, report, appointmentsData.map((a: any) => a.session_type_id));
+      await safeUpsert(supabase, report, "appointments", appointmentsData, "mindbody_id");
 
       staffTotal += appointments.length;
       totalSynced += appointments.length;
@@ -1021,11 +1128,117 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
     }
   }
 
+  if (fetchComplete && (report.appointments?.errors.length ?? 0) === 0) {
+    await markStaleAppointments(supabase, startDateStr, endDateStr, runStartedAt);
+  } else {
+    console.warn('[APPOINTMENTS] Incomplete fetch, stale marking skipped');
+  }
+
   console.log(`=== APPOINTMENTS SYNC COMPLETE: ${totalSynced} records for year ${targetYear} ===`);
   return totalSynced;
 }
 
-async function syncAppointmentsDirect(supabase: any, config: MindbodyConfig, userToken: string, startDateStr: string, endDateStr: string) {
+// Appointments in a fully re-read range that Mindbody did not return are flagged, never deleted.
+async function markStaleAppointments(supabase: any, startDateStr: string, endDateStr: string, runStartedAt: string) {
+  const endExclusive = new Date(`${endDateStr}T00:00:00Z`);
+  endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+  const { count, error } = await supabase
+    .from("appointments")
+    .update({ stale: true }, { count: "exact" })
+    .gte("start_datetime", startDateStr)
+    .lt("start_datetime", endExclusive.toISOString().split('T')[0])
+    .eq("stale", false)
+    .or(`last_seen_at.is.null,last_seen_at.lt.${runStartedAt}`);
+  if (error) console.error(`[APPOINTMENTS] Stale marking failed: ${error.message}`);
+  else console.log(`[APPOINTMENTS] Marked ${count ?? 0} stale between ${startDateStr} and ${endDateStr}`);
+}
+
+// Working time per staff; default window is previous, current and next month.
+// Mindbody reuses one Id for every occurrence of a recurring block, so the key includes the start.
+async function syncStaffSchedule(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number) {
+  const now = new Date();
+  const start = year && month ? new Date(Date.UTC(year, month - 1, 1)) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  const end = year && month ? new Date(Date.UTC(year, month, 0)) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 2, 0));
+  const startStr = start.toISOString().split('T')[0];
+  const endStr = end.toISOString().split('T')[0];
+  console.log(`=== STAFF SCHEDULE SYNC ${startStr}..${endStr} ===`);
+
+  const { data: allStaff, error: staffError } = await supabase.from("staff").select("mindbody_id").order("mindbody_id");
+  if (staffError) throw new Error(`Staff list failed: ${staffError.message}`);
+  const staffIds = (allStaff || []).map((s: any) => String(s.mindbody_id)).filter((id: string) => Number(id) > 0);
+
+  const runStartedAt = new Date().toISOString();
+  let fetchComplete = true;
+  let total = 0;
+  const BATCH = 10;
+  const PAGE = 100;
+
+  for (let i = 0; i < staffIds.length; i += BATCH) {
+    const batch = staffIds.slice(i, i + BATCH);
+    let offset = 0;
+    while (true) {
+      const ids = batch.map((id: string) => `request.staffIds=${id}`).join('&');
+      const url = `${MINDBODY_BASE_URL}/appointment/scheduleitems?request.startDate=${startStr}T00:00:00&request.endDate=${endStr}T23:59:59&${ids}&request.limit=${PAGE}&request.offset=${offset}`;
+      const response = await fetch(url, { headers: getUserHeaders(config, userToken) });
+      if (!response.ok) {
+        console.error(`[SCHEDULE] Failed for staff ${batch.join(',')}: ${response.status}`);
+        fetchComplete = false;
+        break;
+      }
+      const data = await response.json();
+      const members = data.StaffMembers || [];
+      const syncedAt = new Date().toISOString();
+      const rows: any[] = [];
+      for (const m of members) {
+        const staffId = String(m.Id);
+        for (const a of m.Availabilities || []) {
+          const { Staff: _s, ...raw } = a;
+          rows.push({
+            id: `a:${a.Id}:${a.StartDateTime}`, kind: 'available', staff_id: staffId,
+            location_id: a.Location?.Id != null ? String(a.Location.Id) : null,
+            start_datetime: a.StartDateTime, end_datetime: a.EndDateTime,
+            description: null, raw_data: raw, synced_at: syncedAt, last_seen_at: syncedAt, stale: false,
+          });
+        }
+        for (const u of m.Unavailabilities || []) {
+          const { Staff: _s, ...raw } = u;
+          rows.push({
+            id: `u:${u.Id}:${u.StartDateTime}`, kind: 'unavailable', staff_id: staffId, location_id: null,
+            start_datetime: u.StartDateTime, end_datetime: u.EndDateTime,
+            description: u.Description ?? null, raw_data: raw, synced_at: syncedAt, last_seen_at: syncedAt, stale: false,
+          });
+        }
+      }
+      for (let r = 0; r < rows.length; r += 500) {
+        total += await safeUpsert(supabase, report, "staff_schedule_items", rows.slice(r, r + 500), "id");
+      }
+      const totalResults = data.PaginationResponse?.TotalResults ?? members.length;
+      offset += PAGE;
+      if (members.length < PAGE || offset >= totalResults) break;
+    }
+  }
+
+  if (fetchComplete && (report.staff_schedule_items?.errors.length ?? 0) === 0) {
+    const endExclusive = new Date(end);
+    endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+    const { count, error } = await supabase
+      .from("staff_schedule_items")
+      .update({ stale: true }, { count: "exact" })
+      .gte("start_datetime", startStr)
+      .lt("start_datetime", endExclusive.toISOString().split('T')[0])
+      .eq("stale", false)
+      .lt("last_seen_at", runStartedAt);
+    if (error) console.error(`[SCHEDULE] Stale marking failed: ${error.message}`);
+    else console.log(`[SCHEDULE] Marked ${count ?? 0} stale`);
+  } else if (!fetchComplete) {
+    throw new Error('Mindbody did not return schedule for some staff');
+  }
+
+  console.log(`=== STAFF SCHEDULE SYNC COMPLETE: ${total} blocks for ${startStr}..${endStr} ===`);
+  return total;
+}
+
+async function syncAppointmentsDirect(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, startDateStr: string, endDateStr: string) {
   console.log('Trying direct appointments endpoint...');
 
   let offset = 0;
@@ -1090,9 +1303,8 @@ async function syncAppointmentsDirect(supabase: any, config: MindbodyConfig, use
         synced_at: new Date().toISOString(),
       };
 
-      await supabase.from("appointments").upsert(apptData, {
-        onConflict: "mindbody_id",
-      });
+      await ensureSessionTypesExist(supabase, report, [apptData.session_type_id]);
+      await safeUpsert(supabase, report, "appointments", [apptData], "mindbody_id");
     }
 
     totalSynced += appointments.length;
@@ -1104,7 +1316,7 @@ async function syncAppointmentsDirect(supabase: any, config: MindbodyConfig, use
   return totalSynced;
 }
 
-async function syncClients(supabase: any, config: MindbodyConfig, userToken?: string) {
+async function syncClients(supabase: any, config: MindbodyConfig, report: SaveReport, userToken?: string) {
   console.log('=== CLIENTS SYNC START ===');
   console.log('Strategy: Full pagination with batch upsert');
 
@@ -1189,13 +1401,7 @@ async function syncClients(supabase: any, config: MindbodyConfig, userToken?: st
     }));
 
     const upsertStart = Date.now();
-    const { error: upsertError } = await supabase.from("clients").upsert(clientsData, {
-      onConflict: "mindbody_id",
-    });
-
-    if (upsertError) {
-      console.error(`[CLIENTS] Batch upsert error:`, upsertError);
-    }
+    await safeUpsert(supabase, report, "clients", clientsData, "mindbody_id");
 
     const upsertMs = Date.now() - upsertStart;
     console.log(`[CLIENTS] Batch upsert: ${returnedCount} records in ${upsertMs}ms`);
@@ -1214,7 +1420,7 @@ async function syncClients(supabase: any, config: MindbodyConfig, userToken?: st
   return totalSynced;
 }
 
-async function syncSales(supabase: any, config: MindbodyConfig, userToken: string, year?: number, month?: number, monthFrom?: number, monthTo?: number) {
+async function syncSales(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number, monthFrom?: number, monthTo?: number) {
   const targetYear = year || new Date().getFullYear();
   const hasMonthFilter = month && month > 0;
   const hasRangeFilter = monthFrom && monthTo;
@@ -1391,25 +1597,9 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
 
     const upsertStart = Date.now();
 
-    const { error: salesError } = await supabase.from("sales").upsert(salesData, { onConflict: "mindbody_id" });
-    if (salesError) console.error(`[SALES] Batch upsert error:`, salesError);
-
-    if (paymentsData.length > 0) {
-      const { error: paymentsError } = await supabase.from("payments").upsert(paymentsData, { onConflict: "mindbody_id" });
-      if (paymentsError) console.error(`[PAYMENTS] Batch upsert error:`, paymentsError);
-    }
-
-    if (saleItemsData.length > 0) {
-      for (const item of saleItemsData) {
-        const { error: itemError } = await supabase.from("sale_items").upsert(item, {
-          onConflict: "sale_detail_id",
-          ignoreDuplicates: false
-        });
-        if (itemError) {
-          console.error(`[SALE_ITEMS] Upsert error for sale_detail_id ${item.sale_detail_id}:`, itemError.message);
-        }
-      }
-    }
+    await safeUpsert(supabase, report, "sales", salesData, "mindbody_id");
+    await safeUpsert(supabase, report, "payments", paymentsData, "mindbody_id");
+    await safeUpsert(supabase, report, "sale_items", saleItemsData, "sale_detail_id");
 
     const upsertMs = Date.now() - upsertStart;
     console.log(`[SALES] Batch upsert: ${salesData.length} sales, ${paymentsData.length} payments, ${saleItemsData.length} items in ${upsertMs}ms`);
@@ -1428,7 +1618,7 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
   return totalSynced;
 }
 
-async function syncClientServices(supabase: any, config: MindbodyConfig, userToken: string, year?: number, month?: number) {
+async function syncClientServices(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number) {
   const hasMonthFilter = year && month;
   const periodLabel = hasMonthFilter ? `${year}-${String(month).padStart(2, '0')}` : (year ? String(year) : 'ALL');
   console.log(`=== CLIENT SERVICES SYNC START (OPTIMIZED) - Period: ${periodLabel} ===`);
@@ -1492,18 +1682,7 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
   const uniqueClientIds = allClients.map((c: any) => c.mindbody_id);
   console.log(`[CLIENT_SERVICES] Will sync client_services for ${uniqueClientIds.length} clients (Period: ${periodLabel})`);
 
-  const { data: pricingOptions } = await supabase
-    .from("pricing_options")
-    .select("id, product_id, mindbody_id");
-
-  const pricingByProductId = new Map<string, string>();
-  const pricingByMindbodyId = new Map<string, string>();
-  if (pricingOptions) {
-    for (const po of pricingOptions) {
-      if (po.product_id) pricingByProductId.set(po.product_id, po.id);
-      if (po.mindbody_id) pricingByMindbodyId.set(po.mindbody_id, po.id);
-    }
-  }
+  const { byProductId: pricingByProductId, byMindbodyId: pricingByMindbodyId } = await loadPricingLinkMaps(supabase);
   console.log(`[CLIENT_SERVICES] Loaded ${pricingByProductId.size} pricing options for product_id linking (${pricingByMindbodyId.size} by mindbody_id fallback)`);
 
   let totalSynced = 0;
@@ -1592,17 +1771,8 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
       }
     }
 
-    if (allServicesData.length > 0) {
-      const { error: upsertError } = await supabase.from("client_services").upsert(allServicesData, {
-        onConflict: "mindbody_id",
-      });
-
-      if (upsertError) {
-        console.error(`[CLIENT_SERVICES] Batch upsert error:`, upsertError.message);
-      } else {
-        totalSynced += allServicesData.length;
-      }
-    }
+    await keepExistingPricingLinks(supabase, allServicesData);
+    totalSynced += await safeUpsert(supabase, report, "client_services", allServicesData, "mindbody_id");
 
     if (processedClients % 100 === 0 || i + BATCH_SIZE >= uniqueClientIds.length) {
       const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -1633,18 +1803,7 @@ async function backfillOrphanedClientServices(
 }> {
   console.log(`=== BACKFILL ORPHANED CLIENT_SERVICES: ${clientIds.length} clients, batchSize=${batchSize} ===`);
 
-  const { data: pricingOptions } = await supabase
-    .from("pricing_options")
-    .select("id, product_id, mindbody_id");
-
-  const pricingByProductId = new Map<string, string>();
-  const pricingByMindbodyId = new Map<string, string>();
-  if (pricingOptions) {
-    for (const po of pricingOptions) {
-      if (po.product_id) pricingByProductId.set(po.product_id, po.id);
-      if (po.mindbody_id) pricingByMindbodyId.set(po.mindbody_id, po.id);
-    }
-  }
+  const { byProductId: pricingByProductId, byMindbodyId: pricingByMindbodyId } = await loadPricingLinkMaps(supabase);
 
   let processed = 0;
   let servicesUpserted = 0;
@@ -1749,6 +1908,7 @@ async function backfillOrphanedClientServices(
     }
 
     if (allServicesData.length > 0) {
+      await keepExistingPricingLinks(supabase, allServicesData);
       const { error: upsertError } = await supabase.from("client_services").upsert(allServicesData, {
         onConflict: "mindbody_id",
       });
@@ -1767,7 +1927,7 @@ async function backfillOrphanedClientServices(
 }
 
 
-async function syncTransactions(supabase: any, config: MindbodyConfig, userToken: string, year?: number, month?: number) {
+async function syncTransactions(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number) {
   const targetYear = year || new Date().getFullYear();
   const hasMonthFilter = month && month > 0;
   const periodLabel = hasMonthFilter ? `${targetYear}-${String(month).padStart(2, '0')}` : String(targetYear);
@@ -1866,13 +2026,7 @@ async function syncTransactions(supabase: any, config: MindbodyConfig, userToken
 
     if (transactionsData.length > 0) {
       const upsertStart = Date.now();
-      const { error: upsertError } = await supabase.from("transactions").upsert(transactionsData, {
-        onConflict: "mindbody_id",
-      });
-
-      if (upsertError) {
-        console.error(`[TRANSACTIONS] Batch upsert error:`, upsertError);
-      }
+      await safeUpsert(supabase, report, "transactions", transactionsData, "mindbody_id");
 
       const upsertMs = Date.now() - upsertStart;
       console.log(`[TRANSACTIONS] Batch upsert: ${transactionsData.length} records in ${upsertMs}ms`);
@@ -2443,6 +2597,137 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    if (syncType === "payroll_diag_source") {
+      const url = `${MINDBODY_BASE_URL}/payroll/scheduledserviceearnings?StartDateTime=2026-08-01T00:00:00&EndDateTime=2026-08-14T23:59:59&Limit=200&Offset=0`;
+      const startTime = Date.now();
+      const response = await fetch(url, { headers: getSourceHeaders(config) });
+      const durationMs = Date.now() - startTime;
+      const text = await response.text();
+      await logApiCall(supabase, url, "GET", { mode: "source_headers_only" }, response.status, text.substring(0, 2000), null, durationMs);
+      return new Response(
+        JSON.stringify({ httpStatus: response.status, durationMs, body: text.substring(0, 2000) }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (syncType === "payroll_diag") {
+      const userToken = await getUserToken(supabase, config);
+      if (!userToken) {
+        return new Response(
+          JSON.stringify({ error: "Could not obtain user token" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const diagYear = year ? parseInt(year) : 2026;
+      const diagMonth = month ? parseInt(month) : 8;
+      const firstDay = new Date(diagYear, diagMonth - 1, 1);
+      const lastDay = new Date(diagYear, diagMonth, 0);
+
+      const chunks: { start: string; end: string }[] = [];
+      let chunkStart = new Date(firstDay);
+      while (chunkStart <= lastDay) {
+        const chunkEnd = new Date(chunkStart);
+        chunkEnd.setDate(chunkEnd.getDate() + 13);
+        if (chunkEnd > lastDay) chunkEnd.setTime(lastDay.getTime());
+        chunks.push({
+          start: chunkStart.toISOString().split('T')[0],
+          end: chunkEnd.toISOString().split('T')[0],
+        });
+        chunkStart = new Date(chunkEnd);
+        chunkStart.setDate(chunkStart.getDate() + 1);
+      }
+
+      console.log(`[PAYROLL-DIAG] Fetching ${chunks.length} chunks for ${diagYear}-${String(diagMonth).padStart(2,'0')}`);
+
+      const allRecords: any[] = [];
+      const chunkDetails: any[] = [];
+
+      for (const chunk of chunks) {
+        const url = `${MINDBODY_BASE_URL}/payroll/scheduledserviceearnings?StartDateTime=${chunk.start}T00:00:00&EndDateTime=${chunk.end}T23:59:59&Limit=200&Offset=0`;
+        console.log(`[PAYROLL-DIAG] ${url}`);
+        const startTime = Date.now();
+        const response = await fetch(url, { headers: getUserHeaders(config, userToken) });
+        const durationMs = Date.now() - startTime;
+        const text = await response.text();
+        let data: any;
+        try { data = JSON.parse(text); } catch { data = { parseError: true, raw: text.substring(0, 500) }; }
+
+        await logApiCall(supabase, url, "GET", { chunk }, response.status, data, null, durationMs);
+
+        const pagination = data.PaginationResponse;
+        const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
+        const items = arrayKey ? data[arrayKey] : [];
+
+        let detail: any = { chunk, httpStatus: response.status, arrayKey, count: items.length, pagination, durationMs };
+
+        if (pagination && pagination.TotalResults > items.length) {
+          let offset = items.length;
+          while (offset < pagination.TotalResults) {
+            const pageUrl = `${MINDBODY_BASE_URL}/payroll/scheduledserviceearnings?StartDateTime=${chunk.start}T00:00:00&EndDateTime=${chunk.end}T23:59:59&Limit=200&Offset=${offset}`;
+            const pr = await fetch(pageUrl, { headers: getUserHeaders(config, userToken) });
+            const pt = await pr.text();
+            let pd: any;
+            try { pd = JSON.parse(pt); } catch { pd = {}; }
+            const pk = Object.keys(pd).find(k => Array.isArray(pd[k]));
+            const pi = pk ? pd[pk] : [];
+            items.push(...pi);
+            offset += pi.length;
+            if (pi.length === 0) break;
+          }
+          detail.countAfterPagination = items.length;
+        }
+
+        chunkDetails.push(detail);
+        allRecords.push(...items);
+      }
+
+      const firstRecord = allRecords.length > 0 ? allRecords[0] : null;
+      const firstRecordKeys = firstRecord ? Object.keys(firstRecord) : [];
+
+      const byStaff: Record<string, { name: string; total: number; count: number }> = {};
+      for (const r of allRecords) {
+        const staffName = r.Staff?.Name || r.StaffName || `Staff ${r.StaffId}`;
+        const staffId = String(r.Staff?.Id || r.StaffId || 'unknown');
+        const amount = Number(r.EarningAmount || r.Amount || r.Pay || 0);
+        if (!byStaff[staffId]) byStaff[staffId] = { name: staffName, total: 0, count: 0 };
+        byStaff[staffId].total += amount;
+        byStaff[staffId].count++;
+      }
+
+      const { data: locData } = await supabase
+        .from("appointments")
+        .select("id, location_id, staff_id")
+        .gte("start_date_time", `${diagYear}-${String(diagMonth).padStart(2,'0')}-01`)
+        .lt("start_date_time", diagMonth === 12 ? `${diagYear + 1}-01-01` : `${diagYear}-${String(diagMonth + 1).padStart(2,'0')}-01`);
+
+      const apptMap = new Map<string, any>();
+      (locData || []).forEach((a: any) => apptMap.set(a.id, a));
+
+      let matched = 0;
+      for (const r of allRecords) {
+        const apptId = String(r.AppointmentId || r.ScheduledServiceId || '');
+        if (apptMap.has(apptId)) matched++;
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          diagnostic: "payroll",
+          period: `${diagYear}-${String(diagMonth).padStart(2,'0')}`,
+          chunks: chunkDetails,
+          totalRecords: allRecords.length,
+          firstRecordKeys,
+          firstRecord,
+          secondRecord: allRecords.length > 1 ? allRecords[1] : null,
+          byStaff,
+          appointmentsInDb: locData?.length || 0,
+          matchedToAppointments: matched,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     if (syncType === "staff_services_one") {
       if (!requestStaffId) {
         return new Response(
@@ -2544,6 +2829,9 @@ Deno.serve(async (req: Request) => {
       console.log(`Sync Type: ${syncType}`);
 
       const results: Record<string, number> = {};
+      const saveReport: SaveReport = {};
+      const stepFailures: string[] = [];
+      const fail = (step: string, e: unknown) => stepFailures.push(`${step}: ${(e as Error)?.message ?? String(e)}`);
       const isQuickMode = syncType === "quick";
       const shouldSyncAll = syncType === "all";
 
@@ -2556,6 +2844,7 @@ Deno.serve(async (req: Request) => {
           console.log(`✅ Sites synced: ${results.sites}`);
         } catch (e) {
           console.error('❌ Sites sync failed:', e);
+          fail('sites', e);
           results.sites = 0;
         }
       }
@@ -2567,6 +2856,7 @@ Deno.serve(async (req: Request) => {
           console.log(`✅ Locations synced: ${results.locations}`);
         } catch (e) {
           console.error('❌ Locations sync failed:', e);
+          fail('locations', e);
           results.locations = 0;
         }
       }
@@ -2578,6 +2868,7 @@ Deno.serve(async (req: Request) => {
           console.log(`✅ Staff synced: ${results.staff}`);
         } catch (e) {
           console.error('❌ Staff sync failed:', e);
+          fail('staff', e);
           results.staff = 0;
         }
       }
@@ -2589,6 +2880,7 @@ Deno.serve(async (req: Request) => {
           console.log(`✅ Service categories synced: ${results.service_categories}`);
         } catch (e) {
           console.error('❌ Service categories sync failed:', e);
+          fail('service_categories', e);
           results.service_categories = 0;
         }
       }
@@ -2600,6 +2892,7 @@ Deno.serve(async (req: Request) => {
           console.log(`✅ Session types synced: ${results.session_types}`);
         } catch (e) {
           console.error('❌ Session types sync failed:', e);
+          fail('session_types', e);
           results.session_types = 0;
         }
       }
@@ -2612,16 +2905,21 @@ Deno.serve(async (req: Request) => {
       } catch (e) {
         console.error('❌ Failed to get user token:', e);
       }
+      const publicOnlyTypes = ["sites", "locations", "staff", "programs", "services"];
+      if (!userToken && !publicOnlyTypes.includes(syncType)) {
+        stepFailures.push("Mindbody user token unavailable: protected steps were skipped");
+      }
 
       if (userToken && (shouldSyncAll || syncType === "staff_services" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Staff-Session Type Relationships ---');
-          const sstStats = await syncStaffSessionTypes(supabase, config, userToken, sstStaffOffset, sstStaffLimit);
+          const sstStats = await syncStaffSessionTypes(supabase, config, userToken, saveReport, sstStaffOffset, sstStaffLimit);
           results.staff_session_types = sstStats.importedRows;
           results.staff_session_types_stats = sstStats as any;
           console.log(`Staff-Session relationships synced: ${JSON.stringify(sstStats)}`);
         } catch (e) {
           console.error('Staff-Session relationships sync failed:', e);
+          fail('staff_session_types', e);
           results.staff_session_types = 0;
         }
       }
@@ -2629,10 +2927,11 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "pricing_options" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Pricing Options ---');
-          results.pricing_options = await syncPricingOptions(supabase, config, userToken, pricingPageOffset, pricingPageLimit);
+          results.pricing_options = await syncPricingOptions(supabase, config, userToken, saveReport, pricingPageOffset, pricingPageLimit);
           console.log(`✅ Pricing options synced: ${results.pricing_options}`);
         } catch (e) {
           console.error('❌ Pricing options sync failed:', e);
+          fail('pricing_options', e);
           results.pricing_options = 0;
         }
       }
@@ -2640,10 +2939,11 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "clients" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Clients ---');
-          results.clients = await syncClients(supabase, config, userToken);
+          results.clients = await syncClients(supabase, config, saveReport, userToken);
           console.log(`✅ Clients synced: ${results.clients}`);
         } catch (e) {
           console.error('❌ Clients sync failed:', e);
+          fail('clients', e);
           results.clients = 0;
         }
       }
@@ -2651,21 +2951,33 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "appointments" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Appointments ---');
-          results.appointments = await syncAppointments(supabase, config, userToken, targetYear, targetMonth);
+          results.appointments = await syncAppointments(supabase, config, userToken, saveReport, targetYear, targetMonth);
           console.log(`✅ Appointments synced: ${results.appointments}`);
         } catch (e) {
           console.error('❌ Appointments sync failed:', e);
+          fail('appointments', e);
           results.appointments = 0;
+        }
+      }
+
+      if (userToken && (shouldSyncAll || syncType === "staff_schedule")) {
+        try {
+          results.staff_schedule = await syncStaffSchedule(supabase, config, userToken, saveReport, targetYear, targetMonth);
+        } catch (e) {
+          console.error('❌ Staff schedule sync failed:', e);
+          fail('staff_schedule', e);
+          results.staff_schedule = 0;
         }
       }
 
       if (userToken && (shouldSyncAll || syncType === "sales" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Sales ---');
-          results.sales = await syncSales(supabase, config, userToken, targetYear, targetMonth, targetMonthFrom, targetMonthTo);
+          results.sales = await syncSales(supabase, config, userToken, saveReport, targetYear, targetMonth, targetMonthFrom, targetMonthTo);
           console.log(`✅ Sales synced: ${results.sales}`);
         } catch (e) {
           console.error('❌ Sales sync failed:', e);
+          fail('sales', e);
           results.sales = 0;
         }
       }
@@ -2673,10 +2985,11 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "client_services" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Client Services (Ownership/Entitlements) ---');
-          results.client_services = await syncClientServices(supabase, config, userToken, targetYear, targetMonth);
+          results.client_services = await syncClientServices(supabase, config, userToken, saveReport, targetYear, targetMonth);
           console.log(`✅ Client services synced: ${results.client_services}`);
         } catch (e) {
           console.error('❌ Client services sync failed:', e);
+          fail('client_services', e);
           results.client_services = 0;
         }
       }
@@ -2685,10 +2998,11 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "transactions")) {
         try {
           console.log('\n--- Syncing Transactions ---');
-          results.transactions = await syncTransactions(supabase, config, userToken, targetYear, targetMonth);
+          results.transactions = await syncTransactions(supabase, config, userToken, saveReport, targetYear, targetMonth);
           console.log(`✅ Transactions synced: ${results.transactions}`);
         } catch (e) {
           console.error('❌ Transactions sync failed:', e);
+          fail('transactions', e);
           results.transactions = 0;
         }
       }
@@ -2700,6 +3014,7 @@ Deno.serve(async (req: Request) => {
           console.log(`✅ Client visits synced: ${results.client_visits}`);
         } catch (e) {
           console.error('❌ Client visits sync failed:', e);
+          fail('client_visits', e);
           results.client_visits = 0;
         }
       }
@@ -2711,6 +3026,7 @@ Deno.serve(async (req: Request) => {
           console.log(`✅ Packages synced: ${results.packages}`);
         } catch (e) {
           console.error('❌ Packages sync failed:', e);
+          fail('packages', e);
           results.packages = 0;
         }
       }
@@ -2722,6 +3038,7 @@ Deno.serve(async (req: Request) => {
           console.log(`✅ Retail products synced: ${results.retail_products}`);
         } catch (e) {
           console.error('❌ Retail products sync failed:', e);
+          fail('retail_products', e);
           results.retail_products = 0;
         }
       }
@@ -2733,21 +3050,39 @@ Deno.serve(async (req: Request) => {
           console.log(`✅ Pricing links built: ${results.pricing_links}`);
         } catch (e) {
           console.error('❌ Pricing links building failed:', e);
+          fail('pricing_links', e);
           results.pricing_links = 0;
         }
       }
 
       const totalRecords = Object.values(results).reduce((sum, count) => sum + (typeof count === 'number' ? count : 0), 0);
 
-      console.log('\n=== Sync Completed Successfully ===');
+      const tracked = Object.values(saveReport);
+      const totalReceived = tracked.reduce((s, t) => s + t.received, 0);
+      const totalSaved = tracked.reduce((s, t) => s + t.saved, 0);
+      const notSaved = totalReceived - totalSaved;
+      const hasProblems = notSaved > 0 || stepFailures.length > 0;
+      const status = !hasProblems ? "completed" : (totalSaved > 0 ? "partial" : "error");
+
+      const problemLines = [
+        ...stepFailures,
+        ...Object.entries(saveReport)
+          .filter(([, t]) => t.saved < t.received)
+          .map(([table, t]) => `${table}: received ${t.received}, saved ${t.saved}. ${t.errors.slice(0, 3).join(" | ")}`),
+      ];
+
+      console.log(`\n=== Sync finished: ${status} ===`);
       console.log('Results:', JSON.stringify(results, null, 2));
-      console.log(`Total records synced: ${totalRecords}`);
+      console.log('Save report:', JSON.stringify(saveReport, null, 2));
 
       return {
-        success: true,
-        message: "Sync completed successfully",
+        success: !hasProblems,
+        status,
+        message: hasProblems ? problemLines.join("\n") : "Sync completed successfully",
         results,
-        totalRecords,
+        saveReport,
+        stepFailures,
+        totalRecords: totalRecords - notSaved,
       };
     }
 
@@ -2762,10 +3097,11 @@ Deno.serve(async (req: Request) => {
         await supabase
           .from("sync_logs")
           .update({
-            status: "completed",
+            status: syncResult.status,
             completed_at: new Date().toISOString(),
             records_synced: syncResult.totalRecords,
-            raw_response: syncResult.results,
+            raw_response: { ...syncResult.results, save_report: syncResult.saveReport, step_failures: syncResult.stepFailures },
+            error_message: syncResult.success ? null : syncResult.message.slice(0, 2000),
           })
           .eq("id", logId);
       }

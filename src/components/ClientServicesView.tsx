@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { Filter, ChevronLeft, ChevronRight, Download, X, FileJson, Wallet, Calendar, User, Package, Clock } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
+import { PagePurpose } from './PageHeader';
 
 interface ClientService {
   id: string;
@@ -167,7 +168,7 @@ export function ClientServicesView() {
               <Wallet className="w-7 h-7 text-pink-600" />
               Client Services
             </h2>
-            <p className="text-slate-600 mt-1">Service packages and entitlements owned by clients</p>
+            <PagePurpose section="client-services" />
           </div>
           <div className="flex items-center gap-3">
             <span className="text-sm text-slate-500">{totalCount.toLocaleString()} total records</span>

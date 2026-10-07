@@ -1,12 +1,16 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAllPages';
+import { fetchByIds, chunkIds } from '../lib/fetchByIds';
 import { useReportFilters } from '../lib/reportFiltersContext';
 import {
   Calendar, Filter, Building2, Search, ChevronLeft, ChevronRight,
   Download, ArrowUpCircle, ArrowDownCircle, X, Loader2,
 } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
+import { formatApptDate } from '../utils/formatDateTime';
 import { getFilterPresetDates as salesGetFilterPresetDates, getMonthsForTimeline as salesGetMonthsForTimeline } from '../utils/salesFilters';
+import { PagePurpose } from './PageHeader';
 
 type FilterPreset = 'today' | 'this_week' | 'this_month' | 'last_month' | 'this_year' | 'custom';
 
@@ -51,12 +55,17 @@ export function ClientActivityReport() {
     : getFilterPresetDates(f.filterPreset as FilterPreset);
 
   const loadReferenceData = useCallback(async () => {
-    const [locRes, cliRes] = await Promise.all([
-      supabase.from('locations').select('id, name').order('name'),
-      supabase.from('clients').select('id, first_name, last_name').order('last_name').limit(10000),
-    ]);
-    setLocations(locRes.data?.map(l => ({ id: l.id, name: l.name })) || []);
-    setClients(cliRes.data?.map(c => ({ id: c.id, name: `${c.first_name} ${c.last_name}` })) || []);
+    try {
+      const [locRes, cliRows] = await Promise.all([
+        supabase.from('locations').select('id, name').order('name'),
+        fetchAllPages<{ id: string; first_name: string | null; last_name: string | null }>((from, to) => supabase
+          .from('clients').select('id, first_name, last_name').order('last_name').order('id').range(from, to)),
+      ]);
+      setLocations(locRes.data?.map(l => ({ id: l.id, name: l.name })) || []);
+      setClients(cliRows.map(c => ({ id: c.id, name: `${c.first_name} ${c.last_name}` })));
+    } catch (error) {
+      console.error('Error loading reference data:', error);
+    }
   }, []);
 
   useEffect(() => { loadReferenceData(); }, [loadReferenceData]);
@@ -68,27 +77,28 @@ export function ClientActivityReport() {
       const endISO = `${dateRange.end}T23:59:59`;
       const allRows: ActivityRow[] = [];
 
-      let salesQuery = supabase
-        .from('sales')
-        .select('id, sale_datetime, client_id, location_id, sales_rep_id')
-        .gte('sale_datetime', startISO)
-        .lte('sale_datetime', endISO);
+      const salesData = await fetchAllPages<any>((from, to) => {
+        let salesQuery = supabase
+          .from('sales')
+          .select('id, sale_datetime, client_id, location_id, sales_rep_id')
+          .gte('sale_datetime', startISO)
+          .lte('sale_datetime', endISO);
 
-      if (f.selectedLocation !== 'all') {
-        salesQuery = salesQuery.eq('location_id', f.selectedLocation);
-      }
-      if (f.selectedClient !== 'all') {
-        salesQuery = salesQuery.eq('client_id', f.selectedClient);
-      }
-
-      const { data: salesData } = await salesQuery;
+        if (f.selectedLocation !== 'all') {
+          salesQuery = salesQuery.eq('location_id', f.selectedLocation);
+        }
+        if (f.selectedClient !== 'all') {
+          salesQuery = salesQuery.eq('client_id', f.selectedClient);
+        }
+        return salesQuery.order('id').range(from, to);
+      });
       const salesMap: Record<string, any> = {};
       const saleIds: string[] = [];
       const clientIdsNeeded = new Set<string>();
       const staffIdsNeeded = new Set<string>();
       const locationIdsNeeded = new Set<string>();
 
-      for (const s of (salesData || []) as any[]) {
+      for (const s of salesData) {
         salesMap[s.id] = s;
         saleIds.push(s.id);
         if (s.client_id) clientIdsNeeded.add(s.client_id);
@@ -96,55 +106,41 @@ export function ClientActivityReport() {
         if (s.location_id) locationIdsNeeded.add(s.location_id);
       }
 
-      let saleItemsList: any[] = [];
-      if (saleIds.length > 0) {
-        for (let i = 0; i < saleIds.length; i += 200) {
-          const chunk = saleIds.slice(i, i + 200);
-          const { data: items } = await supabase
-            .from('sale_items')
-            .select('id, sale_id, item_name, amount, total_amount, item_id, is_service')
-            .in('sale_id', chunk);
-          saleItemsList.push(...(items || []));
-        }
-      }
+      const saleItemsList = await fetchByIds<any>('sale_items', 'sale_id', saleIds, 'id, sale_id, item_name, amount, total_amount, item_id, is_service');
 
       const itemIds = [...new Set(saleItemsList.map(si => si.item_id).filter(Boolean))];
       const poMap: Record<string, { name: string; price: number; session_count: number }> = {};
       if (itemIds.length > 0) {
-        for (let i = 0; i < itemIds.length; i += 200) {
-          const { data: pos } = await supabase
-            .from('pricing_options')
-            .select('product_id, name, price, session_count')
-            .in('product_id', itemIds.slice(i, i + 200));
-          (pos || []).forEach((po: any) => {
-            poMap[po.product_id] = { name: po.name, price: Number(po.price) || 0, session_count: po.session_count || 1 };
-          });
+        const pos = await fetchByIds<any>('pricing_options', 'product_id', itemIds, 'product_id, name, price, session_count');
+        pos.forEach((po: any) => {
+          poMap[po.product_id] = { name: po.name, price: Number(po.price) || 0, session_count: po.session_count || 1 };
+        });
+      }
+
+      const appointments = await fetchAllPages<any>((from, to) => {
+        let apptQuery = supabase
+          .from('appointments')
+          .select(`
+            id, start_datetime, duration_minutes, client_service_id, session_type_id,
+            client_id, staff_id, location_id, status,
+            client:clients(first_name, last_name),
+            staff:staff(first_name, last_name),
+            location:locations(name),
+            session_type:session_types(name, default_duration_minutes)
+          `)
+          .gte('start_datetime', startISO)
+          .lte('start_datetime', endISO);
+
+        if (f.selectedLocation !== 'all') {
+          apptQuery = apptQuery.eq('location_id', f.selectedLocation);
         }
-      }
+        if (f.selectedClient !== 'all') {
+          apptQuery = apptQuery.eq('client_id', f.selectedClient);
+        }
+        return apptQuery.order('id').range(from, to);
+      });
 
-      let apptQuery = supabase
-        .from('appointments')
-        .select(`
-          id, start_datetime, duration_minutes, client_service_id, session_type_id,
-          client_id, staff_id, location_id, status,
-          client:clients(first_name, last_name),
-          staff:staff(first_name, last_name),
-          location:locations(name),
-          session_type:session_types(name, default_duration_minutes)
-        `)
-        .gte('start_datetime', startISO)
-        .lte('start_datetime', endISO);
-
-      if (f.selectedLocation !== 'all') {
-        apptQuery = apptQuery.eq('location_id', f.selectedLocation);
-      }
-      if (f.selectedClient !== 'all') {
-        apptQuery = apptQuery.eq('client_id', f.selectedClient);
-      }
-
-      const { data: appointments } = await apptQuery;
-
-      for (const a of (appointments || []) as any[]) {
+      for (const a of appointments) {
         if (a.client_id) clientIdsNeeded.add(a.client_id);
         if (a.staff_id) staffIdsNeeded.add(a.staff_id);
         if (a.location_id) locationIdsNeeded.add(a.location_id);
@@ -153,25 +149,15 @@ export function ClientActivityReport() {
       const clientMap: Record<string, string> = {};
       const clientArr = [...clientIdsNeeded];
       if (clientArr.length > 0) {
-        for (let i = 0; i < clientArr.length; i += 200) {
-          const { data: cls } = await supabase
-            .from('clients')
-            .select('id, first_name, last_name')
-            .in('id', clientArr.slice(i, i + 200));
-          (cls || []).forEach((c: any) => { clientMap[c.id] = `${c.first_name} ${c.last_name}`; });
-        }
+        const cls = await fetchByIds<any>('clients', 'id', clientArr, 'id, first_name, last_name');
+        cls.forEach((c: any) => { clientMap[c.id] = `${c.first_name} ${c.last_name}`; });
       }
 
       const staffMap: Record<string, string> = {};
       const staffArr = [...staffIdsNeeded];
       if (staffArr.length > 0) {
-        for (let i = 0; i < staffArr.length; i += 200) {
-          const { data: sts } = await supabase
-            .from('staff')
-            .select('id, first_name, last_name')
-            .in('id', staffArr.slice(i, i + 200));
-          (sts || []).forEach((s: any) => { staffMap[s.id] = `${s.first_name} ${s.last_name}`; });
-        }
+        const sts = await fetchByIds<any>('staff', 'id', staffArr, 'id, first_name, last_name');
+        sts.forEach((s: any) => { staffMap[s.id] = `${s.first_name} ${s.last_name}`; });
       }
 
       const locMap: Record<string, string> = {};
@@ -207,29 +193,19 @@ export function ClientActivityReport() {
       const csIds = [...new Set((appointments || []).map((a: any) => a.client_service_id).filter(Boolean))];
       const csMap: Record<string, { name: string; product_id: string | null }> = {};
       if (csIds.length > 0) {
-        for (let i = 0; i < csIds.length; i += 200) {
-          const { data: css } = await supabase
-            .from('client_services')
-            .select('mindbody_id, name, product_id')
-            .in('mindbody_id', csIds.slice(i, i + 200));
-          (css || []).forEach((cs: any) => {
-            csMap[cs.mindbody_id] = { name: cs.name, product_id: cs.product_id };
-          });
-        }
+        const css = await fetchByIds<any>('client_services', 'mindbody_id', csIds, 'mindbody_id, name, product_id');
+        css.forEach((cs: any) => {
+          csMap[cs.mindbody_id] = { name: cs.name, product_id: cs.product_id };
+        });
       }
 
       const csProdIds = [...new Set(Object.values(csMap).map(c => c.product_id).filter(Boolean))] as string[];
       const csPOMap: Record<string, { name: string; price: number; session_count: number }> = {};
       if (csProdIds.length > 0) {
-        for (let i = 0; i < csProdIds.length; i += 200) {
-          const { data: pos } = await supabase
-            .from('pricing_options')
-            .select('product_id, name, price, session_count')
-            .in('product_id', csProdIds.slice(i, i + 200));
-          (pos || []).forEach((po: any) => {
-            csPOMap[po.product_id] = { name: po.name, price: Number(po.price) || 0, session_count: po.session_count || 1 };
-          });
-        }
+        const pos = await fetchByIds<any>('pricing_options', 'product_id', csProdIds, 'product_id, name, price, session_count');
+        pos.forEach((po: any) => {
+          csPOMap[po.product_id] = { name: po.name, price: Number(po.price) || 0, session_count: po.session_count || 1 };
+        });
       }
 
       const staffSessionPairs = [...new Set(
@@ -239,14 +215,12 @@ export function ClientActivityReport() {
       if (staffSessionPairs.length > 0) {
         const sstStaffIds = [...new Set(staffSessionPairs.map(p => p.split('|')[0]))];
         const stIds = [...new Set(staffSessionPairs.map(p => p.split('|')[1]))];
-        const { data: ssts } = await supabase
-          .from('staff_session_types')
-          .select('staff_id, session_type_id, pay_rate')
-          .in('staff_id', sstStaffIds)
-          .in('session_type_id', stIds);
-        (ssts || []).forEach((sst: any) => {
-          sstMap[`${sst.staff_id}|${sst.session_type_id}`] = Number(sst.pay_rate) || 0;
-        });
+        for (const stBatch of chunkIds(stIds)) {
+          const ssts = await fetchByIds<any>('staff_session_types', 'staff_id', sstStaffIds, 'staff_id, session_type_id, pay_rate', q => q.in('session_type_id', stBatch));
+          ssts.forEach((sst: any) => {
+            sstMap[`${sst.staff_id}|${sst.session_type_id}`] = Number(sst.pay_rate) || 0;
+          });
+        }
       }
 
       for (const a of (appointments || []) as any[]) {
@@ -326,7 +300,7 @@ export function ClientActivityReport() {
 
   const handleExport = () => {
     const exportData = filteredRows.map(r => ({
-      'Date': new Date(r.date).toLocaleDateString('en-GB'),
+      'Date': r.type === 'appointment' ? formatApptDate(r.date) : new Date(r.date).toLocaleDateString('en-GB'),
       'Type': r.type === 'purchase' ? 'Purchase (+)' : 'Appointment (-)',
       'Client': r.clientName,
       'Service': r.serviceName,
@@ -355,6 +329,7 @@ export function ClientActivityReport() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-2xl font-bold text-slate-900">Client Activity</h2>
+            <PagePurpose section="client-activity" />
             <p className="text-slate-500 mt-1 text-sm">
               Purchases and appointments in one view &middot; {filteredRows.length} records
             </p>
@@ -551,7 +526,7 @@ export function ClientActivityReport() {
                     {pagedRows.map(row => (
                       <tr key={row.id} className="hover:bg-slate-50 transition-colors">
                         <td className="px-4 py-3 text-slate-700 whitespace-nowrap">
-                          {new Date(row.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                          {row.type === 'appointment' ? formatApptDate(row.date) : new Date(row.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
                         </td>
                         <td className="px-4 py-3">
                           {row.type === 'purchase' ? (

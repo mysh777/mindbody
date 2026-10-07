@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { Download, RefreshCw, Filter, ChevronDown } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
+import { PagePurpose } from './PageHeader';
+import type { MenuSection } from '../lib/pages';
 
 interface TableViewProps {
   tableName: string;
@@ -9,6 +11,7 @@ interface TableViewProps {
   onNavigate?: (tableName: string, id: string) => void;
   selectedId?: string | null;
   hideHeader?: boolean;
+  section?: MenuSection;
 }
 
 interface RelatedDataCache {
@@ -74,7 +77,7 @@ const getRelatedTable = (columnName: string): string | null => {
   return relationshipMap[columnName] || null;
 };
 
-export function TableView({ tableName, displayName, onNavigate, selectedId, hideHeader }: TableViewProps) {
+export function TableView({ tableName, displayName, onNavigate, selectedId, hideHeader, section }: TableViewProps) {
   const [data, setData] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState<number>(0);
   const [loading, setLoading] = useState(false);
@@ -254,7 +257,8 @@ export function TableView({ tableName, displayName, onNavigate, selectedId, hide
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-2xl font-bold text-slate-900">{displayName}</h2>
-              <p className="text-slate-600 mt-1">
+              {section && <PagePurpose section={section} />}
+              <p className="text-slate-600 mt-1 text-sm">
                 {loading ? 'Loading...' : `Showing ${filteredData.length} of ${data.length} loaded records (${totalCount} total in table)`}
               </p>
             </div>

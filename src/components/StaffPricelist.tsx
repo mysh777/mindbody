@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAllPages';
+import { fetchByIds } from '../lib/fetchByIds';
 import { toLocalISO } from '../utils/datePresets';
 import { UserCog, Calendar, Download, ChevronDown } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
+import { PagePurpose } from './PageHeader';
 
 interface StaffMember {
   id: string;
@@ -79,15 +82,17 @@ export function StaffPricelist() {
     }
     setLoading(true);
     try {
-      const { data: appts } = await supabase
+      const appts = await fetchAllPages<any>((from, to) => supabase
         .from('appointments')
         .select('id, start_datetime, status, client_id, session_type_id, client_service_id, duration_minutes')
         .eq('staff_id', selectedStaffId)
         .gte('start_datetime', `${startDate}T00:00:00`)
         .lte('start_datetime', `${endDate}T23:59:59`)
-        .order('start_datetime', { ascending: true });
+        .order('start_datetime', { ascending: true })
+        .order('id')
+        .range(from, to));
 
-      if (!appts || appts.length === 0) {
+      if (appts.length === 0) {
         setAppointments([]);
         setLoading(false);
         return;
@@ -97,16 +102,10 @@ export function StaffPricelist() {
       const sessionTypeIds = [...new Set(appts.map(a => a.session_type_id).filter(Boolean))];
       const serviceIds = [...new Set(appts.map(a => a.client_service_id).filter(Boolean))];
 
-      const [clientsRes, sessionsRes, servicesRes, ratesRes, syncedRatesRes] = await Promise.all([
-        clientIds.length > 0
-          ? supabase.from('clients').select('id, first_name, last_name').in('id', clientIds)
-          : { data: [] },
-        sessionTypeIds.length > 0
-          ? supabase.from('session_types').select('id, name').in('id', sessionTypeIds)
-          : { data: [] },
-        serviceIds.length > 0
-          ? supabase.from('client_services').select('mindbody_id, name').in('mindbody_id', serviceIds)
-          : { data: [] },
+      const [clientsData, sessionsData, servicesData, ratesRes, syncedRatesRes] = await Promise.all([
+        fetchByIds<any>('clients', 'id', clientIds, 'id, first_name, last_name'),
+        fetchByIds<any>('session_types', 'id', sessionTypeIds, 'id, name'),
+        fetchByIds<any>('client_services', 'mindbody_id', serviceIds, 'mindbody_id, name'),
         supabase
           .from('staff_appointment_rates')
           .select('session_type_id, rate_per_appointment')
@@ -119,10 +118,10 @@ export function StaffPricelist() {
       ]);
 
       const clientMap = new Map(
-        ((clientsRes as any).data || []).map((c: any) => [c.id, `${c.first_name || ''} ${c.last_name || ''}`.trim()])
+        clientsData.map((c: any) => [c.id, `${c.first_name || ''} ${c.last_name || ''}`.trim()])
       );
-      const sessionMap = new Map(((sessionsRes as any).data || []).map((s: any) => [s.id, s.name]));
-      const serviceMap = new Map(((servicesRes as any).data || []).map((s: any) => [s.mindbody_id, s.name]));
+      const sessionMap = new Map(sessionsData.map((s: any) => [s.id, s.name]));
+      const serviceMap = new Map(servicesData.map((s: any) => [s.mindbody_id, s.name]));
 
       const ratesBySession = new Map<string, number>();
       let defaultRate = 0;
@@ -207,7 +206,7 @@ export function StaffPricelist() {
               <UserCog className="w-7 h-7 text-blue-600" />
               Staff Appointment Pricelist
             </h2>
-            <p className="text-slate-600 mt-1">View appointments and costs per staff member</p>
+            <PagePurpose section="staff-pricelist" />
           </div>
           <button
             onClick={handleExport}

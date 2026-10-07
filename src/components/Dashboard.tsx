@@ -1,26 +1,34 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { Sidebar, MenuSection } from './Sidebar';
-import { ApiIntegration } from './ApiIntegration';
+import { Sidebar } from './Sidebar';
+import type { MenuSection } from '../lib/pages';
+import { ApiIntegration, type AdminTab } from './ApiIntegration';
 import { PivotTable } from './PivotTable';
 import { TableView } from './TableView';
 import { ReferenceTables } from './ReferenceTables';
 import { SalesExpandableView } from './SalesExpandableView';
 import { SalesReportPage } from './SalesReportPage';
-import { SalesByPricingOption } from './SalesByPricingOption';
-import { ClientBalance } from './ClientBalance';
-import { StaffExpandableView } from './StaffExpandableView';
+import { ServiceDetailsPage } from './ServiceDetailsPage';
 import { AppointmentsView } from './AppointmentsView';
 import { ClientServicesView } from './ClientServicesView';
 import { StaffPricelist } from './StaffPricelist';
-import { ClientActivityReport } from './ClientActivityReport';
 import { DataLinkageHealthTab } from './DataLinkageHealthTab';
 import { ClientCard } from './ClientCard';
 import { ExpiringPackages } from './ExpiringPackages';
 import { MarginByService } from './MarginByService';
 import { MarginByStaff } from './MarginByStaff';
 import { SleepingClients } from './SleepingClients';
+import { ClientSegments } from './ClientSegments';
+import { DataIssuesPage } from './DataIssuesPage';
+import { SimplePage } from './PageHeader';
+import { ErrorBoundary } from './ErrorBoundary';
 import { useHashRouter } from '../hooks/useHashRouter';
+import type { ReconciliationResult } from '../hooks/useReconciliationData';
+import { runReconciliationCheck, useAutoReconciliationCheck } from '../hooks/useReconciliationData';
+import { AlertTriangle } from 'lucide-react';
+import type { ReactNode } from 'react';
+
+const ADMIN_TABS: AdminTab[] = ['sync', 'sync-history', 'reconciliation', 'api-logs', 'raw-api', 'staff-rates'];
 
 interface Stats {
   clients: number;
@@ -30,31 +38,8 @@ interface Stats {
   lastSync: string | null;
 }
 
-const tableNameMap: Record<MenuSection, { tableName: string; displayName: string } | null> = {
-  'api-integration': null,
-  'references': null,
-  'pivot-reports': null,
-  'clients-report': null,
-  'staff-report': null,
-  'staff-pricelist': null,
-  'appointments': { tableName: 'appointments', displayName: 'Appointments' },
-  'sales': { tableName: 'sales', displayName: 'Sales' },
-  'sales-report': null,
-  'sales-by-pricing': null,
-  'client-services': { tableName: 'client_services', displayName: 'Client Services' },
-  'transactions': { tableName: 'transactions', displayName: 'Transactions' },
-  'sale-items': { tableName: 'sale_items', displayName: 'Sale Items' },
-  'client-activity': null,
-  'client-card': null,
-  'expiring-packages': null,
-  'linkage-health': null,
-  'margin-by-service': null,
-  'margin-by-staff': null,
-  'sleeping-clients': null,
-};
-
 const tableSectionMap: Record<string, MenuSection> = {
-  'clients': 'clients-report',
+  'clients': 'client-card',
   'staff': 'references',
   'locations': 'references',
   'sales': 'sales',
@@ -82,6 +67,38 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [reconciliationResult, setReconciliationResult] = useState<ReconciliationResult | null>(null);
+
+  useAutoReconciliationCheck(useCallback((r: ReconciliationResult) => setReconciliationResult(r), []));
+
+  // ── Keep-alive: mount on first visit, then hide with CSS ──
+  const [visited, setVisited] = useState<Set<MenuSection>>(() => new Set([activeSection]));
+  const sectionParamsRef = useRef<Partial<Record<MenuSection, Record<string, string>>>>({});
+  const isInitialMount = useRef(true);
+
+  useEffect(() => {
+    setVisited(prev => prev.has(activeSection) ? prev : new Set(prev).add(activeSection));
+
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      if (Object.keys(urlParams).length > 0) {
+        sectionParamsRef.current[activeSection] = urlParams;
+      }
+      return;
+    }
+    const stored = sectionParamsRef.current[activeSection];
+    if (stored && Object.keys(stored).length > 0) {
+      setParams(stored);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection]);
+
+  const handleParamsChange = useCallback((params: Record<string, string>) => {
+    sectionParamsRef.current[activeSection] = params;
+    setParams(params);
+  }, [activeSection, setParams]);
+
+  // ── Stats ──
 
   const loadStats = useCallback(async () => {
     setLoading(true);
@@ -113,6 +130,7 @@ export function Dashboard() {
   const handleSyncComplete = useCallback(() => {
     loadStats();
     setRefreshTrigger(prev => prev + 1);
+    runReconciliationCheck().then(r => setReconciliationResult(r)).catch(() => {});
   }, [loadStats]);
 
   useEffect(() => {
@@ -139,103 +157,27 @@ export function Dashboard() {
     navigate(section);
   }, [navigate]);
 
-  const renderContent = () => {
-    if (activeSection === 'api-integration') {
-      return <ApiIntegration onSyncComplete={handleSyncComplete} />;
-    }
+  // Kept-alive pages read their filters from the URL only when mounted, so opening a report
+  // with new filters remounts it.
+  const [remounts, setRemounts] = useState<Partial<Record<MenuSection, number>>>({});
+  const handleOpenReport = useCallback(({ section, params }: { section: MenuSection; params: Record<string, string> }) => {
+    sectionParamsRef.current[section] = params;
+    setRemounts(prev => ({ ...prev, [section]: (prev[section] || 0) + 1 }));
+    navigate(section, params);
+  }, [navigate]);
 
-    if (activeSection === 'references') {
-      return <ReferenceTables onNavigate={handleNavigate} />;
-    }
+  // ── Keep-alive rendering helpers ──
 
-    if (activeSection === 'pivot-reports') {
-      return (
-        <div className="w-full bg-slate-50 min-h-full">
-          <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
-            <h2 className="text-2xl font-bold text-slate-900">Pivot Reports</h2>
-            <p className="text-slate-600 mt-1">Create custom pivot tables and analyze your data</p>
-          </div>
-          <div className="p-6">
-            <PivotTable />
-          </div>
-        </div>
-      );
-    }
+  const sc = (id: MenuSection) =>
+    `absolute inset-0 overflow-auto ${activeSection === id ? '' : 'invisible pointer-events-none'}`;
 
-    if (activeSection === 'clients-report') {
-      return <ClientBalance />;
-    }
+  const show = (id: MenuSection) => visited.has(id);
 
-    if (activeSection === 'staff-report') {
-      return <StaffExpandableView />;
-    }
-
-    if (activeSection === 'staff-pricelist') {
-      return <StaffPricelist />;
-    }
-
-    if (activeSection === 'sales') {
-      return <SalesExpandableView onNavigate={handleNavigate} />;
-    }
-
-    if (activeSection === 'sales-report') {
-      return <SalesReportPage onNavigate={handleNavigate} />;
-    }
-
-    if (activeSection === 'sales-by-pricing') {
-      return <SalesByPricingOption onNavigate={handleNavigate} />;
-    }
-
-    if (activeSection === 'appointments') {
-      return <AppointmentsView />;
-    }
-
-    if (activeSection === 'client-services') {
-      return <ClientServicesView />;
-    }
-
-    if (activeSection === 'client-activity') {
-      return <ClientActivityReport />;
-    }
-
-    if (activeSection === 'expiring-packages') {
-      return <ExpiringPackages onViewClient={handleViewClient} urlParams={urlParams} onParamsChange={setParams} />;
-    }
-
-    if (activeSection === 'client-card') {
-      return <ClientCard urlParams={urlParams} onParamsChange={setParams} />;
-    }
-
-    if (activeSection === 'linkage-health') {
-      return <DataLinkageHealthTab />;
-    }
-
-    if (activeSection === 'margin-by-service') {
-      return <MarginByService urlParams={urlParams} onParamsChange={setParams} />;
-    }
-
-    if (activeSection === 'margin-by-staff') {
-      return <MarginByStaff urlParams={urlParams} onParamsChange={setParams} />;
-    }
-
-    if (activeSection === 'sleeping-clients') {
-      return <SleepingClients onViewClient={handleViewClient} urlParams={urlParams} onParamsChange={setParams} />;
-    }
-
-    const tableConfig = tableNameMap[activeSection];
-    if (tableConfig) {
-      return (
-        <TableView
-          tableName={tableConfig.tableName}
-          displayName={tableConfig.displayName}
-          onNavigate={handleNavigate}
-          selectedId={selectedId}
-        />
-      );
-    }
-
-    return null;
-  };
+  const page = (id: MenuSection, node: ReactNode) => show(id) && (
+    <div key={`${id}-${remounts[id] || 0}`} className={sc(id)} data-section-active={activeSection === id ? 'true' : undefined}>
+      <ErrorBoundary scope={id}>{node}</ErrorBoundary>
+    </div>
+  );
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden">
@@ -244,8 +186,46 @@ export function Dashboard() {
         onSectionChange={handleSectionChange}
         refreshTrigger={refreshTrigger}
       />
-      <div className="flex-1 overflow-auto">
-        {renderContent()}
+      <div className="flex-1 relative overflow-hidden">
+        {reconciliationResult && !reconciliationResult.allOk && (
+          <div className="absolute top-0 left-0 right-0 z-50 flex items-center gap-2 px-4 py-2 bg-amber-50 border-b border-amber-200 text-amber-800 text-sm shadow-sm">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span className="font-medium">Reconciliation issues detected</span>
+            <span className="text-amber-600">
+              — {reconciliationResult.references.filter(r => !r.ok).length + reconciliationResult.cases.filter(c => !c.ok).length + reconciliationResult.baselineDrifts.length + reconciliationResult.unknownPaymentTypes.length} check(s) failed
+            </span>
+            <button
+              onClick={() => navigate('reconciliation')}
+              className="ml-auto text-xs font-medium text-amber-700 hover:text-amber-900 underline"
+            >
+              View details
+            </button>
+          </div>
+        )}
+        {page('overview', <SalesReportPage onOpenReport={handleOpenReport} urlParams={urlParams} onParamsChange={handleParamsChange} />)}
+
+        {page('client-card', <ClientCard urlParams={urlParams} onParamsChange={handleParamsChange} />)}
+        {page('expiring-packages', <ExpiringPackages onViewClient={handleViewClient} urlParams={urlParams} onParamsChange={handleParamsChange} />)}
+        {page('sleeping-clients', <SleepingClients onViewClient={handleViewClient} urlParams={urlParams} onParamsChange={handleParamsChange} />)}
+        {page('client-segments', <ClientSegments onViewClient={handleViewClient} urlParams={urlParams} onParamsChange={handleParamsChange} />)}
+
+        {page('margin-by-service', <MarginByService urlParams={urlParams} onParamsChange={handleParamsChange} />)}
+        {page('margin-by-staff', <MarginByStaff urlParams={urlParams} onParamsChange={handleParamsChange} />)}
+
+        {page('references', <ReferenceTables onNavigate={handleNavigate} initialTab={urlParams.tab} initialStaffId={urlParams.staff} />)}
+        {page('service-pricelist', <ServiceDetailsPage />)}
+        {page('staff-pricelist', <StaffPricelist />)}
+
+        {ADMIN_TABS.map(tab => page(tab, <ApiIntegration tab={tab} onSyncComplete={handleSyncComplete} onReconciliationResult={setReconciliationResult} />))}
+        {page('data-issues', <DataIssuesPage onNavigate={handleNavigate} />)}
+        {page('linkage-health', <DataLinkageHealthTab />)}
+        {page('appointments', <AppointmentsView />)}
+        {page('client-services', <ClientServicesView />)}
+        {page('sales', <SalesExpandableView onNavigate={handleNavigate} />)}
+        {page('sale-items', <TableView tableName="sale_items" displayName="Sale Items" section="sale-items" onNavigate={handleNavigate} selectedId={selectedId} />)}
+        {page('pivot-reports', <SimplePage section="pivot-reports"><PivotTable /></SimplePage>)}
+
+        {page('transactions', <TableView tableName="transactions" displayName="Transactions" section="transactions" onNavigate={handleNavigate} selectedId={selectedId} />)}
       </div>
     </div>
   );

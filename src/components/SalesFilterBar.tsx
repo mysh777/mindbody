@@ -13,6 +13,7 @@ interface SalesFilterBarProps {
   onDateRangeChange: (range: DateRange) => void;
   selectedLocation: string;
   onLocationChange: (location: string) => void;
+  initialPreset?: FilterPreset;
 }
 
 export function SalesFilterBar({
@@ -20,9 +21,10 @@ export function SalesFilterBar({
   onDateRangeChange,
   selectedLocation,
   onLocationChange,
+  initialPreset = 'this_month',
 }: SalesFilterBarProps) {
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
-  const [filterPreset, setFilterPreset] = useState<FilterPreset>('this_month');
+  const [filterPreset, setFilterPreset] = useState<FilterPreset>(initialPreset);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
 
   const months = getMonthsForTimeline();

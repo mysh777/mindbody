@@ -94,10 +94,10 @@ export function ByStaffTab({ loading, byStaff, appointments, onNavigate }: BySta
                 <th className="w-8"></th>
                 <th className="text-left px-4 py-3 font-semibold text-slate-600">Staff Member</th>
                 <SortHeader field="visits" label="Visits" />
-                <SortHeader field="revenue" label="Revenue" />
-                <SortHeader field="staffCost" label="Staff Cost" />
-                <SortHeader field="margin" label="Margin" />
-                <SortHeader field="marginPercent" label="Margin %" />
+                <SortHeader field="revenue" label="Revenue earned" />
+                <SortHeader field="staffCost" label="Staff cost" />
+                <SortHeader field="margin" label="Gross margin" />
+                <SortHeader field="marginPercent" label="Gross margin %" />
                 <th className="px-4 py-3 font-semibold text-slate-600 text-right">Est.</th>
                 <th className="px-4 py-3 font-semibold text-slate-600 text-right">N/A</th>
               </tr>
@@ -229,9 +229,9 @@ function StaffRow({
                   <tr className="text-slate-500 uppercase tracking-wider">
                     <th className="px-6 py-2 text-left">Service</th>
                     <th className="px-4 py-2 text-right">Visits</th>
-                    <th className="px-4 py-2 text-right">Revenue</th>
-                    <th className="px-4 py-2 text-right">Staff Cost</th>
-                    <th className="px-4 py-2 text-right">Margin</th>
+                    <th className="px-4 py-2 text-right">Revenue earned</th>
+                    <th className="px-4 py-2 text-right">Staff cost</th>
+                    <th className="px-4 py-2 text-right">Gross margin</th>
                     <th className="px-4 py-2 text-right">No Data</th>
                   </tr>
                 </thead>

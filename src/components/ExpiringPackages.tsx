@@ -1,5 +1,8 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { handlePrint } from '../utils/printReport';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAllPages';
+import { fetchByIds } from '../lib/fetchByIds';
 import {
   Flame,
   RefreshCw,
@@ -14,13 +17,15 @@ import {
 } from 'lucide-react';
 import { CopyLinkButton } from './CopyLinkButton';
 import { exportToExcel } from '../utils/exportExcel';
-import { isPackageActive, toLocalISO } from '../utils/packageStatus';
+import { isPackageActive, toLocalISO, PACKAGE_STATUS_COLUMNS } from '../utils/packageStatus';
+import { PagePurpose } from './PageHeader';
 
 interface ServiceGroup {
   tariffName: string;
   remainingTotal: number;
   packagesCount: number;
   daysLeft: number | null;
+  activeDate: string | null;
   expirationDate: string | null;
 }
 
@@ -56,10 +61,12 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
   const [totalServices, setTotalServices] = useState(0);
   const [loading, setLoading] = useState(false);
   const [generated, setGenerated] = useState(false);
+  const [loadedAt, setLoadedAt] = useState<string | null>(null);
   const initFilter = (urlParams?.filter === 'visits' || urlParams?.filter === 'days') ? urlParams.filter : 'both';
   const [filter, setFilter] = useState<FilterMode>(initFilter as FilterMode);
   const [searchQuery, setSearchQuery] = useState('');
   const autoRefreshRef = useRef(!!urlParams?.filter);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const handleFilterChange = (f: FilterMode) => {
     setFilter(f);
@@ -69,13 +76,14 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: csData } = await supabase
+      const csData = await fetchAllPages<any>((from, to) => supabase
         .from('client_services')
-        .select('client_id, name, count, remaining, expiration_date, pricing_option_id')
-        .eq('current', true)
-        .gt('remaining', 0);
+        .select(`client_id, name, count, remaining, active_date, expiration_date, pricing_option_id, ${PACKAGE_STATUS_COLUMNS}`)
+        .gt('remaining', 0)
+        .order('id')
+        .range(from, to));
 
-      if (!csData || csData.length === 0) {
+      if (csData.length === 0) {
         setClients([]);
         setTotalServices(0);
         setGenerated(true);
@@ -87,22 +95,20 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
       const now = new Date();
 
       const active = csData.filter(cs =>
-        isPackageActive({ current: true, remaining: cs.remaining, expiration_date: cs.expiration_date }, today)
+        isPackageActive(cs, today)
       );
 
       // Resolve pricing option names
       const poIds = [...new Set(active.map(cs => cs.pricing_option_id).filter(Boolean))] as string[];
       const poMap = new Map<string, string>();
-      for (let i = 0; i < poIds.length; i += 200) {
-        const batch = poIds.slice(i, i + 200);
-        const { data: pos } = await supabase.from('pricing_options').select('id, name').in('id', batch);
-        for (const po of (pos || [])) poMap.set(po.id, po.name);
-      }
+      const pos = await fetchByIds<{ id: string; name: string }>('pricing_options', 'id', poIds, 'id, name');
+      for (const po of pos) poMap.set(po.id, po.name);
 
       // Group by client_id + tariff name
       const groupMap = new Map<string, {
         clientId: string; tariffName: string;
         remainingTotal: number; packagesCount: number;
+        firstActive: string | null;
         firstExp: string | null;
       }>();
 
@@ -113,6 +119,10 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
         if (existing) {
           existing.remainingTotal += cs.remaining;
           existing.packagesCount++;
+          if (cs.active_date) {
+            const ad = cs.active_date.slice(0, 10);
+            if (!existing.firstActive || ad < existing.firstActive) existing.firstActive = ad;
+          }
           if (cs.expiration_date) {
             const ed = cs.expiration_date.slice(0, 10);
             if (!existing.firstExp || ed < existing.firstExp) existing.firstExp = ed;
@@ -123,13 +133,14 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
             tariffName: tariff,
             remainingTotal: cs.remaining,
             packagesCount: 1,
+            firstActive: cs.active_date ? cs.active_date.slice(0, 10) : null,
             firstExp: cs.expiration_date ? cs.expiration_date.slice(0, 10) : null,
           });
         }
       }
 
       // Filter to expiring groups
-      type GroupEntry = { clientId: string; tariffName: string; remainingTotal: number; packagesCount: number; firstExp: string | null };
+      type GroupEntry = { clientId: string; tariffName: string; remainingTotal: number; packagesCount: number; firstActive: string | null; firstExp: string | null };
       const expiringGroups: GroupEntry[] = [];
       for (const g of groupMap.values()) {
         const daysLeft = g.firstExp
@@ -143,14 +154,8 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
       // Fetch client info
       const clientIds = [...new Set(expiringGroups.map(g => g.clientId))];
       const clientMap = new Map<string, { first_name: string; last_name: string; mobile_phone: string; home_phone: string }>();
-      for (let i = 0; i < clientIds.length; i += 200) {
-        const batch = clientIds.slice(i, i + 200);
-        const { data: cl } = await supabase
-          .from('clients')
-          .select('id, first_name, last_name, mobile_phone, home_phone')
-          .in('id', batch);
-        for (const c of (cl || [])) clientMap.set(c.id, c);
-      }
+      const cl = await fetchByIds<{ id: string; first_name: string; last_name: string; mobile_phone: string; home_phone: string }>('clients', 'id', clientIds, 'id, first_name, last_name, mobile_phone, home_phone');
+      for (const c of cl) clientMap.set(c.id, c);
 
       // Build client rows
       const clientGroupsMap = new Map<string, ServiceGroup[]>();
@@ -163,6 +168,7 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
           remainingTotal: g.remainingTotal,
           packagesCount: g.packagesCount,
           daysLeft,
+          activeDate: g.firstActive,
           expirationDate: g.firstExp,
         };
         const arr = clientGroupsMap.get(g.clientId) || [];
@@ -197,6 +203,7 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
       setClients(result);
       setTotalServices(expiringGroups.length);
       setGenerated(true);
+      setLoadedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
       console.error('Error loading expiring packages:', err);
     } finally {
@@ -242,6 +249,7 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
           'Client': `${c.firstName} ${c.lastName}`,
           'Phone': c.phone,
           'Tariff': g.tariffName,
+          'Start': formatDate(g.activeDate),
           'Visits Left': g.remainingTotal,
           'Packages': g.packagesCount,
           'Days Left': g.daysLeft ?? '-',
@@ -253,15 +261,13 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
   };
 
   return (
-    <div className="w-full bg-slate-50 min-h-full">
+    <div ref={containerRef} className="w-full bg-slate-50 min-h-full">
       <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
         <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
           <Flame className="w-6 h-6 text-orange-500" />
           Expiring Packages
         </h2>
-        <p className="text-slate-600 mt-1">
-          Clients with packages running low on visits or nearing expiration
-        </p>
+        <PagePurpose section="expiring-packages" />
       </div>
 
       <div className="p-6">
@@ -322,7 +328,7 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
                   Excel
                 </button>
                 <button
-                  onClick={() => window.print()}
+                  onClick={() => handlePrint(containerRef)}
                   className="px-4 py-2 bg-slate-600 text-white rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors flex items-center gap-2"
                 >
                   <Printer className="w-4 h-4" />
@@ -342,6 +348,9 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
                 )}
                 Refresh
               </button>
+              {loadedAt && !loading && (
+                <span className="text-xs text-slate-400">Loaded at {loadedAt}</span>
+              )}
             </div>
           </div>
         </div>
@@ -384,6 +393,9 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
                           <div key={i} className="flex items-center gap-2 text-sm flex-wrap">
                             <span className="text-slate-400">{'\u2022'}</span>
                             <span className="text-slate-700 font-medium">{g.tariffName}</span>
+                            <span className="text-xs text-slate-500">
+                              {formatDate(g.activeDate)} {'\u2013'} {formatDate(g.expirationDate)}
+                            </span>
                             <span className="text-slate-400">{'\u2014'}</span>
                             <div className="flex items-center gap-1.5 flex-wrap">
                               {lowVisits && (
@@ -463,6 +475,7 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
                 <th>Client</th>
                 <th>Phone</th>
                 <th>Tariff</th>
+                <th>Start</th>
                 <th className="text-right">Visits Left</th>
                 <th className="text-right">Packages</th>
                 <th className="text-right">Days Left</th>
@@ -484,6 +497,7 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
                         <td>{gi === 0 ? `${row.firstName} ${row.lastName}` : ''}</td>
                         <td>{gi === 0 ? row.phone : ''}</td>
                         <td>{g.tariffName}</td>
+                        <td>{formatDate(g.activeDate)}</td>
                         <td className="text-right">{g.remainingTotal}</td>
                         <td className="text-right">{g.packagesCount}</td>
                         <td className="text-right">{g.daysLeft != null ? `${g.daysLeft}d` : '-'}</td>
@@ -497,7 +511,7 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={4}>Total: {filtered.length} clients</td>
+                <td colSpan={5}>Total: {filtered.length} clients</td>
                 <td className="text-right" colSpan={5}>{filteredServiceCount} expiring services</td>
               </tr>
             </tfoot>

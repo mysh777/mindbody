@@ -1,4 +1,6 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { handlePrint } from '../utils/printReport';
+import { formatApptDate, formatApptTime } from '../utils/formatDateTime';
 import { Users, ArrowUpDown, AlertTriangle, Sparkles, Loader2, ChevronDown, ChevronRight, Search, X, Download, Printer } from 'lucide-react';
 import { CopyLinkButton } from './CopyLinkButton';
 import { useSalesMarginData } from '../hooks/useSalesMarginData';
@@ -10,6 +12,7 @@ import type { ByStaffRow, AppointmentRow } from '../hooks/useSalesMarginData';
 import { type DatePreset, getPresetDates } from '../utils/datePresets';
 import { DateRangePicker } from './DateRangePicker';
 import { LocationFilter } from './LocationFilter';
+import { PagePurpose } from './PageHeader';
 
 type SortField = 'staffName' | 'visitsLinked' | 'visitsNoData' | 'revenue' | 'staffCost' | 'margin' | 'marginPercent';
 
@@ -27,6 +30,61 @@ interface ServiceBreakdown {
   margin: number;
 }
 
+interface VisitDetail {
+  id: string;
+  start: string;
+  date: string;
+  time: string;
+  clientName: string;
+  clientShort: string;
+  packageName: string;
+  revenue: number | null;
+  staffCost: number;
+  isEstimated: boolean;
+}
+
+interface ServiceBreakdownDetailed extends ServiceBreakdown {
+  visits: VisitDetail[];
+}
+
+function abbreviateClient(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/);
+  if (parts.length < 2 || fullName === '-') return fullName;
+  return `${parts[0][0]}. ${parts.slice(1).join(' ')}`;
+}
+
+function getServiceBreakdownDetailed(staffId: string, appts: AppointmentRow[]): ServiceBreakdownDetailed[] {
+  const map: Record<string, ServiceBreakdownDetailed> = {};
+  appts.filter(a => (a.staff_id || 'unknown') === staffId).forEach(a => {
+    const key = a.session_type_id || 'unknown';
+    if (!map[key]) map[key] = { name: a.sessionTypeName, visitsLinked: 0, visitsNoData: 0, revenue: 0, staffCost: 0, margin: 0, visits: [] };
+    map[key].staffCost += a.staffCost;
+    if (a.hasRevenueData) {
+      map[key].visitsLinked++;
+      map[key].revenue += a.revenue!;
+      map[key].margin += a.margin!;
+    } else {
+      map[key].visitsNoData++;
+    }
+    map[key].visits.push({
+      id: a.id,
+      start: a.start_datetime,
+      date: formatApptDate(a.start_datetime),
+      time: formatApptTime(a.start_datetime),
+      clientName: a.clientName,
+      clientShort: abbreviateClient(a.clientName),
+      packageName: a.pricingOptionName || '—',
+      revenue: a.revenue,
+      staffCost: a.staffCost,
+      isEstimated: a.isEstimated,
+    });
+  });
+  for (const svc of Object.values(map)) {
+    svc.visits.sort((a, b) => a.start.localeCompare(b.start));
+  }
+  return Object.values(map).sort((a, b) => b.margin - a.margin);
+}
+
 interface MarginByStaffProps {
   urlParams?: Record<string, string>;
   onParamsChange?: (params: Record<string, string>) => void;
@@ -34,15 +92,17 @@ interface MarginByStaffProps {
 
 export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps) {
   const hasUrlDates = !!(urlParams?.from && urlParams?.to);
-  const [datePreset, setDatePreset] = useState<DatePreset>(hasUrlDates ? 'custom' : 'ytd');
+  const [datePreset, setDatePreset] = useState<DatePreset>(hasUrlDates ? 'custom' : 'last-month');
   const [generated, setGenerated] = useState(false);
+  const [loadedAt, setLoadedAt] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState(() =>
-    hasUrlDates ? { start: urlParams!.from, end: urlParams!.to } : getPresetDates('ytd')
+    hasUrlDates ? { start: urlParams!.from, end: urlParams!.to } : getPresetDates('last-month')
   );
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [locationId, setLocationId] = useState(urlParams?.location || 'all');
   const [locationName, setLocationName] = useState('All locations');
   const autoGenRef = useRef(hasUrlDates);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const dummyRange = { start: '1900-01-01', end: '1900-01-02' };
   const [committedRange, setCommittedRange] = useState(
@@ -78,6 +138,12 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
       setGenerated(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (generated && !loading) {
+      setLoadedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
+    }
+  }, [generated, loading]);
 
   const rows: Row[] = useMemo(() => {
     if (!generated) return [];
@@ -129,47 +195,50 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
     });
   };
 
-  const getServiceBreakdown = (staffId: string, appts: AppointmentRow[]): ServiceBreakdown[] => {
-    const map: Record<string, ServiceBreakdown> = {};
-    appts.filter(a => (a.staff_id || 'unknown') === staffId).forEach(a => {
-      const key = a.session_type_id || 'unknown';
-      if (!map[key]) map[key] = { name: a.sessionTypeName, visitsLinked: 0, visitsNoData: 0, revenue: 0, staffCost: 0, margin: 0 };
-      map[key].staffCost += a.staffCost;
-      if (a.hasRevenueData) {
-        map[key].visitsLinked++;
-        map[key].revenue += a.revenue!;
-        map[key].margin += a.margin!;
-      } else {
-        map[key].visitsNoData++;
-      }
-    });
-    return Object.values(map).sort((a, b) => b.margin - a.margin);
-  };
-
   const handleExportXlsx = () => {
     if (sorted.length === 0) return;
     const data = sorted.map(r => ({
       'Staff': r.staffName,
       'Visits (linked)': r.visitsLinked,
       'Visits (unlinked)': r.visitsNoData,
-      'Revenue (EUR)': Number(r.revenue.toFixed(2)),
-      'Staff Cost (EUR)': Number(r.staffCost.toFixed(2)),
-      'Margin (EUR)': Number(r.margin.toFixed(2)),
-      'Margin (%)': r.revenue > 0 ? Number(r.marginPercent.toFixed(1)) : 0,
+      'Revenue earned (EUR)': Number(r.revenue.toFixed(2)),
+      'Staff cost (EUR)': Number(r.staffCost.toFixed(2)),
+      'Gross margin (EUR)': Number(r.margin.toFixed(2)),
+      'Gross margin (%)': r.revenue > 0 ? Number(r.marginPercent.toFixed(1)) : 0,
     }));
     data.push({
       'Staff': 'TOTAL',
       'Visits (linked)': totals.visitsLinked,
       'Visits (unlinked)': totals.visitsNoData,
-      'Revenue (EUR)': Number(totals.revenue.toFixed(2)),
-      'Staff Cost (EUR)': Number(totals.staffCost.toFixed(2)),
-      'Margin (EUR)': Number(totals.margin.toFixed(2)),
-      'Margin (%)': Number(totals.marginPercent.toFixed(1)),
+      'Revenue earned (EUR)': Number(totals.revenue.toFixed(2)),
+      'Staff cost (EUR)': Number(totals.staffCost.toFixed(2)),
+      'Gross margin (EUR)': Number(totals.margin.toFixed(2)),
+      'Gross margin (%)': Number(totals.marginPercent.toFixed(1)),
     });
     exportToExcel(data, 'margin_by_staff');
   };
 
-  const handlePrint = () => window.print();
+  const handleExportVisits = () => {
+    const staffIds = new Set(sorted.map(r => r.staffId));
+    const visits = appointments
+      .filter(a => staffIds.has(a.staff_id || 'unknown'))
+      .sort((a, b) => a.start_datetime.localeCompare(b.start_datetime));
+    exportToExcel(visits.map(a => ({
+      'Date': formatApptDate(a.start_datetime),
+      'Time': formatApptTime(a.start_datetime),
+      'Staff': a.staffName,
+      'Location': a.locationName,
+      'Client': a.clientName,
+      'Service': a.sessionTypeName,
+      'Pricing option': a.pricingOptionName || '',
+      'Revenue earned (EUR)': a.revenue != null ? Number(a.revenue.toFixed(2)) : '',
+      'Staff cost (EUR)': Number(a.staffCost.toFixed(2)),
+      'Gross margin (EUR)': a.margin != null ? Number(a.margin.toFixed(2)) : '',
+      'Price basis': !a.hasRevenueData ? 'No price data' : a.isEstimated ? 'Estimated' : 'Package / sale',
+    })), 'margin_by_staff_visits');
+  };
+
+  const onPrint = () => handlePrint(containerRef);
 
   const SH = ({ field, label }: { field: SortField; label: string }) => (
     <th className="px-4 py-3 text-right font-semibold text-slate-600 cursor-pointer hover:text-slate-900 select-none" onClick={() => toggleSort(field)}>
@@ -183,13 +252,14 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
   const mc = (v: number) => v > 0 ? 'text-emerald-600' : v < 0 ? 'text-red-600' : 'text-slate-500';
 
   return (
-    <div className="w-full bg-slate-50 min-h-full">
+    <div ref={containerRef} className="w-full bg-slate-50 min-h-full">
       <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
         <div className="flex items-center gap-3">
           <Users className="w-6 h-6 text-blue-600" />
           <div>
             <h2 className="text-2xl font-bold text-slate-900">Margin by Staff</h2>
-            <p className="text-slate-500 text-sm mt-0.5">Staff cost = per-appointment pay rates from Mindbody</p>
+            <PagePurpose section="margin-by-staff" />
+            <p className="text-slate-500 text-xs mt-0.5">Staff cost = per-appointment pay rates from Mindbody</p>
           </div>
         </div>
       </div>
@@ -214,12 +284,19 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
               {loading && <Loader2 className="w-4 h-4 animate-spin" />}
               Generate
             </button>
+            {loadedAt && !loading && (
+              <span className="text-xs text-slate-400">Loaded at {loadedAt}</span>
+            )}
             {generated && sorted.length > 0 && (<>
               <button onClick={handleExportXlsx}
                 className="px-4 py-2.5 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700 transition-colors flex items-center gap-2">
                 <Download className="w-4 h-4" /> Excel
               </button>
-              <button onClick={handlePrint}
+              <button onClick={handleExportVisits}
+                className="px-4 py-2.5 bg-white border border-emerald-600 text-emerald-700 rounded-lg font-medium hover:bg-emerald-50 transition-colors flex items-center gap-2">
+                <Download className="w-4 h-4" /> Visits Excel
+              </button>
+              <button onClick={onPrint}
                 className="px-4 py-2.5 bg-slate-600 text-white rounded-lg font-medium hover:bg-slate-700 transition-colors flex items-center gap-2">
                 <Printer className="w-4 h-4" /> Print / PDF
               </button>
@@ -274,16 +351,16 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
                     </th>
                     <SH field="visitsLinked" label="Visits (linked)" />
                     <SH field="visitsNoData" label="Visits (unlinked)" />
-                    <SH field="revenue" label="Revenue" />
-                    <SH field="staffCost" label="Staff Cost" />
-                    <SH field="margin" label="Margin" />
-                    <SH field="marginPercent" label="Margin %" />
+                    <SH field="revenue" label="Revenue earned" />
+                    <SH field="staffCost" label="Staff cost" />
+                    <SH field="margin" label="Gross margin" />
+                    <SH field="marginPercent" label="Gross margin %" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {sorted.map(r => {
                     const isOpen = expanded.has(r.staffId);
-                    const breakdown = isOpen ? getServiceBreakdown(r.staffId, appointments) : [];
+                    const breakdown = isOpen ? getServiceBreakdownDetailed(r.staffId, appointments) : [];
                     return (
                       <StaffRowBlock key={r.staffId} row={r} isOpen={isOpen} breakdown={breakdown}
                         onToggle={() => toggleExpand(r.staffId)} mc={mc} />
@@ -326,10 +403,10 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
                 <th>Staff</th>
                 <th className="text-right">Visits (linked)</th>
                 <th className="text-right">Visits (unlinked)</th>
-                <th className="text-right">Revenue</th>
-                <th className="text-right">Staff Cost</th>
-                <th className="text-right">Margin</th>
-                <th className="text-right">Margin %</th>
+                <th className="text-right">Revenue earned</th>
+                <th className="text-right">Staff cost</th>
+                <th className="text-right">Gross margin</th>
+                <th className="text-right">Gross margin %</th>
               </tr>
             </thead>
             <tbody>
@@ -358,9 +435,9 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
             </tfoot>
           </table>
 
-          {/* Per-staff detail sections */}
+          {/* Per-staff detail sections with visit-level rows */}
           {sorted.map(r => {
-            const breakdown = getServiceBreakdown(r.staffId, appointments);
+            const breakdown = getServiceBreakdownDetailed(r.staffId, appointments);
             if (breakdown.length === 0) return null;
             return (
               <div key={r.staffId} className="pr-staff-section">
@@ -371,21 +448,52 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
                       <th>Service</th>
                       <th className="text-right">Linked</th>
                       <th className="text-right">Unlinked</th>
-                      <th className="text-right">Revenue</th>
-                      <th className="text-right">Staff Cost</th>
-                      <th className="text-right">Margin</th>
+                      <th className="text-right">Revenue earned</th>
+                      <th className="text-right">Staff cost</th>
+                      <th className="text-right">Gross margin</th>
                     </tr>
                   </thead>
                   <tbody>
                     {breakdown.map((svc, idx) => (
-                      <tr key={idx}>
-                        <td>{svc.name}</td>
-                        <td className="text-right">{svc.visitsLinked}</td>
-                        <td className="text-right">{svc.visitsNoData}</td>
-                        <td className="text-right">{formatCurrency(svc.revenue)}</td>
-                        <td className="text-right">{formatCurrency(svc.staffCost)}</td>
-                        <td className="text-right">{formatCurrency(svc.margin)}</td>
-                      </tr>
+                      <React.Fragment key={idx}>
+                        <tr className="pr-svc-row">
+                          <td>{svc.name}</td>
+                          <td className="text-right">{svc.visitsLinked}</td>
+                          <td className="text-right">{svc.visitsNoData}</td>
+                          <td className="text-right">{formatCurrency(svc.revenue)}</td>
+                          <td className="text-right">{formatCurrency(svc.staffCost)}</td>
+                          <td className="text-right">{formatCurrency(svc.margin)}</td>
+                        </tr>
+                        {/* Visit detail sub-header */}
+                        <tr className="pr-visit-header">
+                          <td colSpan={6}>
+                            <table className="pr-visit-table">
+                              <thead>
+                                <tr>
+                                  <th>Date</th>
+                                  <th>Time</th>
+                                  <th>Client</th>
+                                  <th>Package</th>
+                                  <th className="text-right">Revenue earned</th>
+                                  <th className="text-right">Pay</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {svc.visits.map((v, vi) => (
+                                  <tr key={vi}>
+                                    <td>{v.date.slice(0, 5)}</td>
+                                    <td>{v.time}</td>
+                                    <td>{v.clientShort}</td>
+                                    <td>{v.packageName}</td>
+                                    <td className="text-right">{v.revenue != null ? formatCurrency(v.revenue) : '—'}</td>
+                                    <td className="text-right">{formatCurrency(v.staffCost)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </td>
+                        </tr>
+                      </React.Fragment>
                     ))}
                   </tbody>
                   <tfoot>
@@ -409,10 +517,10 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
             <dl className="pr-grid">
               <dt>Visits (linked)</dt><dd>{totals.visitsLinked}</dd>
               <dt>Visits (unlinked)</dt><dd>{totals.visitsNoData}</dd>
-              <dt>Revenue</dt><dd>{formatCurrency(totals.revenue)}</dd>
-              <dt>Staff Cost</dt><dd>{formatCurrency(totals.staffCost)}</dd>
-              <dt>Margin</dt><dd>{formatCurrency(totals.margin)}</dd>
-              <dt>Margin %</dt><dd>{totals.revenue > 0 ? `${totals.marginPercent.toFixed(1)}%` : '-'}</dd>
+              <dt>Revenue earned</dt><dd>{formatCurrency(totals.revenue)}</dd>
+              <dt>Staff cost</dt><dd>{formatCurrency(totals.staffCost)}</dd>
+              <dt>Gross margin</dt><dd>{formatCurrency(totals.margin)}</dd>
+              <dt>Gross margin %</dt><dd>{totals.revenue > 0 ? `${totals.marginPercent.toFixed(1)}%` : '-'}</dd>
             </dl>
           </div>
         </div>
@@ -422,9 +530,16 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
 }
 
 function StaffRowBlock({ row, isOpen, breakdown, onToggle, mc }: {
-  row: Row; isOpen: boolean; breakdown: ServiceBreakdown[];
+  row: Row; isOpen: boolean; breakdown: ServiceBreakdownDetailed[];
   onToggle: () => void; mc: (v: number) => string;
 }) {
+  const [openServices, setOpenServices] = useState<Set<string>>(new Set());
+  const toggleService = (name: string) => setOpenServices(prev => {
+    const next = new Set(prev);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    return next;
+  });
+  const clientCount = new Set(breakdown.flatMap(s => s.visits.map(v => v.clientName))).size;
   return (
     <>
       <tr className="hover:bg-slate-50 cursor-pointer transition-colors" onClick={onToggle}>
@@ -458,19 +573,30 @@ function StaffRowBlock({ row, isOpen, breakdown, onToggle, mc }: {
             <div className="bg-slate-50 border-y border-slate-200">
               <table className="w-full text-xs">
                 <thead>
+                  <tr>
+                    <td colSpan={6} className="px-6 pt-2 text-slate-500 normal-case">
+                      {clientCount} client{clientCount !== 1 ? 's' : ''} · {breakdown.length} service{breakdown.length !== 1 ? 's' : ''}. Click a service to see its visits.
+                    </td>
+                  </tr>
                   <tr className="text-slate-500 uppercase tracking-wider">
                     <th className="px-6 py-2 text-left">Service</th>
                     <th className="px-4 py-2 text-right">Linked</th>
                     <th className="px-4 py-2 text-right">Unlinked</th>
-                    <th className="px-4 py-2 text-right">Revenue</th>
-                    <th className="px-4 py-2 text-right">Staff Cost</th>
-                    <th className="px-4 py-2 text-right">Margin</th>
+                    <th className="px-4 py-2 text-right">Revenue earned</th>
+                    <th className="px-4 py-2 text-right">Staff cost</th>
+                    <th className="px-4 py-2 text-right">Gross margin</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
                   {breakdown.map((svc, idx) => (
-                    <tr key={idx} className="hover:bg-slate-100">
-                      <td className="px-6 py-1.5 text-slate-700 font-medium">{svc.name}</td>
+                    <React.Fragment key={idx}>
+                    <tr className="hover:bg-slate-100 cursor-pointer" onClick={() => toggleService(svc.name)}>
+                      <td className="px-6 py-1.5 text-slate-700 font-medium">
+                        <span className="inline-flex items-center gap-1">
+                          {openServices.has(svc.name) ? <ChevronDown className="w-3 h-3 text-slate-400" /> : <ChevronRight className="w-3 h-3 text-slate-400" />}
+                          {svc.name}
+                        </span>
+                      </td>
                       <td className="px-4 py-1.5 text-right text-slate-600">{svc.visitsLinked}</td>
                       <td className="px-4 py-1.5 text-right">{svc.visitsNoData > 0 ? <span className="text-amber-500">{svc.visitsNoData}</span> : '0'}</td>
                       <td className="px-4 py-1.5 text-right font-mono text-blue-600">{formatCurrency(svc.revenue)}</td>
@@ -479,6 +605,40 @@ function StaffRowBlock({ row, isOpen, breakdown, onToggle, mc }: {
                         {formatCurrency(svc.margin)}
                       </td>
                     </tr>
+                    {openServices.has(svc.name) && (
+                      <tr>
+                        <td colSpan={6} className="pl-12 pr-4 pb-3 bg-white">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="text-slate-400 uppercase tracking-wider text-[10px]">
+                                <th className="py-1.5 text-left">Date</th>
+                                <th className="py-1.5 text-left">Time</th>
+                                <th className="py-1.5 text-left">Client</th>
+                                <th className="py-1.5 text-left">Pricing option</th>
+                                <th className="py-1.5 text-right">Revenue earned</th>
+                                <th className="py-1.5 text-right">Pay</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {svc.visits.map(v => (
+                                <tr key={v.id} className="text-slate-600">
+                                  <td className="py-1 whitespace-nowrap">{v.date}</td>
+                                  <td className="py-1">{v.time}</td>
+                                  <td className="py-1 text-slate-800">{v.clientName}</td>
+                                  <td className="py-1 truncate max-w-[260px]" title={v.packageName}>{v.packageName}</td>
+                                  <td className="py-1 text-right font-mono text-blue-600">
+                                    {v.revenue != null ? formatCurrency(v.revenue) : <span className="text-amber-500">no price</span>}
+                                    {v.isEstimated && <span className="ml-1 text-[10px] text-slate-400" title="Estimated price">est.</span>}
+                                  </td>
+                                  <td className="py-1 text-right font-mono text-amber-600">{formatCurrency(v.staffCost)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>

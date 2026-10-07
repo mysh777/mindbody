@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAllPages';
+import { fetchByIds } from '../lib/fetchByIds';
 import { toLocalISO } from '../utils/datePresets';
 import { ChevronDown, ChevronRight, Search, Calendar, ArrowUpDown, Download, User, Package, ShoppingCart, AlertTriangle, HelpCircle } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
@@ -78,14 +80,14 @@ export function ClientsReport() {
 
     setLoading(true);
     try {
-      const { data: salesData, error: salesError } = await supabase
+      const salesData = await fetchAllPages<{ client_id: string; total: number | null }>((from, to) => supabase
         .from('sales')
         .select('client_id, total')
         .gte('sale_datetime', `${startDate}T00:00:00`)
         .lte('sale_datetime', `${endDate}T23:59:59`)
-        .not('client_id', 'is', null);
-
-      if (salesError) throw salesError;
+        .not('client_id', 'is', null)
+        .order('id')
+        .range(from, to));
 
       const clientTotals = new Map<string, number>();
       (salesData || []).forEach(sale => {
@@ -100,14 +102,9 @@ export function ClientsReport() {
         return;
       }
 
-      const { data: clientsData, error: clientsError } = await supabase
-        .from('clients')
-        .select('id, mindbody_id, first_name, last_name, email, mobile_phone, home_phone, creation_date')
-        .in('id', clientIds);
+      const clientsData = await fetchByIds<Omit<ClientRow, 'total_purchases'>>('clients', 'id', clientIds, 'id, mindbody_id, first_name, last_name, email, mobile_phone, home_phone, creation_date');
 
-      if (clientsError) throw clientsError;
-
-      const clientsWithTotals: ClientRow[] = (clientsData || []).map(client => ({
+      const clientsWithTotals: ClientRow[] = clientsData.map(client => ({
         ...client,
         total_purchases: clientTotals.get(client.id) || 0,
       }));
@@ -138,34 +135,21 @@ export function ClientsReport() {
         .filter(Boolean);
       let pricingOptionsData: any[] = [];
       if (pricingOptionIds.length > 0) {
-        const { data: poData } = await supabase
-          .from('pricing_options')
-          .select('id, mindbody_id, price')
-          .in('id', pricingOptionIds);
-        pricingOptionsData = poData || [];
+        pricingOptionsData = await fetchByIds<any>('pricing_options', 'id', pricingOptionIds, 'id, mindbody_id, price');
       }
 
-      const { data: allClientSales } = await supabase
+      const allClientSales = await fetchAllPages<any>((from, to) => supabase
         .from('sales')
         .select('id, sale_datetime')
         .eq('client_id', clientId)
-        .order('sale_datetime', { ascending: false });
+        .order('sale_datetime', { ascending: false })
+        .order('id')
+        .range(from, to));
 
       const allSaleIds = (allClientSales || []).map(s => s.id);
       const saleDateMap = new Map((allClientSales || []).map(s => [s.id, s.sale_datetime]));
 
-      let allItemsData: any[] = [];
-      if (allSaleIds.length > 0) {
-        const batchSize = 200;
-        for (let i = 0; i < allSaleIds.length; i += batchSize) {
-          const batch = allSaleIds.slice(i, i + batchSize);
-          const { data } = await supabase
-            .from('sale_items')
-            .select('id, sale_id, item_id, item_name, description, quantity, total_amount, unit_price, payment_ref_id')
-            .in('sale_id', batch);
-          if (data) allItemsData = allItemsData.concat(data);
-        }
-      }
+      const allItemsData = await fetchByIds<any>('sale_items', 'sale_id', allSaleIds, 'id, sale_id, item_id, item_name, description, quantity, total_amount, unit_price, payment_ref_id');
 
       const resolvedPrices = resolveServicePrices(
         (servicesRes.data || []).map((s: any) => ({

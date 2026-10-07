@@ -1,265 +1,336 @@
-# DB Diagnostic Report: Visit Mismatch & Uncategorized Services
+# Этап 1 — покрытие данных и докачка истории 2025 года
 
-**Date:** 2026-09-23
-**Blocker:** Supabase MCP query tools not available in this session. SQL verification queries below must be run manually in the Supabase Dashboard SQL Editor.
+Дата проверки: 04.10.2026. Прод. **Часть A выполнена только чтением** — в базе и коде ничего не менялось.
+Reconciliation → Check now нажимает пользователь (до и после каждой части).
 
 ---
 
-## Problem 1 — 14 visits / 3,011.50 EUR vs Mindbody 12 / 2,441.50 EUR (Kriolipolize 2 manipulas, Aug 2026)
+## Часть A
 
-### Root Cause (from code analysis): Different Methodology
+### A1 — записей по месяцам (по дате события)
 
-Our "Margin by Procedure" report uses **visit-basis (accrual)**: it counts completed appointments and derives revenue from linked pricing options. Mindbody "Sales by Service" uses **cash-basis**: it counts sale transactions.
+Визиты — `start_datetime` (рижское время), продажи / позиции / платежи — `sale_date` продажи,
+пакеты — `active_date`, клиенты — `creation_date` (дата создания в Mindbody).
 
-| | Our MarginByService | Mindbody Sales by Service |
+| Месяц | appt Completed | appt все | sales | sale_items | payments | client_services | clients |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 2024-01 | 0 | 0 | 0 | 0 | 0 | 0 | 58 |
+| 2024-02 | 0 | 0 | 0 | 0 | 0 | 0 | 97 |
+| 2024-03 | 0 | 0 | 0 | 0 | 0 | 0 | 66 |
+| 2024-04 | 0 | 0 | 0 | 0 | 0 | 0 | 69 |
+| 2024-05 | 0 | 0 | 0 | 0 | 0 | 0 | 54 |
+| 2024-06 | 0 | 0 | 0 | 0 | 0 | 0 | 35 |
+| 2024-07 | 0 | 0 | 0 | 0 | 0 | 0 | 64 |
+| 2024-08 | 0 | 0 | 0 | 0 | 0 | 0 | 81 |
+| 2024-09 | 0 | 0 | 0 | 0 | 0 | 0 | 58 |
+| 2024-10 | 0 | 0 | 0 | 0 | 0 | 0 | 41 |
+| 2024-11 | 0 | 0 | 0 | 0 | 0 | 0 | 38 |
+| 2024-12 | 0 | 0 | 0 | 0 | 0 | 0 | 30 |
+| 2025-01 | **0** | **0** | 334 | 468 | 357 | 0 | 136 |
+| 2025-02 | **0** | **0** | 464 | 688 | 476 | 0 | 313 |
+| 2025-03 | **0** | **0** | 415 | 620 | 429 | 47 | 334 |
+| 2025-04 | **0** | **0** | 407 | 535 | 419 | 57 | 333 |
+| 2025-05 | **0** | **0** | 424 | 601 | 437 | 113 | 207 |
+| 2025-06 | **0** | **0** | 362 | 693 | 371 | 91 | 131 |
+| 2025-07 | **0** | **0** | 409 | 666 | 426 | 99 | 146 |
+| 2025-08 | **0** | **0** | 374 | 676 | 388 | 89 | 87 |
+| 2025-09 | **111** | 111 | 301 | 478 | 312 | 90 | 124 |
+| 2025-10 | **305** | 305 | 345 | 593 | 355 | 119 | 143 |
+| 2025-11 | **312** | 312 | 354 | 553 | 368 | 163 | 87 |
+| 2025-12 | **261** | 261 | 312 | 419 | 324 | 106 | 130 |
+| 2026-01 | 685 | 685 | 332 | 542 | 339 | 182 | 198 |
+| 2026-02 | 747 | 747 | 341 | 511 | 346 | 267 | 200 |
+| 2026-03 | 849 | 998 | 448 | 682 | 459 | 391 | 179 |
+| 2026-04 | 722 | 772 | 389 | 637 | 407 | 147 | 114 |
+| 2026-05 | 739 | 769 | 392 | 574 | 411 | 176 | 128 |
+| 2026-06 | 731 | 754 | 380 | 625 | 399 | 125 | 147 |
+| 2026-07 | 818 | 818 | 478 | 769 | 491 | 218 | 190 |
+| 2026-08 | 707 | 707 | 394 | 578 | 405 | 335 | 89 |
+| 2026-09 | 515 | 641 | 322 | 461 | 334 | 339 | 105 |
+
+Общие границы: визиты 16.09.2025 – 22.12.2026 (8 332); продажи 02.01.2025 – 03.10.2026 (7 995);
+позиции 12 394 и платежи 8 272 — все привязаны к продажам (сирот 0); пакеты 3 177 (active_date с 2018 г.);
+клиенты 6 230 (с 2015 г., 1 без даты создания).
+
+### A2 — где данные полные, где провалы
+
+**Продажи, позиции, платежи — полные с января 2025.** Объёмы 2025 и 2026 сопоставимы:
+
+| | Сентябрь 2025 | Сентябрь 2026 |
+|---|---:|---:|
+| sales | 301 | 322 |
+| sale_items | 478 | 461 |
+| payments | 312 | 334 |
+
+По кварталам продаж: 1 213 / 1 193 / 1 084 / 1 011 (2025) против 1 121 / 1 161 / 1 194 (2026). Провалов нет.
+До 2025 года продаж в базе нет вообще — их никогда не запрашивали (самый ранний запрос в журнале — 01.01.2025).
+
+**Визиты (appointments) — главный провал.**
+- Январь–август 2025: **0 визитов**.
+- Сентябрь–декабрь 2025: частично — 111 / 305 / 312 / 261 против ~700–850 в месяц в 2026.
+  Позиций-услуг в продажах за те же месяцы столько же, сколько в 2026 (Oct 2025 — 471, Jan 2026 — 427),
+  т.е. работы было сопоставимо, а визитов загружено примерно вдвое меньше.
+- Причина: визиты 2025 загружены один раз (16–17.03.2026) окном «16.09.2025 + 9 месяцев»;
+  у 11 мастеров за IV кв. 2025 — 0 визитов (Aquabike Centrs 1 и 2, Natālija Jelecka, Darja Zibkina,
+  Lara Tomaševica, Elīza Krūkle, Natālija Vakatova и др.), хотя в I кв. 2026 у них 120–280.
+  Ночная синхронизация берёт только текущий год (с 1 января 2026 + 3 месяца вперёд), поэтому 2025 больше не обновлялся.
+- В 2025 загружены только Completed (нет Booked / Cancelled / NoShow) — тоже признак неполной загрузки.
+- **С января 2026 визиты полные** (обновлены сегодня ночью).
+
+**Пакеты (client_services)** — заполнены по active_date начиная с марта 2025, но Mindbody отдаёт
+только действующие или недавние пакеты; полностью использованные и истёкшие пакеты 2025 не придут. Это ожидаемо, докачке не подлежит.
+
+**Клиенты** — полный справочник (6 230), докачка не нужна. Пики создания в феврале–апреле 2025 (313–334)
+похожи на массовый импорт / акцию в Mindbody — не провал.
+
+Побочное наблюдение (не провал покрытия): ~13–16 % продаж каждого квартала ссылаются на клиента,
+которого нет в справочнике клиентов (например, 2025-Q1 — 197 из 1 213, 2026-Q3 — 123 из 1 194). Доля стабильна во всех периодах.
+
+### A3 — что может отдать Mindbody
+
+1. **Самая ранняя дата.** Пробный запрос к Mindbody за январь 2024 **не выполнялся**: в текущей функции синхронизации
+   нет режима «только посмотреть» — любой запрос сразу записывает данные в базу, а часть A — только чтение.
+   Косвенные признаки, что история глубже 2025 года есть:
+   `FirstAppointmentDate` у клиентов — с 20.01.2015; пакеты с active_date с 20.09.2018; клиенты созданы с 09.01.2015.
+   Предлагаю проверку первой порцией части B (см. A4, шаг B0).
+2. **Дата первого визита — есть.** В `clients.raw_data`: `FirstAppointmentDate` (заполнено у 3 366 из 6 230)
+   и `FirstClassDate` (3 349). Совпадают у всех, кроме 22 клиентов. У 1 727 клиентов первый визит — 2025 год или позже;
+   у 16 дата в будущем (первая запись запланирована, но ещё не прошла).
+   Пример (Inta L., id 0041): FirstAppointmentDate = 21.07.2015, первая продажа в нашей базе — 29.04.2025,
+   первый визит в нашей базе — 06.01.2026. Значит, «новый клиент» нужно определять по полю Mindbody, а не по нашей истории.
+3. **Согласие на рекламу — есть**, поля в `clients.raw_data`:
+
+| Поле | Значение | Клиентов с true |
+|---|---|---:|
+| SendPromotionalEmails | реклама по e-mail | 296 (из них с e-mail — 248) |
+| SendPromotionalTexts | реклама по SMS | 54 (все с телефоном) |
+| хотя бы одно из двух | | 343 |
+| SendAccountEmails / Texts | служебные (счета) | 5 691 / 78 |
+| SendScheduleEmails / Texts | напоминания о записи | 5 696 / 108 |
+
+   Для Meta Ads годятся только два рекламных поля (343 клиента). Служебные и напоминания — не согласие на рекламу.
+
+### A4 — план докачки
+
+Механизм тот же, что у ночной синхронизации: ручной вызов функции синхронизации с указанием года и месяца.
+Каждая порция — отдельная запись в Sync History, upsert по mindbody_id, ничего не удаляется.
+Ориентир по времени — журнал синхронизаций: визиты за весь 2026 год (6 923) — 33–43 с; продажи ~1 150 шт. — 40–85 с. Лимит 150 с.
+
+| Шаг | Что | Период | Порций | На порцию | Обязательно? |
+|---|---|---|---:|---|---|
+| B0 | Пробный запрос: визиты | январь 2024 | 1 | ~5–10 с | проверка ответа на A3.1; данные 2024 ни на что в 2026 не влияют |
+| **B1** | **Визиты (appointments)** | **январь–декабрь 2025** (сентябрь–декабрь повторно, чтобы закрыть пробелы) | **12** | ~5–15 с (~700 визитов) | **да — это и есть провал** |
+| B2 | Продажи + позиции + платежи | 2024 | 12 (по месяцу, ~400 продаж) | ~20–40 с | **не рекомендую сейчас** — см. риск ниже |
+| — | Пакеты (client_services) | — | — | — | нет: Mindbody не отдаёт использованные/истёкшие |
+| — | Клиенты | — | — | — | нет: справочник полный |
+
+Итого обязательная часть: 12 порций (B1) + по желанию 1 пробная (B0). Порции запускаются строго по очереди;
+при ошибке любой порции — остановка и отчёт.
+
+Что изменится после B1 (ожидаемо):
+- Выручка и баланс клиентов **не меняются** (визиты не участвуют в расчёте выручки и FIFO по Payment on Account).
+- Эталоны Reconciliation (июль–сентябрь 2026) не затрагиваются — визиты 2026 уже полные.
+- Появятся визиты 2025 → графики «этот год против прошлого» и сегменты станут корректными.
+- В Sleeping Clients могут появиться клиенты, чей последний визит был в 2025 году (раньше они были «без визитов»).
+- Отчёты по мастерам за 2025 год (Margin by Staff) станут заполненными.
+
+Риск B2 (продажи 2024): расчёт баланса (Payment on Account, FIFO) идёт по всей истории клиента.
+Старые пополнения / оплаты с баланса из 2024 могут сдвинуть распределение и изменить выручку июля–сентября 2026
+(сейчас первая оплата с баланса в базе — 02.01.2025, всего 403). Для цели этапа (сравнение 2025 и 2026) продажи 2025 уже полные,
+поэтому B2 предлагаю делать только по отдельному решению.
+
+Известное ограничение B1: визиты запрашиваются по списку мастеров из справочника (32 человека).
+Если мастер уволился и пропал из справочника Mindbody, его визиты 2025 года не придут. Проверка — в части C
+(сравнение визитов и позиций-услуг по месяцам 2025).
+
+---
+
+## СТОП — нужно подтверждение
+
+1. Делать B1 (визиты 2025, 12 порций)? — рекомендую да.
+2. Делать пробу B0 (визиты за январь 2024)? — по желанию.
+3. Продажи 2024 (B2) — рекомендую пока не делать.
+
+Перед стартом части B: Reconciliation → Check now (пользователь), убедиться, что всё ✓.
+
+---
+
+## Часть B — выполнена
+
+Подтверждено пользователем: только визиты 2025 года, 12 порций по месяцу. Январь 2024 и продажи 2024 не загружались.
+
+### B0 — первая попытка января (до исправления)
+
+| Порция | Месяц | Получено от Mindbody | Сохранено | Sync History | Статус |
+|---|---|---:|---:|---|---|
+| 1 | 2025-01 | 652 (все Completed, уникальные) | 510 | appointments, completed, 652 | **частично — 142 визита не сохранены** |
+
+Причина потери 142 визитов:
+- 8 визитов января ссылаются на тип услуги Mindbody **№ 227**, которого нет в нашем справочнике услуг
+  (справочник содержит только действующие услуги — 138 шт.; № 227, видимо, архивная).
+- База не принимает визит с неизвестной услугой, а сохранение идёт пачками по 200 визитов:
+  одна такая запись отклоняет всю пачку. Пропали визиты двух мастеров — Svetlana Siničkina и Natālija Jelecka.
+- Функция синхронизации при этом пишет «completed» и количество полученных, а не сохранённых записей,
+  поэтому в Sync History ошибка не видна.
+- Это же, скорее всего, объясняет нули у 11 мастеров за конец 2025 года при загрузке в марте 2026.
+
+Уже сохранённые 510 визитов января были корректны; ничего не удалялось.
+
+### B1 — решение пользователя: вариант 2 с автоматическими заглушками
+
+Что изменено в синхронизации (работает и в ночных запусках):
+- Если визит ссылается на услугу, которой нет в справочнике, синхронизация сама создаёт запись
+  «Archived service #<номер>» (неактивная, с пометкой «архивная услуга, заглушка») и сохраняет визит.
+- Если пачка всё же не сохраняется, она дописывается по одной записи — одна плохая запись не блокирует остальные.
+- Ошибки больше не проглатываются: в Sync History статус **completed** только если получено = сохранено и
+  ни один шаг не упал; иначе **partial** (что-то сохранилось) или **error** (ничего). Число записей —
+  реально сохранённые; в подробностях — по каждой таблице «получено / сохранено / текст ошибок».
+- Экран Sync History показывает новые статусы partial (оранжевый) и error (красный) и учитывает их как сбои.
+
+### B2 — проверка остальных шагов: где было «записал ошибку и пошёл дальше»
+
+| Шаг синхронизации | Было | Стало |
 |---|---|---|
-| **Counts** | Completed appointments | Sale transactions |
-| **Revenue** | `pricing_options.price / session_count` per visit | `sale_items.total_amount` per sale |
-| **Period** | `appointments.start_datetime` | `sales.sale_date` |
+| Визиты (оба способа загрузки) | ошибка пачки в лог, статус completed | заглушки услуг + проверенное сохранение |
+| Продажи | то же | проверенное сохранение |
+| Платежи | то же | проверенное сохранение |
+| Позиции продаж | ошибка каждой позиции в лог | проверенное сохранение пачками |
+| Пакеты клиентов | то же | проверенное сохранение |
+| Транзакции | то же | проверенное сохранение |
+| Ставки мастеров (услуги мастеров) | то же | проверенное сохранение |
+| Тарифы (pricing options) | то же | проверенное сохранение |
+| Клиенты | то же | проверенное сохранение |
+| Падение целого шага | писалось в лог, итог completed | шаг попадает в ошибки, статус partial/error |
+| Нет входа в Mindbody для закрытых данных | шаг молча пропускался | записывается как ошибка |
 
-**Why 14 != 12:** A client buys a multi-session package in one sale but uses those sessions across multiple appointments (possibly spanning months). Extra visits come from packages purchased in prior months but used in August, or rebooked/comp sessions with no separate sale.
+Не переведены (низкий риск, справочники и вспомогательные шаги): посещения клиентов, пакеты (packages),
+справочники (сайты, локации, мастера, программы, услуги, категории), товары, связи тарифов с услугами,
+дозаполнение пакетов-сирот (уже собирает ошибки отдельно).
 
-**Revenue delta (570 EUR):** Visits without a linked client_service fall back to session-type median price, which can inflate the total vs actual sales.
+### B3 — загрузка 2025 года, по месяцам
 
-### Verification Queries (run in Supabase Dashboard)
+| Порция | Месяц | Получено | Сохранено | Sync History | Новые заглушки услуг |
+|---|---|---:|---:|---|---|
+| 1 (повтор) | 2025-01 | 652 | 652 | completed, 652 | #227 |
+| 2 | 2025-02 | 793 | 793 | completed, 793 | 1 |
+| 3 | 2025-03 | 809 | 809 | completed, 809 | — |
+| 4 | 2025-04 | 812 | 812 | completed, 812 | — |
+| 5 | 2025-05 | 826 | 826 | completed, 826 | 1 |
+| 6 | 2025-06 | 641 | 641 | completed, 641 | — |
+| 7 | 2025-07 | 842 | 842 | completed, 842 | 1 |
+| 8 | 2025-08 | 805 | 805 | completed, 805 | — |
+| 9 | 2025-09 | 617 | 617 | completed, 617 | — |
+| 10 | 2025-10 | 696 | 696 | completed, 696 | — |
+| 11 | 2025-11 | 709 | 709 | completed, 709 | — |
+| 12 | 2025-12 | 649 | 649 | completed, 649 | — |
+| **Итого** | | **8 851** | **8 851** | ошибок нет | 4 |
 
-```sql
--- A: Visit-basis count
-SELECT COUNT(*) as visits
-FROM appointments a
-JOIN session_types st ON st.id = a.session_type_id
-WHERE st.name ILIKE '%Kriolipolīze 2%'
-  AND a.start_datetime >= '2026-08-01' AND a.start_datetime < '2026-09-01'
-  AND a.status = 'Completed';
+Созданы заглушки: Archived service #227, #98, #225, #320 (справочник услуг: 138 → 142).
 
--- B: Cash-basis count (should match Mindbody)
-SELECT COUNT(*) as sales, SUM(si.total_amount) as revenue
-FROM sale_items si
-JOIN sales s ON s.id = si.sale_id
-WHERE si.description ILIKE '%Kriolipolīze 2%'
-  AND s.sale_date >= '2026-08-01' AND s.sale_date < '2026-09-01';
+## Часть C — результаты
 
--- C: Check for returned items or system client
-SELECT COUNT(*) as total,
-  COUNT(*) FILTER (WHERE si.returned = true) as returned,
-  COUNT(*) FILTER (WHERE s.client_id = '1') as system_client,
-  SUM(si.total_amount) as total_revenue
-FROM sale_items si
-JOIN sales s ON s.id = si.sale_id
-WHERE si.description ILIKE '%Kriolipolīze 2%'
-  AND s.sale_date >= '2026-08-01' AND s.sale_date < '2026-09-01';
+### C1 — визиты по месяцам: 2025 против 2026
 
--- D: Cross-check multiple services
-SELECT si.description, COUNT(*) as sales, SUM(si.total_amount) as revenue,
-  COUNT(*) FILTER (WHERE si.returned = true) as returned,
-  COUNT(*) FILTER (WHERE s.client_id = '1') as system_client
-FROM sale_items si JOIN sales s ON s.id = si.sale_id
-WHERE s.sale_date >= '2026-08-01' AND s.sale_date < '2026-09-01'
-  AND (si.description ILIKE '%Kriolipolīze 2%' OR si.description ILIKE '%EMS Sculptor 30%'
-       OR si.description ILIKE '%Klasiskā%masāža 60%' OR si.description ILIKE '%Endotherapy 30%')
-GROUP BY si.description ORDER BY si.description;
-```
+| Месяц | 2025 Completed | 2025 все | Мастеров 2025 | 2026 Completed | 2026 все | Мастеров 2026 |
+|---|---:|---:|---:|---:|---:|---:|
+| 01 | 652 | 652 | 15 | 685 | 685 | 18 |
+| 02 | 793 | 793 | 16 | 747 | 747 | 18 |
+| 03 | 809 | 809 | 17 | 849 | 998 | 18 |
+| 04 | 812 | 812 | 17 | 722 | 772 | 18 |
+| 05 | 826 | 826 | 16 | 739 | 769 | 18 |
+| 06 | 641 | 641 | 15 | 731 | 754 | 18 |
+| 07 | 842 | 842 | 16 | 818 | 818 | 18 |
+| 08 | 805 | 805 | 16 | 707 | 707 | 18 |
+| 09 | 617 | 617 | 16 | 515 | 641 | 19 |
+| 10 | 696 | 696 | 16 | 45 | 328 | 19 |
+| 11 | 709 | 709 | 17 | 0 | 75 | 7 |
+| 12 | 649 | 649 | 17 | 0 | 49 | 2 |
 
----
+2025 год теперь сопоставим с 2026 по объёму. Mindbody за 2025 отдаёт только завершённые визиты
+(отменённые/неявки в этой выгрузке не приходят), поэтому «все» = Completed. Октябрь–декабрь 2026 — будущие записи.
 
-## Problem 2 — EMS Sculptor 30 min and other tariffs in Uncategorized
+### C2 — 11 мастеров с нулём визитов за конец 2025
 
-### Root Cause (from code analysis): Two possible causes
+| Мастер | Сен–дек 2025 | Весь 2025 |
+|---|---:|---:|
+| Aquabike Centrs 1 | 380 | 1 249 |
+| Aquabike Centrs 2 | 308 | 1 080 |
+| Natālija Jelecka | 216 | 747 |
+| Elīza Krūkle | 164 | 586 |
+| Lara Tomaševica | 139 | 506 |
+| Darja Zibkina | 96 | 435 |
+| Aquabike Sport Centrs 3 | 23 | 169 |
+| Irina Merkuļjeva | 53 | 152 |
+| Anastasija Pavļenkova | 53 | 94 |
+| Arina Zemskova | 16 | 16 |
+| Natālija Vakatova | 0 | 0 |
 
-1. **NULL/empty `revenue_category`** in `pricing_options` — the Mindbody API field `RevenueCategory` was null when synced (line 858 of sync function: `revenue_category: service.RevenueCategory`). When this is empty, and the fallback `session_types.category` is also empty, the service shows as "Uncategorized".
+10 из 11 теперь с визитами. У Natālija Vakatova первый визит в базе — 05.01.2026 (417 визитов в 2026),
+то есть в 2025 году она не работала; ноль корректен. Для справки: Emma Tarnavska, Renāte Lankovska,
+Valērija Meļņičuka тоже начали работать только в 2026 (с 29.09, 05.05 и 01.07 соответственно).
 
-2. **Case/whitespace mismatch** — the code's `CATEGORY_ORDER` used exact string matching. If the DB had `"ems"` or `"EMS "` (trailing space), it wouldn't match `"EMS"` and would appear outside the ordered groups.
+### C3 — финансы не изменились
 
-### Code Fix Applied
+| Показатель | До загрузки | После |
+|---|---:|---:|
+| Продажи июль–сентябрь 2026, шт. | 1 194 | 1 194 |
+| Продажи июль–сентябрь 2026, сумма | 99 952,46 | 99 952,46 |
+| Платежи, шт. / сумма | 8 272 / 711 486,06 | 8 272 / 711 486,06 |
+| Позиции продаж | 12 394 | 12 394 |
+| Пакеты клиентов | 3 177 | 3 177 |
+| Визиты январь–сентябрь 2026 | 6 891 | 6 891 |
 
-- Category matching is now **case-insensitive with trim** — `"ems"`, `"EMS"`, `"Ems "` all match the canonical `"EMS"` entry.
-- Empty/whitespace-only categories now correctly fall to "Uncategorized" instead of being treated as a named category.
+**Reconciliation → Check now** нажимает пользователь (сам я нажать не могу): до и после должно быть всё ✓.
+Визиты на выручку не влияют, продажи и платежи не менялись.
 
-### Verification Queries (run in Supabase Dashboard)
+### C4 — Margin by Staff, сентябрь 2025 (Completed)
 
-```sql
--- E: EMS pricing options
-SELECT name, revenue_category, mindbody_id
-FROM pricing_options
-WHERE name ILIKE '%EMS%' OR name ILIKE '%Sculptor%' OR name ILIKE '%PelviTone%'
-ORDER BY name;
+Стоимость мастера — по ставкам из «Staff Pay Rates» (ручных переопределений нет).
 
--- F: All unique revenue_category values
-SELECT COALESCE(revenue_category, '(NULL)') as category, COUNT(*) as cnt,
-  LENGTH(revenue_category) as char_len
-FROM pricing_options GROUP BY revenue_category ORDER BY revenue_category NULLS FIRST;
+| Локация | Мастер | Визиты | Staff cost, € |
+|---|---|---:|---:|
+| Center | Aquabike Centrs 1 | 108 | 1 944,00 |
+| Center | Aquabike Centrs 2 | 84 | 0,00 |
+| Center | Natālija Jelecka | 64 | 1 312,50 |
+| Center | Svetlana Siničkina | 60 | 1 117,00 |
+| Center | Tatjana Jakovleva | 54 | 883,50 |
+| Center | Elīza Krūkle | 40 | 700,10 |
+| Center | Julija Sļepikovska | 40 | 795,00 |
+| Center | Milena Gode | 17 | 0,00 |
+| Center | Irina Merkuļjeva | 11 | 0,00 |
+| Center | Aquabike Sport Centrs 3 | 6 | 0,00 |
+| **Center итого** | | **484** | **6 752,10** |
+| Alfa | Anastasija Stepanavičute | 33 | 552,50 |
+| Alfa | Aquabike ALFA 1 | 27 | 486,00 |
+| Alfa | Aquabike ALFA 2 | 26 | 0,00 |
+| Alfa | Lara Tomaševica | 22 | 373,00 |
+| Alfa | Darja Zibkina | 19 | 353,50 |
+| Alfa | Anastasija Pavļenkova | 6 | 0,00 |
+| **Alfa итого** | | **133** | **1 765,00** |
+| **Всего** | | **617** | **8 517,10** |
 
--- G: Tariffs with NULL/empty category
-SELECT name, revenue_category, mindbody_id
-FROM pricing_options
-WHERE revenue_category IS NULL OR revenue_category = '' ORDER BY name;
+Нулевая стоимость: у Milena Gode, Irina Merkuļjeva, Anastasija Pavļenkova и у «второго» аквабайка
+(Centrs 2, ALFA 2, Sport Centrs 3) ставка в Staff Pay Rates равна 0. 2 визита (Jelecka, Siničkina)
+без ставки — услуга-заглушка. Стоит проверить ставки перед сверкой с Mindbody.
 
--- H: Tariffs not matching any CATEGORY_ORDER entry
-SELECT name, revenue_category FROM pricing_options
-WHERE revenue_category IS NOT NULL AND revenue_category != ''
-  AND LOWER(TRIM(revenue_category)) NOT IN (
-    'ems','hair removal','ķermeņa procedūras','kriolipolize','lipolytic',
-    'lipoaction','machine','massage','konsultācijas','gift card reservation',
-    'sauna','phytomer','velashape')
-ORDER BY revenue_category, name;
+### C5 — Margin by Service, сентябрь 2025 (By sale date, All locations)
 
--- I: Check if raw_data has RevenueCategory for NULLs
-SELECT name, raw_data->>'RevenueCategory' as raw_cat, revenue_category
-FROM pricing_options
-WHERE (revenue_category IS NULL OR revenue_category = '') AND raw_data IS NOT NULL LIMIT 30;
-```
+Визиты и стоимость мастеров по услугам (Completed, 617 визитов, 8 517,10 €). Крупнейшие:
 
-### Data Fix (run if Query I shows raw_data has the category)
+| Услуга | Визиты | Staff cost, € |
+|---|---:|---:|
+| Aquabike Tonic 1 | 127 | 2 286,00 |
+| Aquabike Tonic 2 | 104 | 0,00 |
+| Endotherapy 50 min | 68 | 1 428,00 |
+| Endotherapy 30 min | 64 | 1 006,50 |
+| Klasiskā / Relax 60 min | 52 | 1 162,00 |
+| EMS Sculptor 30 min | 52 | 229,60 |
+| Limfodrenāžas masāža 60 min | 17 | 425,00 |
+| Kriolipolīze 2 manipulas | 16 | 455,30 |
+| PelviTone krēsls 30 min | 15 | 0,00 |
+| Kriolipolīze 1 manipula | 9 | 189,00 |
+| Остальные 31 услуга (вкл. Archived #227 и #225 по 1 визиту) | 93 | 1 335,70 |
 
-```sql
--- Backfill revenue_category from raw_data
-UPDATE pricing_options
-SET revenue_category = raw_data->>'RevenueCategory'
-WHERE (revenue_category IS NULL OR revenue_category = '')
-  AND raw_data->>'RevenueCategory' IS NOT NULL
-  AND raw_data->>'RevenueCategory' != '';
-```
-
----
-
-## Summary of Changes Made
-
-| Item | Status |
-|---|---|
-| CATEGORY_ORDER matching: case-insensitive + trim | Fixed in code |
-| Methodology subtitle on Margin by Procedure page | Added |
-| NULL revenue_category backfill from raw_data | SQL provided, must run manually |
-| Visit vs cash basis mismatch explanation | Documented above |
-| Supabase SQL verification | Queries provided, must run manually (MCP tools unavailable) |
-
----
-
-## Problem 3 — Staff Cost: 9,305.80 EUR (ours) vs 6,123.30 EUR (Mindbody Payroll, Aug 2026)
-
-### Root Cause Analysis (from code trace)
-
-The cost calculation lives in `useSalesMarginData` (lines 212-223). The rate priority chain is:
-
-1. `staff_appointment_rates` where `effective_to IS NULL` (override rate per staff+service)
-2. `staff_appointment_rates` with `session_type_id = NULL` (default rate for that staff member)
-3. `staff_session_types.pay_rate` (base rate from the staff-service link table)
-4. Falls back to `0` if none found
-
-**Three confirmed causes of the +3,182.50 EUR difference:**
-
-#### Cause A: Visit count difference (706 vs 471)
-
-Our report counts ALL completed appointments (706). Mindbody Payroll only counts sessions where a pay rate is configured (471 "paid" sessions). The 235 extra visits in our report have `cost = 0` so they don't inflate the total cost, BUT they inflate the visit count shown in the report.
-
-#### Cause B: Rate source mismatch
-
-Our system reads rates from two tables (`staff_appointment_rates` and `staff_session_types`). These are populated either manually through the Staff Rates Manager or from sync data. Mindbody Payroll uses its own internal payroll rate configuration which may differ from what's stored in our database.
-
-Key scenarios where rates diverge:
-- A rate was updated in Mindbody but not re-synced to our database
-- A rate was manually entered in our Staff Rates Manager that doesn't match Mindbody
-- The `staff_session_types.pay_rate` contains a value from initial sync that's since been changed in Mindbody
-- Override rates in `staff_appointment_rates` may apply to services that Mindbody doesn't pay for
-
-#### Cause C: Default rate fallback
-
-Line 218-219: if `staff_appointment_rates` has a row with `session_type_id = NULL` for a staff member, that default rate applies to ALL their services -- including ones that may have zero pay rate in Mindbody. This could significantly inflate costs for staff members who do many different service types but only get paid for some.
-
-### Verification Queries (run in Supabase Dashboard)
-
-```sql
--- Q1: Staff cost breakdown matching our report logic
-SELECT 
-  s.first_name || ' ' || s.last_name AS staff_name,
-  COUNT(a.id) AS visits,
-  SUM(
-    COALESCE(
-      sar_specific.rate_per_appointment,
-      sar_default.rate_per_appointment,
-      sst.pay_rate,
-      0
-    )
-  ) AS our_total_cost,
-  COUNT(a.id) FILTER (WHERE COALESCE(sar_specific.rate_per_appointment, sar_default.rate_per_appointment, sst.pay_rate, 0) = 0) AS visits_zero_rate,
-  COUNT(a.id) FILTER (WHERE COALESCE(sar_specific.rate_per_appointment, sar_default.rate_per_appointment, sst.pay_rate, 0) > 0) AS visits_with_rate
-FROM appointments a
-JOIN staff s ON s.id = a.staff_id
-LEFT JOIN staff_session_types sst ON sst.staff_id = a.staff_id AND sst.session_type_id = a.session_type_id
-LEFT JOIN staff_appointment_rates sar_specific ON sar_specific.staff_id = a.staff_id AND sar_specific.session_type_id = a.session_type_id AND sar_specific.effective_to IS NULL
-LEFT JOIN staff_appointment_rates sar_default ON sar_default.staff_id = a.staff_id AND sar_default.session_type_id IS NULL AND sar_default.effective_to IS NULL
-WHERE a.start_datetime >= '2026-08-01'
-  AND a.start_datetime < '2026-09-01'
-  AND a.status = 'Completed'
-GROUP BY s.id, s.first_name, s.last_name
-ORDER BY our_total_cost DESC;
-```
-
-```sql
--- Q2: Rate detail for top-cost staff members
-SELECT 
-  s.first_name || ' ' || s.last_name AS staff_name,
-  st.name AS service,
-  sst.pay_rate AS base_rate,
-  sar_specific.rate_per_appointment AS override_rate,
-  sar_default.rate_per_appointment AS default_rate,
-  COALESCE(sar_specific.rate_per_appointment, sar_default.rate_per_appointment, sst.pay_rate, 0) AS effective_rate,
-  COUNT(a.id) AS visits,
-  SUM(COALESCE(sar_specific.rate_per_appointment, sar_default.rate_per_appointment, sst.pay_rate, 0)) AS total_cost
-FROM appointments a
-JOIN staff s ON s.id = a.staff_id
-JOIN session_types st ON st.id = a.session_type_id
-LEFT JOIN staff_session_types sst ON sst.staff_id = a.staff_id AND sst.session_type_id = a.session_type_id
-LEFT JOIN staff_appointment_rates sar_specific ON sar_specific.staff_id = a.staff_id AND sar_specific.session_type_id = a.session_type_id AND sar_specific.effective_to IS NULL
-LEFT JOIN staff_appointment_rates sar_default ON sar_default.staff_id = a.staff_id AND sar_default.session_type_id IS NULL AND sar_default.effective_to IS NULL
-WHERE a.start_datetime >= '2026-08-01'
-  AND a.start_datetime < '2026-09-01'
-  AND a.status = 'Completed'
-GROUP BY s.id, s.first_name, s.last_name, st.name, sst.pay_rate, sar_specific.rate_per_appointment, sar_default.rate_per_appointment
-ORDER BY s.last_name, total_cost DESC;
-```
-
-```sql
--- Q3: Staff members with default (catch-all) override rates
-SELECT 
-  s.first_name || ' ' || s.last_name AS staff_name,
-  sar.rate_per_appointment AS default_rate
-FROM staff_appointment_rates sar
-JOIN staff s ON s.id = sar.staff_id
-WHERE sar.session_type_id IS NULL
-  AND sar.effective_to IS NULL
-ORDER BY s.last_name;
-```
-
-```sql
--- Q4: Visits with zero rate (these are in our 706 but not in Mindbody's 471)
-SELECT 
-  s.first_name || ' ' || s.last_name AS staff_name,
-  st.name AS service,
-  COUNT(a.id) AS visits_zero_rate
-FROM appointments a
-JOIN staff s ON s.id = a.staff_id
-JOIN session_types st ON st.id = a.session_type_id
-LEFT JOIN staff_session_types sst ON sst.staff_id = a.staff_id AND sst.session_type_id = a.session_type_id
-LEFT JOIN staff_appointment_rates sar ON sar.staff_id = a.staff_id AND (sar.session_type_id = a.session_type_id OR sar.session_type_id IS NULL) AND sar.effective_to IS NULL
-WHERE a.start_datetime >= '2026-08-01'
-  AND a.start_datetime < '2026-09-01'
-  AND a.status = 'Completed'
-  AND COALESCE(sar.rate_per_appointment, sst.pay_rate, 0) = 0
-GROUP BY s.id, s.first_name, s.last_name, st.name
-ORDER BY visits_zero_rate DESC;
-```
-
-### Mindbody Payroll Reference (Aug 2026)
-
-| Staff | MB Sessions | MB Payroll EUR |
-|---|---|---|
-| Grand Total | 471 | 6,123.30 |
-| Aquabike Centrs 1 | 70 | 1,260.00 |
-| Aquabike ALFA 1 | 41 | 738.00 |
-
-### Recommended Next Steps
-
-1. Run Q1 above to see which staff members have the largest cost discrepancy
-2. Run Q3 to check if any staff have catch-all default rates that inflate costs
-3. Compare Q2 effective rates against the actual Mindbody Payroll PDF line by line
-4. For staff with wrong rates: update via the Staff Rates Manager in the app, or directly fix in `staff_appointment_rates` / `staff_session_types`
+Выручка «по дате продажи» берётся из продаж: за сентябрь 2025 в базе 301 продажа на 24 806,70 €
+(продажи есть с 02.01.2025, загрузка визитов их не меняла). Точные строки выручки и маржи по тарифам
+пользователь видит в отчёте Margin by Service (сентябрь 2025, By sale date, All locations) — их и сверять с Mindbody.

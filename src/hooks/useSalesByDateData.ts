@@ -1,19 +1,21 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAllPages';
+import { fetchByIds, mapLimited } from '../lib/fetchByIds';
 import { DateRange } from '../utils/salesFilters';
 
-const NON_CASH_PAYMENT_TYPES = ['Prepaid Gift Card', 'Account', 'Comp/Guest'];
+export const NON_CASH_PAYMENT_TYPES = ['Prepaid Gift Card', 'Account', 'Comp/Guest', 'Other'];
 
 const POA_ITEM_IDS = new Set(['-6', '10289']);
 const GIFT_CARD_PATTERN = /D[AĀ]VANU KARTE/i;
 
-function isPaymentOnAccount(itemId: string | null, description: string | null): boolean {
+export function isPaymentOnAccount(itemId: string | null, description: string | null): boolean {
   if (description === 'Payment on Account') return true;
   if (itemId && POA_ITEM_IDS.has(itemId)) return true;
   return false;
 }
 
-function isGiftCard(description: string | null): boolean {
+export function isGiftCard(description: string | null): boolean {
   return !!description && GIFT_CARD_PATTERN.test(description);
 }
 
@@ -23,6 +25,19 @@ export interface SaleDateTariffRow {
   qtySold: number;
   revenue: number;
   returnedCount: number;
+}
+
+export interface ClientTariffDetail {
+  saleId: string;
+  saleDate: string;
+  amount: number;
+  rule: 'cash' | 'fifo';
+}
+
+export interface ClientTariffEntry {
+  revenue: number;
+  qty: number;
+  details: ClientTariffDetail[];
 }
 
 interface UseSalesByDateDataProps {
@@ -51,40 +66,6 @@ interface RawPayment {
   sale_id: string;
   type: string | null;
   amount: number | null;
-}
-
-async function fetchByIds<T>(
-  table: string,
-  idCol: string,
-  ids: string[],
-  select: string,
-  batchSize = 500,
-): Promise<T[]> {
-  const out: T[] = [];
-  for (let i = 0; i < ids.length; i += batchSize) {
-    const { data } = await supabase
-      .from(table)
-      .select(select)
-      .in(idCol, ids.slice(i, i + batchSize));
-    if (data) out.push(...(data as T[]));
-  }
-  return out;
-}
-
-async function paginatedFetch<T>(
-  build: (offset: number) => any,
-  pageSize = 1000,
-): Promise<T[]> {
-  const out: T[] = [];
-  let off = 0;
-  while (true) {
-    const { data } = await build(off).range(off, off + pageSize - 1);
-    if (!data || data.length === 0) break;
-    out.push(...(data as T[]));
-    if (data.length < pageSize) break;
-    off += pageSize;
-  }
-  return out;
 }
 
 function paymentBreakdown(payments: RawPayment[]) {
@@ -139,26 +120,31 @@ function normalizeName(s: string): string {
   return s.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDateDataProps) {
-  const [loading, setLoading] = useState(false);
-  const [rows, setRows] = useState<SaleDateTariffRow[]>([]);
-  const [totalReturned, setTotalReturned] = useState(0);
-  const [unallocatedAmount, setUnallocatedAmount] = useState(0);
+export interface SalesByDateResult {
+  rows: SaleDateTariffRow[];
+  totalReturned: number;
+  unallocatedAmount: number;
+  clientTariffBreakdown: Map<string, ClientTariffEntry>;
+  // Keyed "YYYY-MM|locationId": sale date for direct sales, deposit date and location for FIFO.
+  byMonth: Map<string, Map<string, { category: string; revenue: number }>>;
+}
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
+export async function computeSalesByDateData(
+  dateRange: DateRange,
+  selectedLocation: string,
+): Promise<SalesByDateResult> {
+  try {
       // --- pricing options lookup ---
       const poByMbId = new Map<string, { name: string; category: string }>();
       const poByNameNorm = new Map<string, string>(); // normalized name → revenue_category
       const poByCatId = new Map<string, string>(); // CategoryId string → revenue_category
 
-      const poAll = await paginatedFetch<{
+      const poAll = await fetchAllPages<{
         mindbody_id: number | null;
         name: string;
         revenue_category: string;
       }>(
-        off => supabase.from('pricing_options').select('mindbody_id, name, revenue_category'),
+        (from, to) => supabase.from('pricing_options').select('mindbody_id, name, revenue_category').order('id').range(from, to),
       );
       for (const po of poAll) {
         const cat = po.revenue_category || '';
@@ -171,32 +157,34 @@ export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDa
       }
 
       // --- sales in period ---
-      const periodSales = await paginatedFetch<SaleRecord>(off =>
-        selectedLocation !== 'all'
+      const periodSales = await fetchAllPages<SaleRecord>((from, to) =>
+        (selectedLocation !== 'all'
           ? supabase.from('sales').select('id, client_id, location_id, sale_date')
               .gte('sale_date', dateRange.start).lte('sale_date', dateRange.end)
               .eq('location_id', selectedLocation)
           : supabase.from('sales').select('id, client_id, location_id, sale_date')
-              .gte('sale_date', dateRange.start).lte('sale_date', dateRange.end),
+              .gte('sale_date', dateRange.start).lte('sale_date', dateRange.end)
+        ).order('id').range(from, to),
       );
 
       if (periodSales.length === 0) {
-        setRows([]); setTotalReturned(0); setUnallocatedAmount(0); setLoading(false);
-        return;
+        return { rows: [], totalReturned: 0, unallocatedAmount: 0, clientTariffBreakdown: new Map(), byMonth: new Map() };
       }
 
       const saleIds = periodSales.map(s => s.id);
       const salesById = new Map(periodSales.map(s => [s.id, s]));
 
       // --- items + payments for period sales ---
-      const periodItems = await fetchByIds<RawItem>(
-        'sale_items', 'sale_id', saleIds,
-        'sale_id, item_id, total_amount, is_service, description, returned, category_id',
-      );
-      const periodPayments = await fetchByIds<RawPayment>(
-        'payments', 'sale_id', saleIds,
-        'sale_id, type, amount',
-      );
+      const [periodItems, periodPayments] = await Promise.all([
+        fetchByIds<RawItem>(
+          'sale_items', 'sale_id', saleIds,
+          'sale_id, item_id, total_amount, is_service, description, returned, category_id',
+        ),
+        fetchByIds<RawPayment>(
+          'payments', 'sale_id', saleIds,
+          'sale_id, type, amount',
+        ),
+      ]);
       const payBySale = groupBySaleId(periodPayments);
 
       // Build category_id → revenue_category mapping from catalogued sale_items
@@ -223,8 +211,18 @@ export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDa
 
       // ========== RULE 1 + 2: direct rows ==========
       const tariffMap: Record<string, SaleDateTariffRow> = {};
+      const ctBreakdown = new Map<string, ClientTariffEntry>();
       let returnedTotal = 0;
       const poaClients = new Set<string>();
+      const byMonth: SalesByDateResult['byMonth'] = new Map();
+      const addToMonth = (date: string, locationId: string, tariff: string, category: string, revenue: number) => {
+        const month = `${date.slice(0, 7)}|${locationId}`;
+        const tariffs = byMonth.get(month) ?? new Map<string, { category: string; revenue: number }>();
+        const entry = tariffs.get(tariff) ?? { category, revenue: 0 };
+        entry.revenue += revenue;
+        tariffs.set(tariff, entry);
+        byMonth.set(month, tariffs);
+      };
 
       for (const si of periodItems) {
         const itemIdStr = si.item_id != null ? String(si.item_id) : null;
@@ -265,30 +263,48 @@ export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDa
         tariffMap[key].qtySold += qty;
         tariffMap[key].revenue += revenue;
         if (si.returned) tariffMap[key].returnedCount++;
+
+        const sale = salesById.get(si.sale_id);
+        addToMonth(sale?.sale_date || '', sale?.location_id || '', tariffName, tariffCategory, revenue);
+        if (sale?.client_id) {
+          const ctKey = `${sale.client_id}|${tariffName}`;
+          let ct = ctBreakdown.get(ctKey);
+          if (!ct) { ct = { revenue: 0, qty: 0, details: [] }; ctBreakdown.set(ctKey, ct); }
+          ct.revenue += revenue;
+          ct.qty += qty;
+          ct.details.push({ saleId: si.sale_id, saleDate: (sale.sale_date || '').slice(0, 10), amount: revenue, rule: 'cash' });
+        }
       }
 
       // ========== RULE 3: Payment on Account FIFO ==========
       let totalUnallocated = 0;
 
-      for (const clientId of poaClients) {
+      const poaClientList = [...poaClients];
+      const histories = await mapLimited(poaClientList, async clientId => {
         // Full sale history for this client
-        const clientSales = await paginatedFetch<SaleRecord>(off =>
+        const clientSales = await fetchAllPages<SaleRecord>((from, to) =>
           supabase.from('sales').select('id, client_id, location_id, sale_date')
             .eq('client_id', clientId)
             .order('sale_date', { ascending: true })
-            .order('id', { ascending: true }),
+            .order('id', { ascending: true })
+            .range(from, to),
         );
         const cSaleIds = clientSales.map(s => s.id);
-        const cSalesById = new Map(clientSales.map(s => [s.id, s]));
+        const [cItems, cPayments] = await Promise.all([
+          fetchByIds<RawItem>(
+            'sale_items', 'sale_id', cSaleIds,
+            'sale_id, item_id, total_amount, is_service, description, returned, category_id',
+          ),
+          fetchByIds<RawPayment>(
+            'payments', 'sale_id', cSaleIds,
+            'sale_id, type, amount',
+          ),
+        ]);
+        return { clientSales, cItems, cPayments };
+      }, 4);
 
-        const cItems = await fetchByIds<RawItem>(
-          'sale_items', 'sale_id', cSaleIds,
-          'sale_id, item_id, total_amount, is_service, description, returned, category_id',
-        );
-        const cPayments = await fetchByIds<RawPayment>(
-          'payments', 'sale_id', cSaleIds,
-          'sale_id, type, amount',
-        );
+      for (const [clientIndex, clientId] of poaClientList.entries()) {
+        const { clientSales, cItems, cPayments } = histories[clientIndex];
         const cPayBySale = groupBySaleId(cPayments);
         const cItemsBySale = groupBySaleId(cItems);
 
@@ -300,14 +316,24 @@ export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDa
           const items = cItemsBySale.get(sale.id) || [];
           const bd = paymentBreakdown(cPayBySale.get(sale.id) || []);
 
+          // Sum PoA items on this sale so Account is split among non-PoA items only
+          let poaItemTotal = 0;
+          for (const si of items) {
+            const iid = si.item_id != null ? String(si.item_id) : null;
+            if (isPaymentOnAccount(iid, si.description)) poaItemTotal += Number(si.total_amount) || 0;
+          }
+          const nonPoaTotal = bd.paidAll - poaItemTotal;
+
           for (const si of items) {
             const totalAmt = Number(si.total_amount) || 0;
             const itemIdStr = si.item_id != null ? String(si.item_id) : null;
 
             if (isPaymentOnAccount(itemIdStr, si.description)) {
-              // Credit events
-              if (bd.paidAll !== 0) {
-                const cashPortion = totalAmt * bd.paidCash / bd.paidAll;
+              // Account payments on the same sale cover other items, not
+              // the PoA deposit, so exclude them from the denominator.
+              const poaDenom = bd.paidAll - bd.paidAccount;
+              if (poaDenom !== 0) {
+                const cashPortion = totalAmt * bd.paidCash / poaDenom;
                 const nonCashPortion = totalAmt - cashPortion;
                 if (Math.abs(cashPortion) > 0.001) {
                   events.push({
@@ -329,28 +355,36 @@ export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDa
               continue;
             }
 
-            // Skip gift cards for debit events too
             if (isGiftCard(si.description)) continue;
 
-            // Debit: items paid (partially) with Account
-            if (bd.paidAccount !== 0 && bd.paidAll !== 0) {
-              const po = itemIdStr ? poByMbId.get(itemIdStr) : null;
-              const isCatalogued = !!po;
-              const isUncataloguedService = !po && si.is_service && itemIdStr;
+            if (totalAmt < 0 && bd.paidAccount < 0) {
+              const refundAmt = Math.abs(totalAmt * bd.paidAccount / bd.paidAll);
+              if (refundAmt > 0.001) {
+                events.push({
+                  idx: eventIdx++, saleId: sale.id,
+                  saleDate: sale.sale_date || '', locationId: sale.location_id || '',
+                  kind: 'noncash_credit', amount: refundAmt, remaining: refundAmt,
+                  tariffName: null, tariffCategory: null, isService: false,
+                });
+              }
+              continue;
+            }
 
-              if (isCatalogued || isUncataloguedService) {
-                const tName = po ? (po.name || 'Unknown') : (si.description || 'Unknown service');
+            // Every Account-paid item draws from the balance (services AND products)
+            if (bd.paidAccount !== 0 && bd.paidAll !== 0) {
+              const denom = nonPoaTotal !== 0 ? nonPoaTotal : bd.paidAll;
+              const accountPortion = Math.abs(totalAmt * bd.paidAccount / denom);
+              if (accountPortion > 0.001) {
+                const po = itemIdStr ? poByMbId.get(itemIdStr) : null;
+                const tName = po ? (po.name || 'Unknown') : (si.description || 'Unknown');
                 const tCat = po ? (po.category || '') : resolveCategory(si.description, si.category_id);
-                const accountPortion = Math.abs(totalAmt * bd.paidAccount / bd.paidAll);
-                if (accountPortion > 0.001) {
-                  events.push({
-                    idx: eventIdx++, saleId: sale.id,
-                    saleDate: sale.sale_date || '', locationId: sale.location_id || '',
-                    kind: 'debit', amount: accountPortion, remaining: accountPortion,
-                    tariffName: tName, tariffCategory: tCat,
-                    isService: true,
-                  });
-                }
+                events.push({
+                  idx: eventIdx++, saleId: sale.id,
+                  saleDate: sale.sale_date || '', locationId: sale.location_id || '',
+                  kind: 'debit', amount: accountPortion, remaining: accountPortion,
+                  tariffName: tName, tariffCategory: tCat,
+                  isService: !!po || !!si.is_service,
+                });
               }
             }
           }
@@ -403,6 +437,7 @@ export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDa
           }
           agg.revenue += m.amount;
           agg.creditIdxes.add(m.credit.idx);
+          addToMonth(cd, m.credit.locationId, tName, m.debit.tariffCategory || '', m.amount);
         }
 
         for (const [tName, agg] of fifoAgg) {
@@ -411,6 +446,21 @@ export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDa
           }
           tariffMap[tName].revenue += agg.revenue;
           tariffMap[tName].qtySold += agg.creditIdxes.size;
+
+          const ctKey = `${clientId}|${tName}`;
+          let ct = ctBreakdown.get(ctKey);
+          if (!ct) { ct = { revenue: 0, qty: 0, details: [] }; ctBreakdown.set(ctKey, ct); }
+          ct.revenue += agg.revenue;
+          ct.qty += agg.creditIdxes.size;
+          for (const m2 of matches) {
+            if (m2.credit.kind !== 'cash_credit') continue;
+            if ((m2.debit.tariffName || 'Unknown') !== tName) continue;
+            const cd2 = m2.credit.saleDate.slice(0, 10);
+            if (cd2 < dateRange.start || cd2 > dateRange.end) continue;
+            if (selectedLocation !== 'all' && m2.credit.locationId !== selectedLocation) continue;
+            if (!m2.debit.isService) continue;
+            ct.details.push({ saleId: m2.credit.saleId, saleDate: cd2, amount: m2.amount, rule: 'fifo' });
+          }
         }
 
         // Unallocated: cash credits in period that still have remaining
@@ -425,11 +475,28 @@ export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDa
 
       // Unallocated is tracked as info only — NOT added to tariffMap
 
-      setRows(Object.values(tariffMap).sort((a, b) => b.revenue - a.revenue));
-      setTotalReturned(returnedTotal);
-      setUnallocatedAmount(totalUnallocated);
+      const sortedRows = Object.values(tariffMap).sort((a, b) => b.revenue - a.revenue);
+      return { rows: sortedRows, totalReturned: returnedTotal, unallocatedAmount: totalUnallocated, clientTariffBreakdown: ctBreakdown, byMonth };
     } catch (error) {
-      console.error('Error loading sales-by-date data:', error);
+      throw error;
+    }
+  }
+
+export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDateDataProps) {
+  const [loading, setLoading] = useState(false);
+  const [rows, setRows] = useState<SaleDateTariffRow[]>([]);
+  const [totalReturned, setTotalReturned] = useState(0);
+  const [unallocatedAmount, setUnallocatedAmount] = useState(0);
+  const [clientTariffBreakdown, setClientTariffBreakdown] = useState<Map<string, ClientTariffEntry>>(new Map());
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await computeSalesByDateData(dateRange, selectedLocation);
+      setRows(result.rows);
+      setTotalReturned(result.totalReturned);
+      setUnallocatedAmount(result.unallocatedAmount);
+      setClientTariffBreakdown(result.clientTariffBreakdown);
     } finally {
       setLoading(false);
     }
@@ -437,5 +504,5 @@ export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDa
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  return { loading, rows, totalReturned, unallocatedAmount, reload: loadData };
+  return { loading, rows, totalReturned, unallocatedAmount, clientTariffBreakdown, reload: loadData };
 }

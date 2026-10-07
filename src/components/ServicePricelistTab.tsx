@@ -115,10 +115,10 @@ export function ServicePricelistTab({ loading, appointments, dateRange }: Servic
         'Service': r.sessionTypeName,
         'Pricing Option': r.pricingOptionName,
         'Staff': r.staffName,
-        'Revenue / Visit': Number(r.revenuePerVisit.toFixed(2)),
-        'Staff Cost': Number(r.staffCost.toFixed(2)),
-        'Margin': Number(r.margin.toFixed(2)),
-        'Margin %': `${r.marginPercent.toFixed(1)}%`,
+        'Revenue earned / visit': Number(r.revenuePerVisit.toFixed(2)),
+        'Staff cost': Number(r.staffCost.toFixed(2)),
+        'Gross margin': Number(r.margin.toFixed(2)),
+        'Gross margin %': `${r.marginPercent.toFixed(1)}%`,
         'Visits': r.visits,
       }));
       exportToExcel(exportData, `service_pricelist_${dateRange.start}_to_${dateRange.end}`);
@@ -175,10 +175,10 @@ export function ServicePricelistTab({ loading, appointments, dateRange }: Servic
                 <SortHeader field="sessionTypeName" label="Service" />
                 <SortHeader field="pricingOptionName" label="Pricing Option" />
                 <SortHeader field="staffName" label="Staff" />
-                <SortHeader field="revenuePerVisit" label="Revenue / Visit" align="right" />
-                <SortHeader field="staffCost" label="Staff Cost" align="right" />
-                <SortHeader field="margin" label="Margin" align="right" />
-                <th className="px-4 py-3 text-right font-semibold text-slate-600">Margin %</th>
+                <SortHeader field="revenuePerVisit" label="Revenue earned / visit" align="right" />
+                <SortHeader field="staffCost" label="Staff cost" align="right" />
+                <SortHeader field="margin" label="Gross margin" align="right" />
+                <th className="px-4 py-3 text-right font-semibold text-slate-600">Gross margin %</th>
                 <SortHeader field="visits" label="Visits" align="right" />
               </tr>
             </thead>

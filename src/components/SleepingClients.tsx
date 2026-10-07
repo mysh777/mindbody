@@ -1,5 +1,9 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
+import { handlePrint } from '../utils/printReport';
+import { formatApptDate } from '../utils/formatDateTime';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAllPages';
+import { fetchByIds } from '../lib/fetchByIds';
 import {
   Moon,
   RefreshCw,
@@ -16,7 +20,8 @@ import {
 } from 'lucide-react';
 import { CopyLinkButton } from './CopyLinkButton';
 import { exportToExcel } from '../utils/exportExcel';
-import { isPackageActive, toLocalISO } from '../utils/packageStatus';
+import { isPackageActive, toLocalISO, PACKAGE_STATUS_COLUMNS } from '../utils/packageStatus';
+import { PagePurpose } from './PageHeader';
 
 // ── Types ──
 
@@ -88,14 +93,7 @@ const DEFAULT_THRESHOLDS: Record<string, number> = {
   'Pasūtīt Dāvanu karti': 30,
 };
 
-const formatDate = (dateStr: string | null) => {
-  if (!dateStr) return '-';
-  try {
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return dateStr;
-    return `${d.getDate().toString().padStart(2, '0')}.${(d.getMonth() + 1).toString().padStart(2, '0')}.${d.getFullYear()}`;
-  } catch { return dateStr; }
-};
+const formatDate = formatApptDate;
 
 function medianOf(arr: number[]): number | null {
   if (arr.length === 0) return null;
@@ -122,6 +120,8 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
   const [allGroupNames, setAllGroupNames] = useState<string[]>([]);
   const [settingsTableExists, setSettingsTableExists] = useState(true);
   const [sleepingCountByGroup, setSleepingCountByGroup] = useState<Record<string, number>>({});
+  const [loadedAt, setLoadedAt] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // ── Load settings ──
 
@@ -232,14 +232,15 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
     setLoading(true);
     try {
       // 1. Load categories (programs)
-      const { data: cats } = await supabase.from('service_categories').select('id, name');
-      const categories = cats || [];
+      const categories = await fetchAllPages<{ id: string; name: string }>((from, to) => supabase
+        .from('service_categories').select('id, name').order('id').range(from, to));
       const catMap = new Map(categories.map(c => [c.id, c.name]));
       setAllGroupNames(categories.map(c => c.name).sort());
 
       // 2. Load session_types → program_id mapping
-      const { data: stData } = await supabase.from('session_types').select('id, name, program_id');
-      const stMap = new Map((stData || []).map(st => [st.id, { programId: st.program_id, name: st.name }]));
+      const stData = await fetchAllPages<{ id: string; name: string; program_id: string }>((from, to) => supabase
+        .from('session_types').select('id, name, program_id').order('id').range(from, to));
+      const stMap = new Map(stData.map(st => [st.id, { programId: st.program_id, name: st.name }]));
 
       // 3. Load settings
       const settings = await loadSettings(categories);
@@ -249,41 +250,30 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
       const today = toLocalISO(new Date());
       const now = new Date();
 
-      let allAppts: { client_id: string; session_type_id: string; start_datetime: string; location_id: string; status: string }[] = [];
-      let offset = 0;
-      while (true) {
-        const { data } = await supabase
-          .from('appointments')
-          .select('client_id, session_type_id, start_datetime, location_id, status')
-          .eq('status', 'Completed')
-          .order('start_datetime', { ascending: false })
-          .range(offset, offset + 999);
-        if (!data || data.length === 0) break;
-        allAppts = allAppts.concat(data);
-        if (data.length < 1000) break;
-        offset += 1000;
-      }
+      const allAppts = await fetchAllPages<{ client_id: string; session_type_id: string; start_datetime: string; location_id: string; status: string }>((from, to) => supabase
+        .from('appointments')
+        .select('client_id, session_type_id, start_datetime, location_id, status')
+        .eq('status', 'Completed')
+        .order('start_datetime', { ascending: false })
+        .order('id')
+        .range(from, to));
 
       // 5. Load future bookings
       const futureStatuses = ['Booked', 'Confirmed'];
-      const { data: futureData } = await supabase
+      const futureData = await fetchAllPages<{ client_id: string }>((from, to) => supabase
         .from('appointments')
         .select('client_id')
         .in('status', futureStatuses)
-        .gte('start_datetime', today);
-      const clientsWithFuture = new Set((futureData || []).map(a => a.client_id));
+        .gte('start_datetime', today)
+        .order('id')
+        .range(from, to));
+      const clientsWithFuture = new Set(futureData.map(a => a.client_id));
 
       // 6. Load clients
       const clientIds = [...new Set(allAppts.map(a => a.client_id).filter(Boolean))];
       const clientMap = new Map<string, { first_name: string; last_name: string; mobile_phone: string; home_phone: string; status: string | null }>();
-      for (let i = 0; i < clientIds.length; i += 200) {
-        const batch = clientIds.slice(i, i + 200);
-        const { data: cl } = await supabase
-          .from('clients')
-          .select('id, first_name, last_name, mobile_phone, home_phone, status')
-          .in('id', batch);
-        for (const c of (cl || [])) clientMap.set(c.id, c);
-      }
+      const cl = await fetchByIds<{ id: string; first_name: string; last_name: string; mobile_phone: string; home_phone: string; status: string | null }>('clients', 'id', clientIds, 'id, first_name, last_name, mobile_phone, home_phone, status');
+      for (const c of cl) clientMap.set(c.id, c);
 
       // 7. Group appointments by client + program
       type ApptEntry = { date: string; serviceName: string; locationId: string };
@@ -307,23 +297,22 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
       }
 
       // 8. Load active client_services for package matching
-      const { data: csData } = await supabase
+      const csData = await fetchAllPages<any>((from, to) => supabase
         .from('client_services')
-        .select('client_id, name, remaining, expiration_date, pricing_option_id, count')
-        .gt('remaining', 0);
+        .select(`client_id, name, remaining, expiration_date, pricing_option_id, count, ${PACKAGE_STATUS_COLUMNS}`)
+        .gt('remaining', 0)
+        .order('id')
+        .range(from, to));
 
-      const activeCS = (csData || []).filter(cs =>
-        isPackageActive({ current: true, remaining: cs.remaining, expiration_date: cs.expiration_date }, today)
+      const activeCS = csData.filter(cs =>
+        isPackageActive(cs, today)
       );
 
       // Load pricing options for name resolution + program_id
       const poIds = [...new Set(activeCS.map(cs => cs.pricing_option_id).filter(Boolean))] as string[];
       const poMap = new Map<string, { name: string; programId: string | null }>();
-      for (let i = 0; i < poIds.length; i += 200) {
-        const batch = poIds.slice(i, i + 200);
-        const { data: pos } = await supabase.from('pricing_options').select('id, name, program_id').in('id', batch);
-        for (const po of (pos || [])) poMap.set(po.id, { name: po.name, programId: po.program_id });
-      }
+      const pos = await fetchByIds<{ id: string; name: string; program_id: string | null }>('pricing_options', 'id', poIds, 'id, name, program_id');
+      for (const po of pos) poMap.set(po.id, { name: po.name, programId: po.program_id });
 
       // Group active packages by client + program
       const clientPackages = new Map<string, Map<string, { name: string; remaining: number; expirationDate: string | null }>>();
@@ -431,6 +420,7 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
       setClients(result);
       setSleepingCountByGroup(groupCounts);
       setGenerated(true);
+      setLoadedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
       console.error('Error loading sleeping clients:', err);
     } finally {
@@ -493,15 +483,13 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
   // ── Render ──
 
   return (
-    <div className="w-full bg-slate-50 min-h-full">
+    <div ref={containerRef} className="w-full bg-slate-50 min-h-full">
       <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
         <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
           <Moon className="w-6 h-6 text-indigo-500" />
           Sleeping Clients
         </h2>
-        <p className="text-slate-600 mt-1">
-          Regular clients who stopped visiting beyond their group threshold
-        </p>
+        <PagePurpose section="sleeping-clients" />
       </div>
 
       <div className="p-6">
@@ -593,7 +581,7 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
                   Excel
                 </button>
                 <button
-                  onClick={() => window.print()}
+                  onClick={() => handlePrint(containerRef)}
                   className="px-4 py-2 bg-slate-600 text-white rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors flex items-center gap-2"
                 >
                   <Printer className="w-4 h-4" />
@@ -624,6 +612,9 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
                 )}
                 Refresh
               </button>
+              {loadedAt && !loading && (
+                <span className="text-xs text-slate-400">Loaded at {loadedAt}</span>
+              )}
             </div>
           </div>
         </div>

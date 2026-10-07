@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAllPages';
+import { fetchByIds } from '../lib/fetchByIds';
 import { useReportFilters } from '../lib/reportFiltersContext';
 import { ChevronDown, ChevronRight, Package, Calendar, User, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 
@@ -308,13 +310,8 @@ export function ClientExpandableView() {
         }
       }
 
-      if (filterMode === 'with_packages' || filterMode === 'active_only') {
-        if (clientIdsWithServices.length > 0) {
-          if (!debouncedSearch) {
-            query = query.in('id', clientIdsWithServices);
-          }
-        }
-      }
+      const filterByIds = (filterMode === 'with_packages' || filterMode === 'active_only')
+        && clientIdsWithServices.length > 0 && !debouncedSearch;
 
       if (!debouncedSearch) {
         query = query.limit(200);
@@ -322,7 +319,12 @@ export function ClientExpandableView() {
         query = query.limit(100);
       }
 
-      const { data: clientsData } = await query;
+      const clientsData = filterByIds
+        ? (await fetchByIds<{ id: string; first_name: string; last_name: string; email: string; mobile_phone: string }>(
+            'clients', 'id', clientIdsWithServices, 'id, first_name, last_name, email, mobile_phone'))
+            .sort((a, b) => (a.last_name == null ? 1 : b.last_name == null ? -1 : a.last_name.localeCompare(b.last_name)))
+            .slice(0, 200)
+        : (await query).data;
 
       let filteredData = clientsData || [];
       if ((filterMode === 'with_packages' || filterMode === 'active_only') && debouncedSearch) {
@@ -346,13 +348,13 @@ export function ClientExpandableView() {
   const loadClientDetails = async (clientId: string) => {
     setLoadingDetails(clientId);
     try {
-      const [servicesRes, appointmentsRes] = await Promise.all([
+      const [servicesRes, appointmentRows] = await Promise.all([
         supabase
           .from('client_services')
           .select('*')
           .eq('client_id', clientId)
           .order('active_date', { ascending: false }),
-        supabase
+        fetchAllPages<any>((from, to) => supabase
           .from('appointments')
           .select(`
             id,
@@ -364,16 +366,18 @@ export function ClientExpandableView() {
           `)
           .eq('client_id', clientId)
           .not('client_service_id', 'is', null)
-          .order('start_datetime', { ascending: false }),
+          .order('start_datetime', { ascending: false })
+          .order('id')
+          .range(from, to)),
       ]);
 
       const services = servicesRes.data || [];
-      const appointments = (appointmentsRes.data || []).map((a: any) => ({
+      const appointments = appointmentRows.map((a: any) => ({
         id: a.id,
         start_datetime: a.start_datetime,
         status: a.status,
         client_service_id: a.client_service_id,
-        staff_name: a.staff ? `${a.staff.first_name || ''} ${a.staff.last_name || ''}`.trim() : null,
+        staff_name: a.staff ? `${a.staff.first_name || ''} ${a.staff.last_name || ''}`.trim() : '',
         session_type_name: a.session_type?.name || null,
       }));
 

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAllPages';
 import { BarChart3, TrendingUp, Download } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 
@@ -17,10 +18,12 @@ export function Charts() {
   const loadChartData = async () => {
     setLoading(true);
     try {
-      const { data: sales } = await supabase
+      const sales = await fetchAllPages<{ sale_datetime: string; total: number | null }>((from, to) => supabase
         .from('sales')
         .select('sale_datetime, total')
-        .not('sale_datetime', 'is', null);
+        .not('sale_datetime', 'is', null)
+        .order('id')
+        .range(from, to));
 
       if (sales) {
         const monthlyData: Record<string, number> = {};
@@ -41,12 +44,14 @@ export function Charts() {
         setSalesByMonth(sortedMonths);
       }
 
-      const { data: appointments } = await supabase
+      const appointments = await fetchAllPages<any>((from, to) => supabase
         .from('appointments')
         .select(`
           staff_id,
           staff!appointments_staff_id_fkey(first_name, last_name)
-        `);
+        `)
+        .order('id')
+        .range(from, to));
 
       if (appointments) {
         const staffData: Record<string, number> = {};

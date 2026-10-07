@@ -1,0 +1,180 @@
+  // ── Generate report ──
+
+  const generate = useCallback(async () => {
+    if (!selectedClient) return;
+    setLoading(true);
+    setGenerated(false);
+    setLoadError(null);
+    try {
+      const clientId = selectedClient.id;
+
+      const [svcData, salesData, apptData] = await Promise.all([
+        fetchAllPages<any>((from, to) => supabase
+          .from('client_services')
+          .select(`id, mindbody_id, name, count, remaining, active_date, expiration_date, program_name, pricing_option_id, ${PACKAGE_STATUS_COLUMNS}`)
+          .eq('client_id', clientId)
+          .order('active_date', { ascending: false })
+          .order('id')
+          .range(from, to)),
+        fetchAllPages<{ id: string; sale_datetime: string; location_id: string | null }>((from, to) => supabase
+          .from('sales')
+          .select('id, sale_datetime, location_id')
+          .eq('client_id', clientId)
+          .order('sale_datetime', { ascending: false })
+          .order('id')
+          .range(from, to)),
+        fetchAllPages<MarginAppointment>((from, to) => supabase
+          .from('appointments')
+          .select('id, client_id, staff_id, session_type_id, location_id, start_datetime, end_datetime, status, client_service_id')
+          .eq('client_id', clientId)
+          .eq('stale', false)
+          .order('start_datetime', { ascending: false })
+          .order('id')
+          .range(from, to)),
+      ]);
+
+      const poIds = svcData.map((s: any) => s.pricing_option_id).filter(Boolean);
+      const staffIds = [...new Set(apptData.map(a => a.staff_id).filter(Boolean))] as string[];
+      const stIds = [...new Set(apptData.map(a => a.session_type_id).filter(Boolean))] as string[];
+
+      const [poData, allItems, staffData, stData, pricedVisits] = await Promise.all([
+        fetchByIds<any>('pricing_options', 'id', poIds, 'id, mindbody_id, price'),
+        fetchByIds<any>('sale_items', 'sale_id', salesData.map(s => s.id), 'id, sale_id, item_id, item_name, description, quantity, total_amount, unit_price, payment_ref_id'),
+        fetchByIds<any>('staff', 'id', staffIds, 'id, first_name, last_name'),
+        fetchByIds<any>('session_types', 'id', stIds, 'id, name'),
+        priceMarginVisits(apptData.filter(a => a.status === 'Completed')),
+      ]);
+      const staffMap = new Map<string, string>(staffData.map((s: any) => [s.id, `${s.first_name} ${s.last_name}`]));
+      const stMap = new Map<string, string>(stData.map((st: any) => [st.id, st.name]));
+      const pricedById = new Map(pricedVisits.map(v => [v.id, v]));
+
+      const resolvedPrices = resolveServicePrices(
+        svcData.map((s: any) => ({
+          id: s.id,
+          mindbody_id: s.mindbody_id,
+          pricing_option_id: s.pricing_option_id,
+          payment_date: null,
+          active_date: s.active_date,
+        })),
+        poData,
+        allItems,
+        salesData,
+      );
+
+      const resolvedServices: ClientService[] = svcData.map((s: any) => {
+        const rp = resolvedPrices.get(s.id) || { price: 0, source: 'no_data' as const };
+        return {
+          id: s.id,
+          mindbody_id: s.mindbody_id,
+          name: s.name,
+          count: s.count,
+          remaining: s.remaining,
+          active_date: s.active_date,
+          expiration_date: s.expiration_date,
+          program_name: s.program_name,
+          pricing_option_id: s.pricing_option_id,
+          current: s.current,
+          returned: s.returned === true,
+          paid_price: rp.price,
+          price_source: rp.source,
+        };
+      });
+      const serviceByMbId = new Map(resolvedServices.map(s => [s.mindbody_id, s]));
+
+      const events: TimelineEvent[] = [];
+      const saleById = new Map(salesData.map(s => [s.id, s]));
+      for (const item of allItems) {
+        const sale = saleById.get(item.sale_id);
+        if (!sale) continue;
+        events.push({
+          id: `purchase-${item.id}`,
+          date: sale.sale_datetime,
+          type: 'purchase',
+          description: item.item_name || item.description || '-',
+          amount: Number(item.total_amount) || 0,
+          staffName: null,
+          serviceName: null,
+          status: null,
+          priceSource: null,
+          revenuePerVisit: null,
+          staffPay: null,
+          clientServiceId: null,
+          locationId: sale.location_id,
+        });
+      }
+
+      for (const appt of apptData) {
+        const csId = appt.client_service_id;
+        const svc = csId ? serviceByMbId.get(csId) : undefined;
+        const priced = pricedById.get(appt.id);
+        let priceSource: PriceSource | null = null;
+        if (priced) {
+          if (priced.revenue === null) priceSource = 'no_data';
+          else if (priced.isEstimated) priceSource = 'session_type_estimate';
+          else priceSource = svc?.price_source ?? 'direct_sale_item';
+        }
+        events.push({
+          id: `visit-${appt.id}`,
+          date: appt.start_datetime,
+          type: 'visit',
+          description: (appt.session_type_id && stMap.get(appt.session_type_id)) || 'Unknown session',
+          amount: null,
+          staffName: (appt.staff_id && staffMap.get(appt.staff_id)) || null,
+          serviceName: svc?.name || null,
+          status: appt.status,
+          priceSource,
+          revenuePerVisit: priced?.revenue ?? null,
+          staffPay: priced ? priced.staffCost : null,
+          clientServiceId: csId || null,
+          locationId: appt.location_id,
+        });
+      }
+
+      events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      // Balances are all-time and all locations; only the timeline follows the period and location filters.
+      let totalPurchased = 0;
+      let totalSpent = 0;
+      for (const svc of resolvedServices) {
+        const b = computeServiceBalance(svc);
+        totalPurchased += b.total;
+        totalSpent += b.spent;
+      }
+      const totalRemaining = computeObligations(resolvedServices).total;
+      const visitTotals = summarizeVisits(pricedVisits);
+
+      setServices(resolvedServices);
+      setAllEvents(events);
+      setBalance({
+        totalPurchased,
+        totalSpent,
+        totalRemaining,
+        recognizedRevenue: visitTotals.revenueEarned,
+        obligations: totalRemaining,
+        allCompletedVisits: pricedVisits.length,
+      });
+      setGenerated(true);
+      setLoadedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
+    } catch (err) {
+      console.error('Error generating client card:', err);
+      setLoadError('Client data could not be loaded. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedClient]);
+
+  useEffect(() => {
+    if (!selectedClient) return;
+    const params: Record<string, string> = { client: selectedClient.id, from: startDate, to: endDate, view: viewMode };
+    if (locationId !== 'all') params.location = locationId;
+    if (generated) onParamsChange?.(params);
+  }, [generated, selectedClient, startDate, endDate, viewMode, locationId, onParamsChange]);
+
+  const timeline = useMemo(() => {
+    const periodStart = `${startDate}T00:00:00`;
+    const periodEnd = `${endDate}T23:59:59`;
+    return allEvents.filter(e =>
+      e.date >= periodStart && e.date <= periodEnd &&
+      (locationId === 'all' || e.locationId === locationId));
+  }, [allEvents, startDate, endDate, locationId]);
+

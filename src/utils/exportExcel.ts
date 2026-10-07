@@ -67,6 +67,21 @@ export function exportToExcel(data: any[], filename: string) {
   triggerDownload(buildBlob(workbook), stamp(filename));
 }
 
+function csvCell(value: unknown): string {
+  const s = value === null || value === undefined ? '' : String(value);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+export function exportToCsv(rows: Record<string, unknown>[], columns: string[], filename: string) {
+  if (rows.length === 0) {
+    alert('No data to export');
+    return;
+  }
+  const lines = [columns.join(','), ...rows.map(r => columns.map(c => csvCell(r[c])).join(','))];
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  triggerDownload(blob, `${filename}_${new Date().toISOString().split('T')[0]}.csv`);
+}
+
 interface SheetDef {
   name: string;
   data: any[];

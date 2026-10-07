@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchAllPages } from '../lib/fetchAllPages';
+import { fetchByIds } from '../lib/fetchByIds';
 import { toLocalISO } from '../utils/datePresets';
 import {
   ChevronDown,
@@ -16,6 +18,7 @@ import {
 import { AlertTriangle, HelpCircle } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 import { resolveServicePrices, type PriceSource } from '../utils/resolveServicePrices';
+import { PagePurpose } from './PageHeader';
 
 interface ClientService {
   id: string;
@@ -137,14 +140,14 @@ export function ClientBalance() {
     if (!startDate || !endDate) return;
     setLoading(true);
     try {
-      const { data: salesData, error: salesError } = await supabase
+      const salesData = await fetchAllPages<{ client_id: string; total: number | null }>((from, to) => supabase
         .from('sales')
         .select('client_id, total')
         .gte('sale_datetime', `${startDate}T00:00:00`)
         .lte('sale_datetime', `${endDate}T23:59:59`)
-        .not('client_id', 'is', null);
-
-      if (salesError) throw salesError;
+        .not('client_id', 'is', null)
+        .order('id')
+        .range(from, to));
 
       const clientTotals = new Map<string, number>();
       (salesData || []).forEach(sale => {
@@ -159,14 +162,9 @@ export function ClientBalance() {
         return;
       }
 
-      const { data: clientsData, error: clientsError } = await supabase
-        .from('clients')
-        .select('id, mindbody_id, first_name, last_name, email, mobile_phone, home_phone, creation_date')
-        .in('id', clientIds);
+      const clientsData = await fetchByIds<Omit<ClientRow, 'total_purchases'>>('clients', 'id', clientIds, 'id, mindbody_id, first_name, last_name, email, mobile_phone, home_phone, creation_date');
 
-      if (clientsError) throw clientsError;
-
-      const clientsWithTotals: ClientRow[] = (clientsData || []).map(client => ({
+      const clientsWithTotals: ClientRow[] = clientsData.map(client => ({
         ...client,
         total_purchases: clientTotals.get(client.id) || 0,
       }));
@@ -197,50 +195,36 @@ export function ClientBalance() {
         .filter(Boolean);
       let pricingOptionsData: any[] = [];
       if (pricingOptionIds.length > 0) {
-        const { data: poData } = await supabase
-          .from('pricing_options')
-          .select('id, mindbody_id, price')
-          .in('id', pricingOptionIds);
-        pricingOptionsData = poData || [];
+        pricingOptionsData = await fetchByIds<any>('pricing_options', 'id', pricingOptionIds, 'id, mindbody_id, price');
       }
 
-      const { data: allClientSales } = await supabase
+      const allClientSales = await fetchAllPages<any>((from, to) => supabase
         .from('sales')
         .select('id, sale_datetime')
         .eq('client_id', clientId)
-        .order('sale_datetime', { ascending: false });
+        .order('sale_datetime', { ascending: false })
+        .order('id')
+        .range(from, to));
 
       const allSaleIds = (allClientSales || []).map(s => s.id);
       const saleDateMap = new Map((allClientSales || []).map(s => [s.id, s.sale_datetime]));
 
-      let allItemsData: any[] = [];
-      if (allSaleIds.length > 0) {
-        const batchSize = 200;
-        for (let i = 0; i < allSaleIds.length; i += batchSize) {
-          const batch = allSaleIds.slice(i, i + batchSize);
-          const { data } = await supabase
-            .from('sale_items')
-            .select('id, sale_id, item_id, item_name, description, quantity, total_amount, unit_price, payment_ref_id')
-            .in('sale_id', batch);
-          if (data) allItemsData = allItemsData.concat(data);
-        }
-      }
+      const allItemsData = await fetchByIds<any>('sale_items', 'sale_id', allSaleIds, 'id, sale_id, item_id, item_name, description, quantity, total_amount, unit_price, payment_ref_id');
 
-      const { data: clientAppointments } = await supabase
+      const clientAppointments = await fetchAllPages<any>((from, to) => supabase
         .from('appointments')
         .select('id, staff_id, session_type_id, client_service_id, start_datetime, status')
         .eq('client_id', clientId)
-        .order('start_datetime', { ascending: false });
+        .order('start_datetime', { ascending: false })
+        .order('id')
+        .range(from, to));
 
       const staffIds = [...new Set((clientAppointments || []).map(a => a.staff_id).filter(Boolean))];
       const staffRates = new Map<string, Map<string, number>>();
       if (staffIds.length > 0) {
-        const { data: syncedRates } = await supabase
-          .from('staff_session_types')
-          .select('staff_id, session_type_id, pay_rate')
-          .in('staff_id', staffIds);
+        const syncedRates = await fetchByIds<any>('staff_session_types', 'staff_id', staffIds, 'staff_id, session_type_id, pay_rate');
 
-        for (const rate of (syncedRates || [])) {
+        for (const rate of syncedRates) {
           if (Number(rate.pay_rate) > 0) {
             if (!staffRates.has(rate.staff_id)) {
               staffRates.set(rate.staff_id, new Map());
@@ -249,13 +233,9 @@ export function ClientBalance() {
           }
         }
 
-        const { data: overrideRates } = await supabase
-          .from('staff_appointment_rates')
-          .select('staff_id, session_type_id, rate_per_appointment')
-          .in('staff_id', staffIds)
-          .is('effective_to', null);
+        const overrideRates = await fetchByIds<any>('staff_appointment_rates', 'staff_id', staffIds, 'staff_id, session_type_id, rate_per_appointment', q => q.is('effective_to', null));
 
-        for (const rate of (overrideRates || [])) {
+        for (const rate of overrideRates) {
           if (!staffRates.has(rate.staff_id)) {
             staffRates.set(rate.staff_id, new Map());
           }
@@ -395,9 +375,11 @@ export function ClientBalance() {
         .select('id, name, category_name');
       const sessionMap = new Map((allSessionTypes || []).map(s => [s.id, s]));
 
-      const { data: allSyncedRates } = await supabase
+      const allSyncedRates = await fetchAllPages<{ staff_id: string; session_type_id: string; pay_rate: number | null }>((from, to) => supabase
         .from('staff_session_types')
-        .select('staff_id, session_type_id, pay_rate');
+        .select('staff_id, session_type_id, pay_rate')
+        .order('id')
+        .range(from, to));
       const ratesMap = new Map<string, number>();
       for (const r of (allSyncedRates || [])) {
         if (Number(r.pay_rate) > 0) {
@@ -418,39 +400,29 @@ export function ClientBalance() {
           .select('id, mindbody_id, name, count, remaining, program_name, pricing_option_id')
           .eq('client_id', client.id);
 
-        const { data: sales } = await supabase
+        const sales = await fetchAllPages<{ id: string; sale_datetime: string }>((from, to) => supabase
           .from('sales')
           .select('id, sale_datetime')
-          .eq('client_id', client.id);
+          .eq('client_id', client.id)
+          .order('id')
+          .range(from, to));
 
         const saleIds = (sales || []).map(s => s.id);
-        let items: any[] = [];
-        if (saleIds.length > 0) {
-          for (let i = 0; i < saleIds.length; i += 200) {
-            const batch = saleIds.slice(i, i + 200);
-            const { data } = await supabase
-              .from('sale_items')
-              .select('id, sale_id, item_id, item_name, total_amount, payment_ref_id')
-              .in('sale_id', batch);
-            if (data) items = items.concat(data);
-          }
-        }
+        const items = await fetchByIds<any>('sale_items', 'sale_id', saleIds, 'id, sale_id, item_id, item_name, total_amount, payment_ref_id');
 
 
         const svcPricingIds = (services || []).map((s: any) => s.pricing_option_id).filter(Boolean);
         let exportPricingOptions: any[] = [];
         if (svcPricingIds.length > 0) {
-          const { data: poData } = await supabase
-            .from('pricing_options')
-            .select('id, mindbody_id, price')
-            .in('id', svcPricingIds);
-          exportPricingOptions = poData || [];
+          exportPricingOptions = await fetchByIds<any>('pricing_options', 'id', svcPricingIds, 'id, mindbody_id, price');
         }
 
-        const { data: appointments } = await supabase
+        const appointments = await fetchAllPages<any>((from, to) => supabase
           .from('appointments')
           .select('id, staff_id, session_type_id, client_service_id, start_datetime, status')
-          .eq('client_id', client.id);
+          .eq('client_id', client.id)
+          .order('id')
+          .range(from, to));
 
         const exportResolved = resolveServicePrices(
           (services || []).map((s: any) => ({
@@ -543,9 +515,7 @@ export function ClientBalance() {
               <Wallet className="w-7 h-7 text-blue-600" />
               Client Balance
             </h2>
-            <p className="text-slate-600 mt-1">
-              Package balances, spending, and remaining value per client
-            </p>
+            <PagePurpose section="clients-report" />
           </div>
           <button
             onClick={handleExport}

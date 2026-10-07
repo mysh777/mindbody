@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchByIds } from '../lib/fetchByIds';
 import {
   Download,
   Activity,
@@ -25,6 +26,7 @@ import * as XLSX from 'xlsx';
 import { getSessionTypeMedianPrices } from '../utils/sessionTypeMedianPrice';
 import type { MedianEntry } from '../utils/sessionTypeMedianPrice';
 import { toLocalISO } from '../utils/datePresets';
+import { PagePurpose } from './PageHeader';
 
 type PeriodPreset = '3m' | '6m' | '12m' | 'custom';
 
@@ -135,17 +137,9 @@ export function DataLinkageHealthTab() {
       const csIdArr = [...csIds];
       const csMap = new Map<string, { exists: boolean; hasPricing: boolean; pricingOptionId: string | null }>();
 
-      for (let i = 0; i < csIdArr.length; i += pageSize) {
-        const chunk = csIdArr.slice(i, i + pageSize);
-        const { data: csRows } = await supabase
-          .from('client_services')
-          .select('mindbody_id, pricing_option_id')
-          .in('mindbody_id', chunk);
-        if (csRows) {
-          for (const r of csRows) {
-            csMap.set(r.mindbody_id, { exists: true, hasPricing: !!r.pricing_option_id, pricingOptionId: r.pricing_option_id });
-          }
-        }
+      const csRows = await fetchByIds<{ mindbody_id: string; pricing_option_id: string | null }>('client_services', 'mindbody_id', csIdArr, 'mindbody_id, pricing_option_id');
+      for (const r of csRows) {
+        csMap.set(r.mindbody_id, { exists: true, hasPricing: !!r.pricing_option_id, pricingOptionId: r.pricing_option_id });
       }
 
       // Load pricing options for resolved visits to compute per-visit effective price
@@ -155,17 +149,9 @@ export function DataLinkageHealthTab() {
       }
       const poIdArr = [...pricingOptionIds];
       const poMap = new Map<string, { price: number; sessionCount: number }>();
-      for (let i = 0; i < poIdArr.length; i += pageSize) {
-        const chunk = poIdArr.slice(i, i + pageSize);
-        const { data: poRows } = await supabase
-          .from('pricing_options')
-          .select('id, price, session_count')
-          .in('id', chunk);
-        if (poRows) {
-          for (const po of poRows) {
-            poMap.set(po.id, { price: Number(po.price) || 0, sessionCount: po.session_count || 1 });
-          }
-        }
+      const poRows = await fetchByIds<{ id: string; price: number | null; session_count: number | null }>('pricing_options', 'id', poIdArr, 'id, price, session_count');
+      for (const po of poRows) {
+        poMap.set(po.id, { price: Number(po.price) || 0, sessionCount: po.session_count || 1 });
       }
 
       // Load session type names
@@ -233,17 +219,9 @@ export function DataLinkageHealthTab() {
       const clientIdArr = [...unresolvableClientIds];
       const clientsWithAnyServices = new Set<string>();
 
-      for (let i = 0; i < clientIdArr.length; i += pageSize) {
-        const chunk = clientIdArr.slice(i, i + pageSize);
-        const { data: csRows } = await supabase
-          .from('client_services')
-          .select('client_id')
-          .in('client_id', chunk);
-        if (csRows) {
-          for (const r of csRows) {
-            if (r.client_id) clientsWithAnyServices.add(r.client_id);
-          }
-        }
+      const clientCsRows = await fetchByIds<{ client_id: string | null }>('client_services', 'client_id', clientIdArr, 'client_id');
+      for (const r of clientCsRows) {
+        if (r.client_id) clientsWithAnyServices.add(r.client_id);
       }
 
       const zeroSet = new Set<string>();
@@ -395,7 +373,7 @@ export function DataLinkageHealthTab() {
               </div>
               <div>
                 <h2 className="text-2xl font-bold text-slate-900">Visit Linkage Health</h2>
-                <p className="text-slate-500 text-sm mt-0.5">Coverage of the visit &rarr; service &rarr; pricing chain</p>
+                <PagePurpose section="linkage-health" />
               </div>
             </div>
           </div>

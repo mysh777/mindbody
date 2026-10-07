@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchByIds } from '../lib/fetchByIds';
 import { RefreshCw, Building2, ChevronDown, ChevronRight, Download } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 import { getFilterPresetDates as salesGetFilterPresetDates, getMonthsForTimeline as salesGetMonthsForTimeline } from '../utils/salesFilters';
+import { PagePurpose } from './PageHeader';
 
 interface SalesByPricingOptionProps {
   onNavigate?: (tableName: string, id: string) => void;
@@ -72,33 +74,16 @@ export function SalesByPricingOption({ onNavigate }: SalesByPricingOptionProps) 
       }
 
       const saleIds = salesData.map(s => s.id);
-      const allItems: { sale_id: string; item_name: string | null; description: string | null; total_amount: number }[] = [];
-
-      for (let i = 0; i < saleIds.length; i += 500) {
-        const batch = saleIds.slice(i, i + 500);
-        const { data: itemsData } = await supabase
-          .from('sale_items')
-          .select('sale_id, item_name, description, total_amount')
-          .in('sale_id', batch)
-          .gt('total_amount', 0);
-        if (itemsData) allItems.push(...itemsData);
-      }
+      const allItems = await fetchByIds<{ sale_id: string; item_name: string | null; description: string | null; total_amount: number }>(
+        'sale_items', 'sale_id', saleIds, 'sale_id, item_name, description, total_amount', q => q.gt('total_amount', 0));
 
       const clientIds = [...new Set(salesData.map(s => s.client_id).filter(Boolean))] as string[];
       const clientMap: Record<string, string> = {};
 
-      for (let i = 0; i < clientIds.length; i += 500) {
-        const batch = clientIds.slice(i, i + 500);
-        const { data: clientsData } = await supabase
-          .from('clients')
-          .select('id, first_name, last_name')
-          .in('id', batch);
-        if (clientsData) {
-          clientsData.forEach(c => {
-            clientMap[c.id] = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id;
-          });
-        }
-      }
+      const clientsData = await fetchByIds<{ id: string; first_name: string | null; last_name: string | null }>('clients', 'id', clientIds, 'id, first_name, last_name');
+      clientsData.forEach(c => {
+        clientMap[c.id] = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id;
+      });
 
       const { data: locData } = await supabase.from('locations').select('id, name');
       const locationMap: Record<string, string> = {};
@@ -219,6 +204,7 @@ export function SalesByPricingOption({ onNavigate }: SalesByPricingOptionProps) 
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-2xl font-bold text-slate-900">Sales by Pricing Option</h2>
+            <PagePurpose section="sales-by-pricing" />
             <p className="text-slate-600 mt-1">
               {loading ? 'Loading...' : `${groupedData.length} pricing options, ${totals.count} sales, ${formatCurrency(totals.revenue)} total`}
             </p>

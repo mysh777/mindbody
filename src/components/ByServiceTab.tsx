@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { ChevronDown, ChevronRight, AlertTriangle, ArrowUpDown, Sparkles } from 'lucide-react';
 import { formatCurrency } from '../utils/salesFilters';
+import { formatApptDate } from '../utils/formatDateTime';
 import type { ByServiceRow, AppointmentRow, NoDataReason } from '../hooks/useSalesMarginData';
 
 const noDataLabel: Record<NoDataReason, string> = {
@@ -102,10 +103,10 @@ export function ByServiceTab({ loading, byService, appointments, onNavigate }: B
                 <th className="text-left px-4 py-3 font-semibold text-slate-600">Service</th>
                 <th className="text-left px-4 py-3 font-semibold text-slate-600">Category</th>
                 <SortHeader field="visits" label="Visits" />
-                <SortHeader field="revenue" label="Revenue" />
-                <SortHeader field="staffCost" label="Staff Cost" />
-                <SortHeader field="margin" label="Margin" />
-                <SortHeader field="marginPercent" label="Margin %" />
+                <SortHeader field="revenue" label="Revenue earned" />
+                <SortHeader field="staffCost" label="Staff cost" />
+                <SortHeader field="margin" label="Gross margin" />
+                <SortHeader field="marginPercent" label="Gross margin %" />
                 <th className="px-4 py-3 font-semibold text-slate-600 text-right">Est.</th>
                 <th className="px-4 py-3 font-semibold text-slate-600 text-right">N/A</th>
               </tr>
@@ -224,16 +225,16 @@ function ServiceRow({
                     <th className="px-4 py-2 text-left">Client</th>
                     <th className="px-4 py-2 text-left">Staff</th>
                     <th className="px-4 py-2 text-left">Location</th>
-                    <th className="px-4 py-2 text-right">Revenue</th>
-                    <th className="px-4 py-2 text-right">Staff Cost</th>
-                    <th className="px-4 py-2 text-right">Margin</th>
+                    <th className="px-4 py-2 text-right">Revenue earned</th>
+                    <th className="px-4 py-2 text-right">Staff cost</th>
+                    <th className="px-4 py-2 text-right">Gross margin</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
                   {appts.slice(0, 50).map(a => (
                     <tr key={a.id} className="hover:bg-slate-100">
                       <td className="px-6 py-1.5 text-slate-600">
-                        {new Date(a.start_datetime).toLocaleDateString('de-DE')}
+                        {formatApptDate(a.start_datetime)}
                       </td>
                       <td className="px-4 py-1.5">
                         {a.client_id ? (

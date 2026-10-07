@@ -1,20 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { MenuSection } from '../components/Sidebar';
+import { resolveSection, type MenuSection } from '../lib/pages';
 
-const DEFAULT_SECTION: MenuSection = 'api-integration';
-
-const VALID_SECTIONS: Set<string> = new Set<MenuSection>([
-  'api-integration', 'references', 'pivot-reports', 'clients-report',
-  'staff-report', 'staff-pricelist', 'appointments', 'sales',
-  'sales-report', 'sales-by-pricing', 'client-services', 'transactions',
-  'sale-items', 'client-activity', 'client-card', 'expiring-packages',
-  'linkage-health', 'margin-by-service', 'margin-by-staff', 'sleeping-clients',
-]);
-
-function parseHash(): { section: MenuSection; params: Record<string, string> } {
-  const hash = window.location.hash.replace(/^#\/?/, '');
-  const [path, query] = hash.split('?');
-  const section = (VALID_SECTIONS.has(path) ? path : DEFAULT_SECTION) as MenuSection;
+function parseQuery(query: string | undefined): Record<string, string> {
   const params: Record<string, string> = {};
   if (query) {
     for (const part of query.split('&')) {
@@ -22,10 +9,16 @@ function parseHash(): { section: MenuSection; params: Record<string, string> } {
       if (k && v !== undefined) params[decodeURIComponent(k)] = decodeURIComponent(v);
     }
   }
-  return { section, params };
+  return params;
 }
 
-function buildHash(section: MenuSection, params?: Record<string, string>): string {
+export function parseHash(hash: string = window.location.hash): { section: MenuSection; params: Record<string, string>; redirected: boolean } {
+  const [path, query] = hash.replace(/^#\/?/, '').split('?');
+  const { section, redirected, params: redirectParams } = resolveSection(path);
+  return { section, params: { ...redirectParams, ...parseQuery(query) }, redirected };
+}
+
+export function buildHash(section: MenuSection, params?: Record<string, string>): string {
   let h = `#/${section}`;
   if (params && Object.keys(params).length > 0) {
     const qs = Object.entries(params)
@@ -37,11 +30,17 @@ function buildHash(section: MenuSection, params?: Record<string, string>): strin
   return h;
 }
 
+function readLocation() {
+  const { section, params, redirected } = parseHash();
+  if (redirected) window.history.replaceState(null, '', buildHash(section, params));
+  return { section, params };
+}
+
 export function useHashRouter() {
-  const [state, setState] = useState(parseHash);
+  const [state, setState] = useState(readLocation);
 
   useEffect(() => {
-    const onHashChange = () => setState(parseHash());
+    const onHashChange = () => setState(readLocation());
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);

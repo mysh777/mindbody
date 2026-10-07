@@ -1,0 +1,10 @@
+28 src/components/OwnerOverview.tsx
+28 src/lib/pages.ts
+18 src/components/OwnerOverviewCharts.tsx
+17 src/components/OwnerStaffLoad.tsx
+8 src/components/OwnerHeatmap.tsx
+4 src/components/OwnerOverviewCards.tsx
+3 src/utils/ownerFormat.ts
+2 src/utils/ownerMonthDetail.ts
+1 src/components/MarginByService.tsx
+TOTAL 109 lines in 9 files

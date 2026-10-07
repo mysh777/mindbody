@@ -1,16 +1,21 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { handlePrint } from '../utils/printReport';
 import { TrendingUp, ArrowUpDown, AlertTriangle, Sparkles, Loader2, Search, X, Download, Printer, ChevronDown, ChevronRight } from 'lucide-react';
 import { CopyLinkButton } from './CopyLinkButton';
 import { useSalesMarginData } from '../hooks/useSalesMarginData';
 import { useSalesByDateData } from '../hooks/useSalesByDateData';
 import { formatCurrency } from '../utils/salesFilters';
 import { exportToExcel } from '../utils/exportExcel';
+import { formatApptDate, formatApptTime } from '../utils/formatDateTime';
+import { fetchByIds } from '../lib/fetchByIds';
+import { TariffSalesList, TariffVisitsList, type TariffSale } from './MarginByServiceDetails';
 
-import type { ByServiceRow } from '../hooks/useSalesMarginData';
+import type { ByServiceRow, AppointmentRow } from '../hooks/useSalesMarginData';
 
 import { type DatePreset, getPresetDates } from '../utils/datePresets';
 import { DateRangePicker } from './DateRangePicker';
 import { LocationFilter } from './LocationFilter';
+import { PagePurpose } from './PageHeader';
 
 type RevenueBasis = 'sale_date' | 'visit_date';
 
@@ -85,10 +90,11 @@ interface MarginByServiceProps {
 
 export function MarginByService({ urlParams, onParamsChange }: MarginByServiceProps) {
   const hasUrlDates = !!(urlParams?.from && urlParams?.to);
-  const [datePreset, setDatePreset] = useState<DatePreset>(hasUrlDates ? 'custom' : 'ytd');
+  const [datePreset, setDatePreset] = useState<DatePreset>(hasUrlDates ? 'custom' : 'last-month');
   const [generated, setGenerated] = useState(false);
+  const [loadedAt, setLoadedAt] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState(() =>
-    hasUrlDates ? { start: urlParams!.from, end: urlParams!.to } : getPresetDates('ytd')
+    hasUrlDates ? { start: urlParams!.from, end: urlParams!.to } : getPresetDates('last-month')
   );
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
   const [locationId, setLocationId] = useState(urlParams?.location || 'all');
@@ -97,6 +103,7 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
     urlParams?.basis === 'visit' ? 'visit_date' : 'sale_date'
   );
   const autoGenRef = useRef(hasUrlDates);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const dummyRange = { start: '1900-01-01', end: '1900-01-02' };
   const [committedRange, setCommittedRange] = useState(
@@ -104,18 +111,71 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
   );
   const [committedLoc, setCommittedLoc] = useState(urlParams?.location || 'all');
 
-  const { loading: loadingVisits, byService } = useSalesMarginData({
+  const { loading: loadingVisits, byService, appointments } = useSalesMarginData({
     dateRange: committedRange,
     selectedLocation: committedLoc,
     statusFilter: 'Completed',
   });
 
-  const { loading: loadingSales, rows: salesRows, totalReturned, unallocatedAmount } = useSalesByDateData({
+  const { loading: loadingSales, rows: salesRows, totalReturned, unallocatedAmount, clientTariffBreakdown } = useSalesByDateData({
     dateRange: committedRange,
     selectedLocation: committedLoc,
   });
 
-  const loading = loadingVisits || loadingSales;
+  const [clientNames, setClientNames] = useState<Map<string, string>>(new Map());
+  const [namesLoading, setNamesLoading] = useState(false);
+  const [openRows, setOpenRows] = useState<Set<string>>(new Set());
+  const loading = loadingVisits || loadingSales || namesLoading;
+
+  useEffect(() => {
+    const ids = [...new Set([...clientTariffBreakdown.keys()].map(k => k.split('|')[0]))];
+    if (ids.length === 0) { setClientNames(new Map()); return; }
+    let cancelled = false;
+    setNamesLoading(true);
+    fetchByIds<{ id: string; first_name: string | null; last_name: string | null }>('clients', 'id', ids, 'id, first_name, last_name')
+      .then(rows => {
+        if (cancelled) return;
+        setClientNames(new Map(rows.map(c => [c.id, `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id])));
+      })
+      .catch(() => { if (!cancelled) setClientNames(new Map()); })
+      .finally(() => { if (!cancelled) setNamesLoading(false); });
+    return () => { cancelled = true; };
+  }, [clientTariffBreakdown]);
+
+  const salesByTariff = useMemo(() => {
+    const map = new Map<string, TariffSale[]>();
+    clientTariffBreakdown.forEach((entry, key) => {
+      const sep = key.indexOf('|');
+      const clientId = key.slice(0, sep);
+      const tariff = key.slice(sep + 1);
+      const list = map.get(tariff) || [];
+      entry.details.forEach(d => list.push({
+        saleId: d.saleId, saleDate: d.saleDate, amount: d.amount, rule: d.rule,
+        clientName: clientNames.get(clientId) || `Client ${clientId}`,
+      }));
+      map.set(tariff, list);
+    });
+    map.forEach(list => list.sort((a, b) => a.saleDate.localeCompare(b.saleDate)));
+    return map;
+  }, [clientTariffBreakdown, clientNames]);
+
+  const visitsByKey = useMemo(() => {
+    const map = new Map<string, AppointmentRow[]>();
+    appointments.forEach(a => {
+      const key = a.pricingOptionName ? `po__${a.pricingOptionName}` : `st__${a.session_type_id || 'unknown'}`;
+      const list = map.get(key) || [];
+      list.push(a);
+      map.set(key, list);
+    });
+    map.forEach(list => list.sort((a, b) => a.start_datetime.localeCompare(b.start_datetime)));
+    return map;
+  }, [appointments]);
+
+  const toggleRow = (key: string) => setOpenRows(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
 
   const [sortBy, setSortBy] = useState<SortField>('margin');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -143,6 +203,12 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
       setGenerated(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (generated && !loading) {
+      setLoadedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
+    }
+  }, [generated, loading]);
 
   // =================== SALE DATE MODE ===================
   const mergedRows: MergedRow[] = useMemo(() => {
@@ -290,7 +356,7 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
 
   const mergedCategories: CategoryGroup[] = useMemo(() => {
     if (revenueBasis !== 'sale_date') return [];
-    return buildCategories(mergedFiltered, sortMerged);
+    return buildCategories(mergedFiltered, sortMerged, sortBy, sortDir);
   }, [mergedFiltered, sortBy, sortDir, revenueBasis]);
 
   const mergedFlatSorted = useMemo(() => sortMerged(mergedFiltered), [mergedFiltered, sortBy, sortDir]);
@@ -321,7 +387,7 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
 
   const visitCategories: VisitCategoryGroup[] = useMemo(() => {
     if (revenueBasis !== 'visit_date') return [];
-    return buildVisitCategories(visitFiltered, sortVisit);
+    return buildVisitCategories(visitFiltered, sortVisit, sortBy, sortDir);
   }, [visitFiltered, sortBy, sortDir, revenueBasis]);
 
   const visitFlatSorted = useMemo(() => sortVisit(visitFiltered), [visitFiltered, sortBy, sortDir]);
@@ -373,21 +439,21 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
         'Category': r.category || 'Uncategorized',
         'Service / Tariff': r.displayName,
         'Qty Sold': r.qtySold,
-        'Revenue (EUR)': Number(r.revenue.toFixed(2)),
+        'Sales by service (EUR)': Number(r.revenue.toFixed(2)),
         'Visits': r.visitsLinked + r.visitsNoData,
-        'Staff Cost (EUR)': Number(r.staffCost.toFixed(2)),
-        'Margin (EUR)': Number(r.margin.toFixed(2)),
-        'Margin (%)': r.revenue > 0 ? Number(r.marginPercent.toFixed(1)) : 0,
+        'Staff cost (EUR)': Number(r.staffCost.toFixed(2)),
+        'Sales − Staff cost (EUR)': Number(r.margin.toFixed(2)),
+        'Sales − Staff cost (%)': r.revenue > 0 ? Number(r.marginPercent.toFixed(1)) : 0,
       }));
       data.push({
         'Category': '',
         'Service / Tariff': 'TOTAL',
         'Qty Sold': mergedTotals.qtySold,
-        'Revenue (EUR)': Number(mergedTotals.revenue.toFixed(2)),
+        'Sales by service (EUR)': Number(mergedTotals.revenue.toFixed(2)),
         'Visits': mergedTotals.visitsLinked + mergedTotals.visitsNoData,
-        'Staff Cost (EUR)': Number(mergedTotals.staffCost.toFixed(2)),
-        'Margin (EUR)': Number(mergedTotals.margin.toFixed(2)),
-        'Margin (%)': Number(mergedTotals.marginPercent.toFixed(1)),
+        'Staff cost (EUR)': Number(mergedTotals.staffCost.toFixed(2)),
+        'Sales − Staff cost (EUR)': Number(mergedTotals.margin.toFixed(2)),
+        'Sales − Staff cost (%)': Number(mergedTotals.marginPercent.toFixed(1)),
       });
       exportToExcel(data, 'margin_by_procedure_sale_date');
     } else {
@@ -397,28 +463,73 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
         'Service / Tariff': r.displayName,
         'Visits (linked)': r.visitsLinked,
         'Visits (unlinked)': r.visitsNoData,
-        'Revenue (EUR)': Number(r.revenue.toFixed(2)),
-        'Staff Cost (EUR)': Number(r.staffCost.toFixed(2)),
-        'Margin (EUR)': Number(r.margin.toFixed(2)),
-        'Margin (%)': r.revenue > 0 ? Number(r.marginPercent.toFixed(1)) : 0,
-        'Avg Rev/Visit': Number(r.avgRevPerVisit.toFixed(2)),
+        'Revenue earned (EUR)': Number(r.revenue.toFixed(2)),
+        'Staff cost (EUR)': Number(r.staffCost.toFixed(2)),
+        'Gross margin (EUR)': Number(r.margin.toFixed(2)),
+        'Gross margin (%)': r.revenue > 0 ? Number(r.marginPercent.toFixed(1)) : 0,
+        'Revenue earned / visit': Number(r.avgRevPerVisit.toFixed(2)),
       }));
       data.push({
         'Category': '',
         'Service / Tariff': 'TOTAL',
         'Visits (linked)': visitTotals.visitsLinked,
         'Visits (unlinked)': visitTotals.visitsNoData,
-        'Revenue (EUR)': Number(visitTotals.revenue.toFixed(2)),
-        'Staff Cost (EUR)': Number(visitTotals.staffCost.toFixed(2)),
-        'Margin (EUR)': Number(visitTotals.margin.toFixed(2)),
-        'Margin (%)': Number(visitTotals.marginPercent.toFixed(1)),
-        'Avg Rev/Visit': Number(visitTotals.avgRevPerVisit.toFixed(2)),
+        'Revenue earned (EUR)': Number(visitTotals.revenue.toFixed(2)),
+        'Staff cost (EUR)': Number(visitTotals.staffCost.toFixed(2)),
+        'Gross margin (EUR)': Number(visitTotals.margin.toFixed(2)),
+        'Gross margin (%)': Number(visitTotals.marginPercent.toFixed(1)),
+        'Revenue earned / visit': Number(visitTotals.avgRevPerVisit.toFixed(2)),
       });
       exportToExcel(data, 'margin_by_procedure_visit_date');
     }
   };
 
-  const handlePrint = () => window.print();
+  const handleExportDetails = () => {
+    if (revenueBasis === 'sale_date') {
+      const data: Record<string, string | number>[] = [];
+      for (const r of mergedFlatSorted) {
+        if (r.key.startsWith('notar__')) continue;
+        const sales = salesByTariff.get(r.displayName) || [];
+        let listed = 0;
+        for (const x of sales) {
+          listed += x.amount;
+          data.push({
+            'Category': r.category || 'Uncategorized',
+            'Pricing option': r.displayName,
+            'Sale date': formatApptDate(x.saleDate),
+            'Client': x.clientName,
+            'Basis': x.rule === 'cash' ? 'Paid at sale' : 'Paid from account balance',
+            'Sales by service (EUR)': Number(x.amount.toFixed(2)),
+          });
+        }
+        if (Math.abs(r.revenue - listed) >= 0.01) {
+          data.push({
+            'Category': r.category || 'Uncategorized', 'Pricing option': r.displayName,
+            'Sale date': '', 'Client': 'Sales not linked to a client', 'Basis': '',
+            'Sales by service (EUR)': Number((r.revenue - listed).toFixed(2)),
+          });
+        }
+      }
+      exportToExcel(data, 'margin_by_service_sales');
+    } else {
+      const data = visitFlatSorted.flatMap(r => (visitsByKey.get(r.pricingOptionKey) || []).map(a => ({
+        'Category': r.categoryName || 'Uncategorized',
+        'Service / Tariff': r.displayName,
+        'Date': formatApptDate(a.start_datetime),
+        'Time': formatApptTime(a.start_datetime),
+        'Client': a.clientName,
+        'Staff': a.staffName,
+        'Location': a.locationName,
+        'Revenue earned (EUR)': a.revenue != null ? Number(a.revenue.toFixed(2)) : '',
+        'Staff cost (EUR)': Number(a.staffCost.toFixed(2)),
+        'Gross margin (EUR)': a.margin != null ? Number(a.margin.toFixed(2)) : '',
+        'Price basis': !a.hasRevenueData ? 'No price data' : a.isEstimated ? 'Estimated' : 'Package / sale',
+      })));
+      exportToExcel(data, 'margin_by_service_visits');
+    }
+  };
+
+  const onPrint = () => handlePrint(containerRef);
 
   const SH = ({ field, label }: { field: SortField; label: string }) => (
     <th className="px-4 py-3 text-right font-semibold text-slate-600 cursor-pointer hover:text-slate-900 select-none" onClick={() => toggleSort(field)}>
@@ -432,17 +543,18 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
   const mc = (v: number) => v > 0 ? 'text-emerald-600' : v < 0 ? 'text-red-600' : 'text-slate-500';
 
   const subtitle = revenueBasis === 'sale_date'
-    ? 'Revenue = sales by purchase date (matches Mindbody Sales by Service). Staff cost = per-visit pay rates (matches Mindbody Payroll).'
-    : 'Revenue per visit delivered (accrual basis) — not comparable to Mindbody "Sales by Service" (different accounting method)';
+    ? 'Sales by service = sales by payment date (matches Mindbody Sales by Service). Staff cost = per-visit pay rates (matches Mindbody Payroll). Sales − Staff cost: sales for the period minus staff pay for visits in this period. Not a margin: a package may be bought in one month and used in another. For margin, use By visit date.'
+    : 'Revenue earned = income for visits delivered (package price / visits). Not comparable to Mindbody "Sales by Service" (different accounting method).';
 
   return (
-    <div className="w-full bg-slate-50 min-h-full">
+    <div ref={containerRef} className="w-full bg-slate-50 min-h-full">
       <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
         <div className="flex items-center gap-3">
           <TrendingUp className="w-6 h-6 text-blue-600" />
           <div>
-            <h2 className="text-2xl font-bold text-slate-900">Margin by Procedure</h2>
-            <p className="text-slate-500 text-sm mt-0.5">{subtitle}</p>
+            <h2 className="text-2xl font-bold text-slate-900">Margin by Service</h2>
+            <PagePurpose section="margin-by-service" />
+            <p className="text-slate-500 text-xs mt-0.5">{subtitle}</p>
           </div>
         </div>
       </div>
@@ -495,12 +607,19 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
               {loading && <Loader2 className="w-4 h-4 animate-spin" />}
               Generate
             </button>
+            {loadedAt && !loading && (
+              <span className="text-xs text-slate-400">Loaded at {loadedAt}</span>
+            )}
             {generated && hasData && (<>
               <button onClick={handleExportXlsx}
                 className="px-4 py-2.5 bg-emerald-600 text-white rounded-lg font-medium hover:bg-emerald-700 transition-colors flex items-center gap-2">
                 <Download className="w-4 h-4" /> Excel
               </button>
-              <button onClick={handlePrint}
+              <button onClick={handleExportDetails}
+                className="px-4 py-2.5 bg-white border border-emerald-600 text-emerald-700 rounded-lg font-medium hover:bg-emerald-50 transition-colors flex items-center gap-2">
+                <Download className="w-4 h-4" /> {revenueBasis === 'sale_date' ? 'Sales Excel' : 'Visits Excel'}
+              </button>
+              <button onClick={onPrint}
                 className="px-4 py-2.5 bg-slate-600 text-white rounded-lg font-medium hover:bg-slate-700 transition-colors flex items-center gap-2">
                 <Printer className="w-4 h-4" /> Print / PDF
               </button>
@@ -567,17 +686,21 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
                       <div className="flex items-center gap-1">Service / Tariff <ArrowUpDown className={`w-3 h-3 ${sortBy === 'displayName' ? 'text-blue-600' : 'text-slate-400'}`} /></div>
                     </th>
                     <SH field="qtySold" label="Qty Sold" />
-                    <SH field="revenue" label="Revenue" />
+                    <SH field="revenue" label="Sales by service" />
                     <SH field="visitsLinked" label="Visits" />
-                    <SH field="staffCost" label="Staff Cost" />
-                    <SH field="margin" label="Margin" />
-                    <SH field="marginPercent" label="Margin %" />
+                    <SH field="staffCost" label="Staff cost" />
+                    <SH field="margin" label="Sales − Staff cost" />
+                    <SH field="marginPercent" label="Sales − Staff cost %" />
                   </tr>
                 </thead>
                 <tbody>
                   {mergedCategories.map(cat => (
                     <MergedCategorySection key={cat.name} cat={cat} isOpen={expandedCats.has(cat.name)}
-                      onToggle={() => toggleCat(cat.name)} mc={mc} />
+                      onToggle={() => toggleCat(cat.name)} mc={mc}
+                      openRows={openRows} onToggleRow={toggleRow}
+                      renderDetail={r => r.key.startsWith('notar__')
+                        ? <p className="py-2 text-xs text-slate-400">Visits without a pricing option have no sales. Open By visit date to see these visits.</p>
+                        : <TariffSalesList sales={salesByTariff.get(r.displayName) || []} total={r.revenue} />} />
                   ))}
                 </tbody>
                 <tfoot className="bg-slate-50 border-t-2 border-slate-300">
@@ -629,16 +752,18 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
                     </th>
                     <SH field="visitsLinked" label="Linked" />
                     <SH field="visitsNoData" label="Unlinked" />
-                    <SH field="revenue" label="Revenue" />
-                    <SH field="staffCost" label="Staff Cost" />
-                    <SH field="margin" label="Margin" />
-                    <SH field="marginPercent" label="Margin %" />
+                    <SH field="revenue" label="Revenue earned" />
+                    <SH field="staffCost" label="Staff cost" />
+                    <SH field="margin" label="Gross margin" />
+                    <SH field="marginPercent" label="Gross margin %" />
                   </tr>
                 </thead>
                 <tbody>
                   {visitCategories.map(cat => (
                     <VisitCategorySection key={cat.name} cat={cat} isOpen={expandedCats.has(cat.name)}
-                      onToggle={() => toggleCat(cat.name)} mc={mc} />
+                      onToggle={() => toggleCat(cat.name)} mc={mc}
+                      openRows={openRows} onToggleRow={toggleRow}
+                      renderDetail={r => <TariffVisitsList visits={visitsByKey.get(r.pricingOptionKey) || []} />} />
                   ))}
                 </tbody>
                 <tfoot className="bg-slate-50 border-t-2 border-slate-300">
@@ -679,16 +804,17 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
                     <tr>
                       <th>Service / Tariff</th>
                       <th className="text-right">Qty Sold</th>
-                      <th className="text-right">Revenue</th>
+                      <th className="text-right">Sales by service</th>
                       <th className="text-right">Visits</th>
-                      <th className="text-right">Staff Cost</th>
-                      <th className="text-right">Margin</th>
-                      <th className="text-right">Margin %</th>
+                      <th className="text-right">Staff cost</th>
+                      <th className="text-right">Sales − Staff cost</th>
+                      <th className="text-right">Sales − Staff cost %</th>
                     </tr>
                   </thead>
                   <tbody>
                     {cat.rows.map(r => (
-                      <tr key={r.key}>
+                      <React.Fragment key={r.key}>
+                      <tr className="pr-svc-row">
                         <td>{r.displayName}</td>
                         <td className="text-right">{r.qtySold}</td>
                         <td className="text-right">{formatCurrency(r.revenue)}</td>
@@ -697,6 +823,12 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
                         <td className="text-right">{formatCurrency(r.margin)}</td>
                         <td className="text-right">{r.revenue > 0 ? `${r.marginPercent.toFixed(1)}%` : '-'}</td>
                       </tr>
+                      {!r.key.startsWith('notar__') && (r.revenue !== 0 || salesByTariff.has(r.displayName)) && (
+                        <tr className="pr-visit-header"><td colSpan={7}>
+                          <TariffSalesList print sales={salesByTariff.get(r.displayName) || []} total={r.revenue} />
+                        </td></tr>
+                      )}
+                      </React.Fragment>
                     ))}
                   </tbody>
                   <tfoot>
@@ -736,15 +868,16 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
                       <th>Service / Tariff</th>
                       <th className="text-right">Linked</th>
                       <th className="text-right">Unlinked</th>
-                      <th className="text-right">Revenue</th>
-                      <th className="text-right">Staff Cost</th>
-                      <th className="text-right">Margin</th>
-                      <th className="text-right">Margin %</th>
+                      <th className="text-right">Revenue earned</th>
+                      <th className="text-right">Staff cost</th>
+                      <th className="text-right">Gross margin</th>
+                      <th className="text-right">Gross margin %</th>
                     </tr>
                   </thead>
                   <tbody>
                     {cat.rows.map(r => (
-                      <tr key={r.pricingOptionKey}>
+                      <React.Fragment key={r.pricingOptionKey}>
+                      <tr className="pr-svc-row">
                         <td>{r.displayName}</td>
                         <td className="text-right">{r.visitsLinked}</td>
                         <td className="text-right">{r.visitsNoData}</td>
@@ -753,6 +886,10 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
                         <td className="text-right">{formatCurrency(r.margin)}</td>
                         <td className="text-right">{r.revenue > 0 ? `${r.marginPercent.toFixed(1)}%` : '-'}</td>
                       </tr>
+                      <tr className="pr-visit-header"><td colSpan={7}>
+                        <TariffVisitsList print visits={visitsByKey.get(r.pricingOptionKey) || []} />
+                      </td></tr>
+                      </React.Fragment>
                     ))}
                   </tbody>
                   <tfoot>
@@ -790,7 +927,7 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
 }
 
 // =================== CATEGORY BUILDERS ===================
-function buildCategories(rows: MergedRow[], sorter: (arr: MergedRow[]) => MergedRow[]): CategoryGroup[] {
+function buildCategories(rows: MergedRow[], sorter: (arr: MergedRow[]) => MergedRow[], sortBy: SortField, sortDir: 'asc' | 'desc'): CategoryGroup[] {
   const catMap: Record<string, MergedRow[]> = {};
   rows.forEach(r => {
     const cat = (r.category || '').trim() || 'Uncategorized';
@@ -833,10 +970,18 @@ function buildCategories(rows: MergedRow[], sorter: (arr: MergedRow[]) => Merged
   for (const [cat, catRows] of Object.entries(normalizedCatMap)) {
     if (!used.has(cat)) result.push(buildGroup(cat, catRows));
   }
-  return result.filter(c => c.rows.length > 0);
+  const filtered = result.filter(c => c.rows.length > 0);
+  const mul = sortDir === 'desc' ? -1 : 1;
+  if (sortBy === 'displayName') {
+    filtered.sort((a, b) => mul * a.name.localeCompare(b.name));
+  } else {
+    const key = sortBy as keyof CategoryGroup;
+    filtered.sort((a, b) => mul * ((a[key] as number) - (b[key] as number)));
+  }
+  return filtered;
 }
 
-function buildVisitCategories(rows: VisitRow[], sorter: (arr: VisitRow[]) => VisitRow[]): VisitCategoryGroup[] {
+function buildVisitCategories(rows: VisitRow[], sorter: (arr: VisitRow[]) => VisitRow[], sortBy: SortField, sortDir: 'asc' | 'desc'): VisitCategoryGroup[] {
   const catMap: Record<string, VisitRow[]> = {};
   rows.forEach(r => {
     const cat = (r.categoryName || '').trim() || 'Uncategorized';
@@ -878,12 +1023,39 @@ function buildVisitCategories(rows: VisitRow[], sorter: (arr: VisitRow[]) => Vis
   for (const [cat, catRows] of Object.entries(normalizedCatMap)) {
     if (!used.has(cat)) result.push(buildGroup(cat, catRows));
   }
-  return result;
+  const filtered = result.filter(c => c.rows.length > 0);
+  const mul = sortDir === 'desc' ? -1 : 1;
+  if (sortBy === 'displayName') {
+    filtered.sort((a, b) => mul * a.name.localeCompare(b.name));
+  } else {
+    const key = sortBy as keyof VisitCategoryGroup;
+    filtered.sort((a, b) => mul * ((a[key] as number || 0) - (b[key] as number || 0)));
+  }
+  return filtered;
 }
 
 // =================== CATEGORY SECTION COMPONENTS ===================
-function MergedCategorySection({ cat, isOpen, onToggle, mc }: {
+function RowToggle({ open, label }: { open: boolean; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      {open ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
+      {label}
+    </span>
+  );
+}
+
+function DetailRow({ children }: { children: React.ReactNode }) {
+  return (
+    <tr className="bg-white border-b border-slate-100">
+      <td></td>
+      <td colSpan={7} className="pl-12 pr-4 pb-3 pt-1">{children}</td>
+    </tr>
+  );
+}
+
+function MergedCategorySection({ cat, isOpen, onToggle, mc, openRows, onToggleRow, renderDetail }: {
   cat: CategoryGroup; isOpen: boolean; onToggle: () => void; mc: (v: number) => string;
+  openRows: Set<string>; onToggleRow: (key: string) => void; renderDetail: (r: MergedRow) => React.ReactNode;
 }) {
   return (
     <>
@@ -903,9 +1075,10 @@ function MergedCategorySection({ cat, isOpen, onToggle, mc }: {
         <td className={`px-4 py-2.5 text-right font-semibold ${mc(cat.margin)}`}>{cat.revenue > 0 ? `${cat.marginPercent.toFixed(1)}%` : '-'}</td>
       </tr>
       {isOpen && cat.rows.map(r => (
-        <tr key={r.key} className="hover:bg-slate-50 transition-colors border-b border-slate-100">
+        <React.Fragment key={r.key}>
+        <tr className="hover:bg-slate-50 transition-colors border-b border-slate-100 cursor-pointer" onClick={() => onToggleRow(r.key)}>
           <td></td>
-          <td className="px-4 py-2 pl-8 font-medium text-slate-700 text-[13px]">{r.displayName}</td>
+          <td className="px-4 py-2 pl-8 font-medium text-slate-700 text-[13px]"><RowToggle open={openRows.has(r.key)} label={r.displayName} /></td>
           <td className="px-4 py-2 text-right text-slate-600">{r.qtySold || <span className="text-slate-300">-</span>}</td>
           <td className="px-4 py-2 text-right font-medium text-blue-600">{formatCurrency(r.revenue)}</td>
           <td className="px-4 py-2 text-right text-slate-600">{r.visitsLinked + r.visitsNoData || <span className="text-slate-300">-</span>}</td>
@@ -913,13 +1086,16 @@ function MergedCategorySection({ cat, isOpen, onToggle, mc }: {
           <td className={`px-4 py-2 text-right font-semibold ${mc(r.margin)}`}>{formatCurrency(r.margin)}</td>
           <td className={`px-4 py-2 text-right ${mc(r.margin)}`}>{r.revenue > 0 ? `${r.marginPercent.toFixed(1)}%` : '-'}</td>
         </tr>
+        {openRows.has(r.key) && <DetailRow>{renderDetail(r)}</DetailRow>}
+        </React.Fragment>
       ))}
     </>
   );
 }
 
-function VisitCategorySection({ cat, isOpen, onToggle, mc }: {
+function VisitCategorySection({ cat, isOpen, onToggle, mc, openRows, onToggleRow, renderDetail }: {
   cat: VisitCategoryGroup; isOpen: boolean; onToggle: () => void; mc: (v: number) => string;
+  openRows: Set<string>; onToggleRow: (key: string) => void; renderDetail: (r: VisitRow) => React.ReactNode;
 }) {
   return (
     <>
@@ -939,9 +1115,10 @@ function VisitCategorySection({ cat, isOpen, onToggle, mc }: {
         <td className={`px-4 py-2.5 text-right font-semibold ${mc(cat.margin)}`}>{cat.revenue > 0 ? `${cat.marginPercent.toFixed(1)}%` : '-'}</td>
       </tr>
       {isOpen && cat.rows.map(r => (
-        <tr key={r.pricingOptionKey} className="hover:bg-slate-50 transition-colors border-b border-slate-100">
+        <React.Fragment key={r.pricingOptionKey}>
+        <tr className="hover:bg-slate-50 transition-colors border-b border-slate-100 cursor-pointer" onClick={() => onToggleRow(r.pricingOptionKey)}>
           <td></td>
-          <td className="px-4 py-2 pl-8 font-medium text-slate-700 text-[13px]">{r.displayName}</td>
+          <td className="px-4 py-2 pl-8 font-medium text-slate-700 text-[13px]"><RowToggle open={openRows.has(r.pricingOptionKey)} label={r.displayName} /></td>
           <td className="px-4 py-2 text-right text-slate-600">{r.visitsLinked}</td>
           <td className="px-4 py-2 text-right">
             {r.visitsNoData > 0 ? (
@@ -957,6 +1134,8 @@ function VisitCategorySection({ cat, isOpen, onToggle, mc }: {
             {r.visitsEstimated > 0 && <Sparkles className="w-3 h-3 inline ml-1 text-violet-500" title={`${r.visitsEstimated} estimated`} />}
           </td>
         </tr>
+        {openRows.has(r.pricingOptionKey) && <DetailRow>{renderDetail(r)}</DetailRow>}
+        </React.Fragment>
       ))}
     </>
   );

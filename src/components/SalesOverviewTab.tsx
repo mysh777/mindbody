@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import type { ObligationsSummary } from '../utils/obligations';
 import {
   DollarSign,
   TrendingUp,
@@ -8,6 +9,7 @@ import {
   Activity,
   AlertTriangle,
   Sparkles,
+  Receipt,
 } from 'lucide-react';
 import {
   BarChart,
@@ -30,6 +32,10 @@ interface SalesOverviewTabProps {
   summary: MarginSummary;
   appointments: AppointmentRow[];
   sales: SaleRow[];
+  salesByServiceTotal: number;
+  loadingSalesByService: boolean;
+  obligations: ObligationsSummary | null;
+  obligationsError: boolean;
 }
 
 const CHART_COLORS = [
@@ -37,22 +43,13 @@ const CHART_COLORS = [
   '#EC4899', '#84CC16', '#F97316', '#14B8A6', '#0EA5E9',
 ];
 
-export function SalesOverviewTab({ loading, summary, appointments, sales }: SalesOverviewTabProps) {
+export function SalesOverviewTab({ loading, summary, appointments, sales, salesByServiceTotal, loadingSalesByService, obligations, obligationsError }: SalesOverviewTabProps) {
   const exactWithData = summary.appointmentsWithData - summary.appointmentsEstimated;
   const exactRevenue = summary.revenueEarned - summary.estimatedRevenue;
 
   const cards = [
     {
-      label: 'Cash In',
-      value: formatCurrency(summary.cashIn),
-      subtitle: `${sales.length} sales`,
-      icon: DollarSign,
-      color: 'text-emerald-600',
-      bg: 'bg-emerald-50',
-      border: 'border-emerald-200',
-    },
-    {
-      label: 'Revenue Earned',
+      label: 'Revenue earned',
       value: formatCurrency(summary.revenueEarned),
       subtitle: summary.appointmentsEstimated > 0
         ? `${exactWithData} exact + ${summary.appointmentsEstimated} estimated visits`
@@ -63,7 +60,30 @@ export function SalesOverviewTab({ loading, summary, appointments, sales }: Sale
       border: 'border-blue-200',
     },
     {
-      label: 'Staff Cost',
+      label: 'Sales by service',
+      value: loadingSalesByService ? '...' : formatCurrency(salesByServiceTotal),
+      subtitle: 'by sale date, same as Margin by Service (By sale date)',
+      icon: Receipt,
+      color: 'text-sky-700',
+      bg: 'bg-sky-50',
+      border: 'border-sky-200',
+    },
+    {
+      label: 'Money received',
+      value: formatCurrency(summary.cashIn),
+      subtitle: `${sales.length} sales · all sales by payment date, including products and gift cards; not revenue`,
+      extra: [
+        `incl. gift cards: ${formatCurrency(summary.cashInGiftCards)}`,
+        `incl. account top-ups: ${formatCurrency(summary.cashInDeposits)}`,
+      ],
+      note: `Not money: paid from account balance ${formatCurrency(summary.paidFromAccount)}, paid by gift card ${formatCurrency(summary.paidByGiftCard)}`,
+      icon: DollarSign,
+      color: 'text-emerald-600',
+      bg: 'bg-emerald-50',
+      border: 'border-emerald-200',
+    },
+    {
+      label: 'Staff cost',
       value: formatCurrency(summary.staffCost),
       subtitle: `${summary.totalAppointments} visits`,
       icon: Users,
@@ -72,7 +92,7 @@ export function SalesOverviewTab({ loading, summary, appointments, sales }: Sale
       border: 'border-amber-200',
     },
     {
-      label: 'Gross Margin',
+      label: 'Gross margin',
       value: formatCurrency(summary.grossMargin),
       subtitle: `${summary.marginPercent.toFixed(1)}% margin`,
       icon: Percent,
@@ -81,16 +101,17 @@ export function SalesOverviewTab({ loading, summary, appointments, sales }: Sale
       border: summary.grossMargin >= 0 ? 'border-teal-200' : 'border-red-200',
     },
     {
-      label: 'Deferred Revenue',
-      value: formatCurrency(summary.deferredRevenue),
-      subtitle: 'cash in - revenue earned',
+      label: 'Obligations',
+      value: obligationsError ? 'Error' : obligations ? formatCurrency(obligations.total) : '...',
+      subtitle: 'Paid but not yet used visits',
+      extra: obligations ? [`Today, all locations · ${obligations.remainingVisits} visits · ${obligations.clients} clients`] : undefined,
       icon: Clock,
       color: 'text-slate-600',
       bg: 'bg-slate-50',
       border: 'border-slate-200',
     },
     {
-      label: 'Avg Margin / Visit',
+      label: 'Gross margin / visit',
       value: formatCurrency(summary.avgMarginPerVisit),
       subtitle: `of ${summary.appointmentsWithData} visits`,
       icon: Activity,
@@ -131,8 +152,8 @@ export function SalesOverviewTab({ loading, summary, appointments, sales }: Sale
   const revenueVsCostPie = useMemo(() => {
     if (summary.revenueEarned === 0 && summary.staffCost === 0) return [];
     return [
-      { name: 'Margin', value: Math.max(0, summary.grossMargin) },
-      { name: 'Staff Cost', value: summary.staffCost },
+      { name: 'Gross margin', value: Math.max(0, summary.grossMargin) },
+      { name: 'Staff cost', value: summary.staffCost },
     ];
   }, [summary]);
 
@@ -175,16 +196,18 @@ export function SalesOverviewTab({ loading, summary, appointments, sales }: Sale
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {cards.map(card => (
+        {cards.map((card, i) => (
           <div
             key={card.label}
-            className={`${card.bg} rounded-xl border ${card.border} p-5 transition-all hover:shadow-md`}
+            className={`${card.bg} rounded-xl border ${card.border} p-5 transition-all hover:shadow-md ${i === 0 ? 'ring-2 ring-blue-300' : ''}`}
           >
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm font-medium text-slate-500">{card.label}</div>
                 <div className={`text-2xl font-bold mt-1 ${card.color}`}>{card.value}</div>
                 <div className="text-xs text-slate-400 mt-1">{card.subtitle}</div>
+                {card.extra?.map(line => <div key={line} className="text-xs font-medium text-slate-600 mt-1">{line}</div>)}
+                {card.note && <div className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-200/70">{card.note}</div>}
               </div>
               <div className={`p-3 rounded-xl ${card.bg}`}>
                 <card.icon className={`w-6 h-6 ${card.color}`} />
@@ -196,7 +219,7 @@ export function SalesOverviewTab({ loading, summary, appointments, sales }: Sale
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-          <h3 className="text-lg font-semibold text-slate-900 mb-4">Revenue & Staff Cost by Staff</h3>
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">Revenue earned & Staff cost by staff</h3>
           {marginByStaff.length === 0 ? (
             <div className="h-64 flex items-center justify-center text-slate-500">No data</div>
           ) : (
@@ -206,10 +229,10 @@ export function SalesOverviewTab({ loading, summary, appointments, sales }: Sale
                 <XAxis type="number" tickFormatter={(v) => `${(v / 1).toFixed(0)}`} />
                 <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 12 }} />
                 <Tooltip
-                  formatter={(value: number, name: string) => [formatCurrency(value), name === 'revenue' ? 'Revenue' : name === 'cost' ? 'Staff Cost' : 'Margin']}
+                  formatter={(value: number, name: string) => [formatCurrency(value), name === 'revenue' ? 'Revenue earned' : name === 'cost' ? 'Staff cost' : 'Gross margin']}
                 />
-                <Bar dataKey="revenue" fill="#3B82F6" radius={[0, 2, 2, 0]} name="Revenue" stackId="a" />
-                <Bar dataKey="cost" fill="#F59E0B" radius={[0, 2, 2, 0]} name="Staff Cost" stackId="b" />
+                <Bar dataKey="revenue" fill="#3B82F6" radius={[0, 2, 2, 0]} name="Revenue earned" stackId="a" />
+                <Bar dataKey="cost" fill="#F59E0B" radius={[0, 2, 2, 0]} name="Staff cost" stackId="b" />
               </BarChart>
             </ResponsiveContainer>
           )}
@@ -244,7 +267,7 @@ export function SalesOverviewTab({ loading, summary, appointments, sales }: Sale
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-        <h3 className="text-lg font-semibold text-slate-900 mb-4">Revenue by Service</h3>
+        <h3 className="text-lg font-semibold text-slate-900 mb-4">Revenue earned by service</h3>
         {revenueByCategory.length === 0 ? (
           <div className="h-64 flex items-center justify-center text-slate-500">No data</div>
         ) : (
@@ -254,7 +277,7 @@ export function SalesOverviewTab({ loading, summary, appointments, sales }: Sale
               <XAxis type="number" tickFormatter={(v) => formatCurrency(v)} />
               <YAxis type="category" dataKey="name" width={200} tick={{ fontSize: 11 }} />
               <Tooltip formatter={(value: number) => formatCurrency(value)} />
-              <Bar dataKey="revenue" fill="#3B82F6" radius={[0, 4, 4, 0]} name="Revenue" />
+              <Bar dataKey="revenue" fill="#3B82F6" radius={[0, 4, 4, 0]} name="Revenue earned" />
             </BarChart>
           </ResponsiveContainer>
         )}

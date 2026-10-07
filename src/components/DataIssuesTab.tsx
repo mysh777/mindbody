@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { AlertTriangle, Database, Link2Off } from 'lucide-react';
+import { formatApptDate } from '../utils/formatDateTime';
 import type { AppointmentRow } from '../hooks/useSalesMarginData';
 
 interface DataIssuesTabProps {
@@ -128,7 +129,7 @@ export function DataIssuesTab({ loading, appointments, onNavigate }: DataIssuesT
                 <tr key={a.id} className="hover:bg-slate-50">
                   <td className="px-4 py-2 font-mono text-xs text-slate-500">{a.id}</td>
                   <td className="px-4 py-2 text-slate-600">
-                    {new Date(a.start_datetime).toLocaleDateString('de-DE')}
+                    {formatApptDate(a.start_datetime)}
                   </td>
                   <td className="px-4 py-2">
                     {a.client_id ? (
