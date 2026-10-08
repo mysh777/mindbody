@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchAllRows } from '../lib/fetchAllPages';
 import { toLocalISO } from '../utils/datePresets';
 import { Save, Plus, Trash2, UserCog, AlertCircle, RefreshCw, Download } from 'lucide-react';
 
@@ -51,22 +52,16 @@ export function StaffRatesManager() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [staffRes, sessionRes, syncedRes, overridesRes] = await Promise.all([
-        supabase.from('staff').select('id, first_name, last_name').order('first_name'),
-        supabase.from('session_types').select('id, name, category_name').order('name'),
-        supabase
-          .from('staff_session_types')
-          .select('id, staff_id, session_type_id, pay_rate, time_length, synced_at')
-          .order('staff_id'),
-        supabase
-          .from('staff_appointment_rates')
-          .select('id, staff_id, session_type_id, rate_per_appointment')
-          .is('effective_to', null)
-          .order('staff_id'),
+      const [staffList, sessionList, syncedRows, overrideRows] = await Promise.all([
+        fetchAllRows<any>('staff', 'id, first_name, last_name'),
+        fetchAllRows<any>('session_types', 'id, name, category_name'),
+        fetchAllRows<any>('staff_session_types', 'id, staff_id, session_type_id, pay_rate, time_length, synced_at'),
+        fetchAllRows<any>('staff_appointment_rates', 'id, staff_id, session_type_id, rate_per_appointment', q => q.is('effective_to', null)),
       ]);
-
-      const staffList = staffRes.data || [];
-      const sessionList = sessionRes.data || [];
+      staffList.sort((a, b) => (a.first_name || '').localeCompare(b.first_name || ''));
+      sessionList.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      syncedRows.sort((a, b) => String(a.staff_id).localeCompare(String(b.staff_id)));
+      overrideRows.sort((a, b) => String(a.staff_id).localeCompare(String(b.staff_id)));
       setStaff(staffList);
       setSessionTypes(sessionList);
 
@@ -74,7 +69,7 @@ export function StaffRatesManager() {
       const sessionMap = new Map(sessionList.map(s => [s.id, s.name]));
 
       setSyncedRates(
-        (syncedRes.data || []).map(r => ({
+        syncedRows.map(r => ({
           id: r.id,
           staff_id: r.staff_id,
           staff_name: staffMap.get(r.staff_id) || r.staff_id,
@@ -87,7 +82,7 @@ export function StaffRatesManager() {
       );
 
       setOverrides(
-        (overridesRes.data || []).map(r => ({
+        overrideRows.map(r => ({
           id: r.id,
           staff_id: r.staff_id,
           session_type_id: r.session_type_id || '',

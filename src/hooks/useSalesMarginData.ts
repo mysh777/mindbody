@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { fetchAllPages } from '../lib/fetchAllPages';
+import { fetchAllPages, fetchAllRows } from '../lib/fetchAllPages';
 import { fetchByIds, chunkIds, mapLimited } from '../lib/fetchByIds';
 import { NON_CASH_PAYMENT_TYPES, isPaymentOnAccount, isGiftCard } from './useSalesByDateData';
 import { DateRange } from '../utils/salesFilters';
@@ -288,8 +288,8 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
 
 async function loadStaffMap(): Promise<Record<string, string>> {
   const map: Record<string, string> = {};
-  const { data } = await supabase.from('staff').select('id, first_name, last_name');
-  (data || []).forEach(s => {
+  const data = await fetchAllRows<{ id: string; first_name: string | null; last_name: string | null }>('staff', 'id, first_name, last_name');
+  data.forEach(s => {
     map[s.id] = `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.id;
   });
   return map;
@@ -305,15 +305,15 @@ async function loadClientNames(ids: (string | null)[]): Promise<Record<string, s
 
 async function loadLocationsMap(): Promise<Record<string, string>> {
   const map: Record<string, string> = {};
-  const { data } = await supabase.from('locations').select('id, name');
-  (data || []).forEach(l => { map[l.id] = l.name; });
+  const data = await fetchAllRows<{ id: string; name: string }>('locations', 'id, name');
+  data.forEach(l => { map[l.id] = l.name; });
   return map;
 }
 
 async function loadSessionTypesMap(): Promise<Record<string, { name: string; category: string }>> {
   const map: Record<string, { name: string; category: string }> = {};
-  const { data } = await supabase.from('session_types').select('id, name, category_name');
-  (data || []).forEach(st => {
+  const data = await fetchAllRows<{ id: string; name: string; category_name: string | null }>('session_types', 'id, name, category_name');
+  data.forEach(st => {
     map[st.id] = { name: st.name, category: st.category_name || '' };
   });
   return map;
@@ -321,10 +321,9 @@ async function loadSessionTypesMap(): Promise<Record<string, { name: string; cat
 
 async function loadStaffRatesMap(): Promise<Record<string, number>> {
   const map: Record<string, number> = {};
-  const { data } = await supabase
-    .from('staff_session_types')
-    .select('staff_id, session_type_id, pay_rate');
-  (data || []).forEach(r => {
+  const data = await fetchAllRows<{ staff_id: string | null; session_type_id: string | null; pay_rate: number | string | null }>(
+    'staff_session_types', 'staff_id, session_type_id, pay_rate');
+  data.forEach(r => {
     if (r.staff_id && r.session_type_id) {
       map[`${r.staff_id}__${r.session_type_id}`] = Number(r.pay_rate) || 0;
     }
@@ -334,13 +333,14 @@ async function loadStaffRatesMap(): Promise<Record<string, number>> {
 
 async function loadPricingMap(): Promise<Record<string, { price: number; sessionCount: number; name: string; category: string }>> {
   const map: Record<string, { price: number; sessionCount: number; name: string; category: string }> = {};
-  const { data, error } = await supabase
-    .from('pricing_options')
-    .select('id, name, price, session_count, revenue_category');
-  // An empty map would silently mark every linked visit as "no pricing option".
-  if (error || !data || data.length === 0) {
-    throw new Error(`Pricing options failed to load: ${error?.message ?? 'no rows returned'}`);
+  let data: { id: string; name: string | null; price: number | string | null; session_count: number | null; revenue_category: string | null }[];
+  try {
+    data = await fetchAllRows('pricing_options', 'id, name, price, session_count, revenue_category');
+  } catch (error) {
+    throw new Error(`Pricing options failed to load: ${errorMessage(error)}`);
   }
+  // An empty map would silently mark every linked visit as "no pricing option".
+  if (data.length === 0) throw new Error('Pricing options failed to load: no rows returned');
   data.forEach(po => {
     map[po.id] = {
       price: Number(po.price) || 0,
@@ -382,10 +382,9 @@ async function loadClientServiceRevenue(
   if (orphanedCsIds.length > 0) {
     // Build mindbody_id -> pricing info map for session_count lookup
     const poByMbId = new Map<string, { sessionCount: number; name: string; category: string }>();
-    const { data: poMbData } = await supabase
-      .from('pricing_options')
-      .select('mindbody_id, session_count, name, revenue_category');
-    (poMbData || []).forEach(po => {
+    const poMbData = await fetchAllRows<{ mindbody_id: string | number | null; session_count: number | null; name: string | null; revenue_category: string | null }>(
+      'pricing_options', 'mindbody_id, session_count, name, revenue_category');
+    poMbData.forEach(po => {
       if (po.mindbody_id != null) {
         poByMbId.set(String(po.mindbody_id), {
           sessionCount: Math.max(po.session_count || 1, 1),
@@ -643,11 +642,8 @@ export interface CostRates {
 export async function loadCostRates(): Promise<CostRates> {
   const [staffRatesMap, overridesData] = await Promise.all([
     loadStaffRatesMap(),
-    supabase
-      .from('staff_appointment_rates')
-      .select('staff_id, session_type_id, rate_per_appointment')
-      .is('effective_to', null)
-      .then(r => r.data || []),
+    fetchAllRows<{ staff_id: string; session_type_id: string | null; rate_per_appointment: number | string | null }>(
+      'staff_appointment_rates', 'staff_id, session_type_id, rate_per_appointment', q => q.is('effective_to', null)),
   ]);
 
   const overrideRatesMap: Record<string, number> = {};

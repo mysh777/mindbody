@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchAllRows } from '../lib/fetchAllPages';
 import { Download, RefreshCw, Filter, ChevronDown } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 import { PagePurpose } from './PageHeader';
@@ -104,45 +105,33 @@ export function TableView({ tableName, displayName, onNavigate, selectedId, hide
       pricing_options: {},
     };
 
-    const [clientsRes, staffRes, locationsRes, sessionTypesRes, categoriesRes, pricingRes] = await Promise.all([
-      supabase.from('clients').select('id, first_name, last_name'),
-      supabase.from('staff').select('id, first_name, last_name'),
-      supabase.from('locations').select('id, name'),
-      supabase.from('session_types').select('id, name'),
-      supabase.from('service_categories').select('id, name'),
-      supabase.from('pricing_options').select('id, name'),
+    const [clients, staff, locations, sessionTypes, categories, pricing] = await Promise.all([
+      fetchAllRows<any>('clients', 'id, first_name, last_name'),
+      fetchAllRows<any>('staff', 'id, first_name, last_name'),
+      fetchAllRows<any>('locations', 'id, name'),
+      fetchAllRows<any>('session_types', 'id, name'),
+      fetchAllRows<any>('service_categories', 'id, name'),
+      fetchAllRows<any>('pricing_options', 'id, name'),
     ]);
 
-    if (clientsRes.data) {
-      clientsRes.data.forEach((c: any) => {
-        cache.clients[c.id] = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id;
-      });
-    }
-    if (staffRes.data) {
-      staffRes.data.forEach((s: any) => {
-        cache.staff[s.id] = `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.id;
-      });
-    }
-    if (locationsRes.data) {
-      locationsRes.data.forEach((l: any) => {
-        cache.locations[l.id] = l.name || l.id;
-      });
-    }
-    if (sessionTypesRes.data) {
-      sessionTypesRes.data.forEach((st: any) => {
-        cache.session_types[st.id] = st.name || st.id;
-      });
-    }
-    if (categoriesRes.data) {
-      categoriesRes.data.forEach((c: any) => {
-        cache.service_categories[c.id] = c.name || c.id;
-      });
-    }
-    if (pricingRes.data) {
-      pricingRes.data.forEach((p: any) => {
-        cache.pricing_options[p.id] = p.name || p.id;
-      });
-    }
+    clients.forEach((c: any) => {
+      cache.clients[c.id] = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id;
+    });
+    staff.forEach((s: any) => {
+      cache.staff[s.id] = `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.id;
+    });
+    locations.forEach((l: any) => {
+      cache.locations[l.id] = l.name || l.id;
+    });
+    sessionTypes.forEach((st: any) => {
+      cache.session_types[st.id] = st.name || st.id;
+    });
+    categories.forEach((c: any) => {
+      cache.service_categories[c.id] = c.name || c.id;
+    });
+    pricing.forEach((p: any) => {
+      cache.pricing_options[p.id] = p.name || p.id;
+    });
 
     setRelatedCache(cache);
   }, []);

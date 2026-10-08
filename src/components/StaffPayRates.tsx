@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchAllRows } from '../lib/fetchAllPages';
 import { fetchByIds } from '../lib/fetchByIds';
 import {
   Search,
@@ -111,19 +112,27 @@ export function StaffPayRates({ initialStaffId }: Props) {
   useEffect(() => {
     (async () => {
       setRefLoadError(null);
-      const [staffRes, progRes, syncRes] = await Promise.all([
-        supabase.from('staff').select('id, first_name, last_name, raw_data'),
-        supabase.from('pricing_options').select('program_id, program_name').not('program_id', 'is', null).not('program_name', 'is', null),
-        supabase.from('sync_logs').select('completed_at').eq('sync_type', 'staff_services').eq('status', 'completed').order('completed_at', { ascending: false }).limit(1),
-      ]);
-      const refError = staffRes.error || progRes.error || syncRes.error;
-      if (refError) {
-        setRefLoadError(errorMessage(refError));
+      let staffRows: any[];
+      let programRows: { program_id: string; program_name: string }[];
+      let lastSyncAt: string | null;
+      try {
+        const [staffData, progData, syncRes] = await Promise.all([
+          fetchAllRows<any>('staff', 'id, first_name, last_name, raw_data'),
+          fetchAllRows<{ program_id: string; program_name: string }>('pricing_options', 'program_id, program_name',
+            q => q.not('program_id', 'is', null).not('program_name', 'is', null)),
+          supabase.from('sync_logs').select('completed_at').eq('sync_type', 'staff_services').eq('status', 'completed').order('completed_at', { ascending: false }).limit(1),
+        ]);
+        if (syncRes.error) throw syncRes.error;
+        staffRows = staffData;
+        programRows = progData;
+        lastSyncAt = syncRes.data?.[0]?.completed_at ?? null;
+      } catch (error) {
+        setRefLoadError(errorMessage(error));
         setLoading(false);
         return;
       }
 
-      const staff: StaffOption[] = (staffRes.data || []).map(s => ({
+      const staff: StaffOption[] = staffRows.map(s => ({
         id: s.id,
         firstName: (s.first_name || '').trim(),
         lastName: (s.last_name || '').trim(),
@@ -132,10 +141,10 @@ export function StaffPayRates({ initialStaffId }: Props) {
       setStaffList(staff);
 
       const pMap: Record<string, string> = {};
-      (progRes.data || []).forEach(p => { pMap[p.program_id] = p.program_name; });
+      programRows.forEach(p => { pMap[p.program_id] = p.program_name; });
       setProgramMap(pMap);
 
-      if (syncRes.data?.[0]) setLastSync(syncRes.data[0].completed_at);
+      if (lastSyncAt) setLastSync(lastSyncAt);
 
       if (!initialStaffId && staff.length > 0) {
         const realStaff = staff.filter(s => s.active);
@@ -153,31 +162,14 @@ export function StaffPayRates({ initialStaffId }: Props) {
     (async () => {
       try {
       if (selectedStaff === ALL_STAFF) {
-        // Load all — paginated
-        let allSst: any[] = [];
-        let from = 0;
-        const PAGE = 1000;
-        while (true) {
-          const { data, error } = await supabase
-            .from('staff_session_types')
-            .select('staff_id, session_type_id, pay_rate, raw_data, time_length')
-            .range(from, from + PAGE - 1);
-          if (error) throw error;
-          if (!data || data.length === 0) break;
-          allSst.push(...data);
-          if (data.length < PAGE) break;
-          from += PAGE;
-        }
+        const allSst = await fetchAllRows<any>('staff_session_types', 'staff_id, session_type_id, pay_rate, raw_data, time_length');
         const stIds = [...new Set(allSst.map(r => r.session_type_id))];
         const stMap = await loadSessionTypeMap(stIds);
 
         setSstRows(allSst.map(r => toSstRow(r, stMap)));
 
-        const { data: manData, error: manError } = await supabase
-          .from('staff_appointment_rates')
-          .select('staff_id, session_type_id, rate_per_appointment, rate_type')
-          .is('effective_to', null);
-        if (manError) throw manError;
+        const manData = await fetchAllRows<any>('staff_appointment_rates', 'staff_id, session_type_id, rate_per_appointment, rate_type',
+          q => q.is('effective_to', null));
         const manStIds = (manData || []).map(r => r.session_type_id).filter(Boolean) as string[];
         const manStMap = await loadSessionTypeMap(manStIds);
         setManualRows((manData || []).map(r => ({

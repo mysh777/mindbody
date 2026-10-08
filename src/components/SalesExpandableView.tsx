@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchAllRows } from '../lib/fetchAllPages';
 import { Download, RefreshCw, ChevronDown, ChevronRight, CreditCard, Package, Filter, Building2 } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 import { getFilterPresetDates as salesGetFilterPresetDates, getMonthsForTimeline as salesGetMonthsForTimeline } from '../utils/salesFilters';
@@ -140,27 +141,21 @@ export function SalesExpandableView({ onNavigate }: SalesExpandableViewProps) {
       locations: {},
     };
 
-    const [clientsRes, staffRes, locationsRes] = await Promise.all([
-      supabase.from('clients').select('id, first_name, last_name'),
-      supabase.from('staff').select('id, first_name, last_name'),
-      supabase.from('locations').select('id, name'),
+    const [clients, staff, locations] = await Promise.all([
+      fetchAllRows<any>('clients', 'id, first_name, last_name'),
+      fetchAllRows<any>('staff', 'id, first_name, last_name'),
+      fetchAllRows<any>('locations', 'id, name'),
     ]);
 
-    if (clientsRes.data) {
-      clientsRes.data.forEach((c: any) => {
-        cache.clients[c.id] = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id;
-      });
-    }
-    if (staffRes.data) {
-      staffRes.data.forEach((s: any) => {
-        cache.staff[s.id] = `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.id;
-      });
-    }
-    if (locationsRes.data) {
-      locationsRes.data.forEach((l: any) => {
-        cache.locations[l.id] = l.name || l.id;
-      });
-    }
+    clients.forEach((c: any) => {
+      cache.clients[c.id] = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id;
+    });
+    staff.forEach((s: any) => {
+      cache.staff[s.id] = `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.id;
+    });
+    locations.forEach((l: any) => {
+      cache.locations[l.id] = l.name || l.id;
+    });
 
     setRelatedCache(cache);
   }, []);

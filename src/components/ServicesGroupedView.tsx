@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
+import { fetchAllRows } from '../lib/fetchAllPages';
 import { Download, RefreshCw, ChevronRight, ChevronDown, DollarSign } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 
@@ -76,24 +76,22 @@ export function ServicesGroupedView() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [categoriesRes, servicesRes, pricingRes, linksRes] = await Promise.all([
-        supabase.from('service_categories').select('*').order('name', { ascending: true }),
-        supabase.from('session_types').select('*').order('name', { ascending: true }),
-        supabase.from('pricing_options').select('*'),
-        supabase.from('pricing_option_session_types').select('pricing_option_id, session_type_id'),
+      const byName = (a: { name?: string | null }, b: { name?: string | null }) => (a.name || '').localeCompare(b.name || '');
+      const [categories, services, pricing, links] = await Promise.all([
+        fetchAllRows<any>('service_categories', '*'),
+        fetchAllRows<any>('session_types', '*'),
+        fetchAllRows<any>('pricing_options', '*'),
+        fetchAllRows<any>('pricing_option_session_types', 'id, pricing_option_id, session_type_id'),
       ]);
 
-      if (categoriesRes.error) throw categoriesRes.error;
-      if (servicesRes.error) throw servicesRes.error;
-      if (pricingRes.error) throw pricingRes.error;
-      if (linksRes.error) throw linksRes.error;
+      categories.sort(byName);
+      services.sort(byName);
+      setCategories(categories);
+      setServices(services);
+      setPricingOptions(pricing);
+      setPricingServiceLinks(links);
 
-      setCategories(categoriesRes.data || []);
-      setServices(servicesRes.data || []);
-      setPricingOptions(pricingRes.data || []);
-      setPricingServiceLinks(linksRes.data || []);
-
-      const allCategoryIds = new Set((categoriesRes.data || []).map(c => c.id));
+      const allCategoryIds = new Set(categories.map((c: any) => c.id));
       setExpandedCategories(allCategoryIds);
     } catch (error) {
       console.error('Error loading data:', error);

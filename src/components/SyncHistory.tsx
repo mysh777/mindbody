@@ -6,6 +6,7 @@ import {
   CheckCircle,
   XCircle,
   AlertCircle,
+  AlertTriangle,
   RefreshCw,
   ChevronLeft,
   ChevronRight,
@@ -25,10 +26,11 @@ type SortDir = 'asc' | 'desc';
 
 const PAGE_SIZE = 30;
 
-const STATUS_OPTIONS = ['completed', 'partial', 'error', 'failed', 'timeout', 'started'] as const;
+const STATUS_OPTIONS = ['completed', 'warning', 'partial', 'error', 'failed', 'timeout', 'started'] as const;
 
 const STATUS_COLORS: Record<string, { badge: string; icon: string }> = {
   completed: { badge: 'bg-emerald-100 text-emerald-700', icon: 'text-emerald-600' },
+  warning:   { badge: 'bg-yellow-100 text-yellow-800',   icon: 'text-yellow-600' },
   partial:   { badge: 'bg-orange-100 text-orange-700',   icon: 'text-orange-600' },
   error:     { badge: 'bg-red-100 text-red-700',         icon: 'text-red-600' },
   failed:    { badge: 'bg-red-100 text-red-700',         icon: 'text-red-600' },
@@ -43,6 +45,7 @@ const statusIcon = (status: string) => {
     case 'failed':
     case 'error':     return <XCircle className={cls} />;
     case 'timeout':   return <AlertCircle className={cls} />;
+    case 'warning':   return <AlertTriangle className={cls} />;
     case 'started':   return <Clock className={`${cls} animate-pulse`} />;
     default:          return <AlertCircle className={cls} />;
   }
@@ -167,10 +170,11 @@ export function SyncHistory() {
 
   // Stats
   const stats = useMemo(() => {
-    const s = { total: filtered.length, completed: 0, failed: 0, timeout: 0, started: 0, totalRecords: 0 };
+    const s = { total: filtered.length, completed: 0, warning: 0, failed: 0, timeout: 0, started: 0, totalRecords: 0 };
     for (const l of filtered) {
       if (l.status === 'completed') { s.completed++; s.totalRecords += l.records_synced || 0; }
       else if (l.status === 'failed' || l.status === 'error' || l.status === 'partial') s.failed++;
+      else if (l.status === 'warning') s.warning++;
       else if (l.status === 'timeout') s.timeout++;
       else if (l.status === 'started') s.started++;
     }
@@ -234,17 +238,18 @@ export function SyncHistory() {
 
       <div className="p-6 space-y-5">
         {/* Stats bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {[
-            { label: 'Total', value: stats.total, color: 'slate' },
-            { label: 'Completed', value: stats.completed, color: 'emerald' },
-            { label: 'Failed', value: stats.failed, color: 'red' },
-            { label: 'Timeout', value: stats.timeout, color: 'amber' },
-            { label: 'Records synced', value: stats.totalRecords.toLocaleString(), color: 'blue' },
+            { label: 'Total', value: stats.total, label_cls: 'text-slate-600', value_cls: 'text-slate-900' },
+            { label: 'Completed', value: stats.completed, label_cls: 'text-emerald-600', value_cls: 'text-emerald-900' },
+            { label: 'Warnings', value: stats.warning, label_cls: 'text-yellow-700', value_cls: 'text-yellow-900' },
+            { label: 'Failed', value: stats.failed, label_cls: 'text-red-600', value_cls: 'text-red-900' },
+            { label: 'Timeout', value: stats.timeout, label_cls: 'text-amber-600', value_cls: 'text-amber-900' },
+            { label: 'Records synced', value: stats.totalRecords.toLocaleString(), label_cls: 'text-blue-600', value_cls: 'text-blue-900' },
           ].map(s => (
-            <div key={s.label} className={`bg-white rounded-lg border border-slate-200 px-4 py-3`}>
-              <div className={`text-xs font-medium text-${s.color}-600 uppercase tracking-wider mb-0.5`}>{s.label}</div>
-              <div className={`text-xl font-bold text-${s.color}-900`}>{s.value}</div>
+            <div key={s.label} className="bg-white rounded-lg border border-slate-200 px-4 py-3">
+              <div className={`text-xs font-medium ${s.label_cls} uppercase tracking-wider mb-0.5`}>{s.label}</div>
+              <div className={`text-xl font-bold ${s.value_cls}`}>{s.value}</div>
             </div>
           ))}
         </div>
@@ -429,7 +434,7 @@ export function SyncHistory() {
                           </td>
                           <td className="px-4 py-3 max-w-xs">
                             {log.error_message ? (
-                              <span className="text-red-600 text-xs truncate block" title={log.error_message}>
+                              <span className={`${log.status === 'warning' ? 'text-yellow-700' : 'text-red-600'} text-xs truncate block`} title={log.error_message}>
                                 {log.error_message.length > 80 ? log.error_message.slice(0, 80) + '...' : log.error_message}
                               </span>
                             ) : (

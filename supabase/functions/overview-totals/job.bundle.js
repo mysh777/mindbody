@@ -1796,13 +1796,13 @@ var WebSocketFactory = class {
     if (env.constructor) {
       return env.constructor;
     }
-    let errorMessage = env.error || "WebSocket not supported in this environment.";
+    let errorMessage2 = env.error || "WebSocket not supported in this environment.";
     if (env.workaround) {
-      errorMessage += `
+      errorMessage2 += `
 
 Suggested solution: ${env.workaround}`;
     }
-    throw new Error(errorMessage);
+    throw new Error(errorMessage2);
   }
   static createWebSocket(url, protocols) {
     const WS = this.getWebSocketConstructor();
@@ -2994,9 +2994,9 @@ var RealtimeClient = class {
         this.conn = websocket_factory_default.createWebSocket(this.endpointURL());
       } catch (error) {
         this._setConnectionState("disconnected");
-        const errorMessage = error.message;
-        if (errorMessage.includes("Node.js")) {
-          throw new Error(`${errorMessage}
+        const errorMessage2 = error.message;
+        if (errorMessage2.includes("Node.js")) {
+          throw new Error(`${errorMessage2}
 
 To use Realtime in Node.js, you need to provide a WebSocket implementation:
 
@@ -3011,7 +3011,7 @@ Option 2: Install and provide the "ws" package:
     transport: ws
   })`);
         }
-        throw new Error(`WebSocket not available: ${errorMessage}`);
+        throw new Error(`WebSocket not available: ${errorMessage2}`);
       }
     }
     this._setupConnectionHandlers();
@@ -8184,6 +8184,9 @@ async function fetchAllPages(build) {
     if (!data || data.length < PAGE_SIZE) return rows;
   }
 }
+function fetchAllRows(table, columns, filter = (q) => q) {
+  return fetchAllPages((from, to) => filter(supabase.from(table).select(columns)).order("id").range(from, to));
+}
 
 // src/hooks/useSalesMarginData.ts
 var import_react2 = __toESM(require_react(), 1);
@@ -8216,6 +8219,17 @@ async function fetchByIds(table, column, ids, select, configure = (q) => q, orde
 
 // src/hooks/useSalesByDateData.ts
 var import_react = __toESM(require_react(), 1);
+
+// src/utils/errorMessage.ts
+function errorMessage(error) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
+    return error.message;
+  }
+  return String(error);
+}
+
+// src/hooks/useSalesByDateData.ts
 var NON_CASH_PAYMENT_TYPES = ["Prepaid Gift Card", "Account", "Comp/Guest", "Other"];
 var POA_ITEM_IDS = /* @__PURE__ */ new Set(["-6", "10289"]);
 var GIFT_CARD_PATTERN = /D[AĀ]VANU KARTE/i;
@@ -8598,8 +8612,11 @@ function getSessionTypeMedianPrices(resolvedVisits) {
 // src/hooks/useSalesMarginData.ts
 async function loadStaffRatesMap() {
   const map = {};
-  const { data } = await supabase.from("staff_session_types").select("staff_id, session_type_id, pay_rate");
-  (data || []).forEach((r) => {
+  const data = await fetchAllRows(
+    "staff_session_types",
+    "staff_id, session_type_id, pay_rate"
+  );
+  data.forEach((r) => {
     if (r.staff_id && r.session_type_id) {
       map[`${r.staff_id}__${r.session_type_id}`] = Number(r.pay_rate) || 0;
     }
@@ -8608,10 +8625,13 @@ async function loadStaffRatesMap() {
 }
 async function loadPricingMap() {
   const map = {};
-  const { data, error } = await supabase.from("pricing_options").select("id, name, price, session_count, revenue_category");
-  if (error || !data || data.length === 0) {
-    throw new Error(`Pricing options failed to load: ${error?.message ?? "no rows returned"}`);
+  let data;
+  try {
+    data = await fetchAllRows("pricing_options", "id, name, price, session_count, revenue_category");
+  } catch (error) {
+    throw new Error(`Pricing options failed to load: ${errorMessage(error)}`);
   }
+  if (data.length === 0) throw new Error("Pricing options failed to load: no rows returned");
   data.forEach((po) => {
     map[po.id] = {
       price: Number(po.price) || 0,
@@ -8639,8 +8659,11 @@ async function loadClientServiceRevenue(clientServiceIds, pricingMap) {
   });
   if (orphanedCsIds.length > 0) {
     const poByMbId = /* @__PURE__ */ new Map();
-    const { data: poMbData } = await supabase.from("pricing_options").select("mindbody_id, session_count, name, revenue_category");
-    (poMbData || []).forEach((po) => {
+    const poMbData = await fetchAllRows(
+      "pricing_options",
+      "mindbody_id, session_count, name, revenue_category"
+    );
+    poMbData.forEach((po) => {
       if (po.mindbody_id != null) {
         poByMbId.set(String(po.mindbody_id), {
           sessionCount: Math.max(po.session_count || 1, 1),
@@ -8819,7 +8842,11 @@ async function computeMarginVisitsByMonth(dateRange) {
 async function loadCostRates() {
   const [staffRatesMap, overridesData] = await Promise.all([
     loadStaffRatesMap(),
-    supabase.from("staff_appointment_rates").select("staff_id, session_type_id, rate_per_appointment").is("effective_to", null).then((r) => r.data || [])
+    fetchAllRows(
+      "staff_appointment_rates",
+      "staff_id, session_type_id, rate_per_appointment",
+      (q) => q.is("effective_to", null)
+    )
   ]);
   const overrideRatesMap = {};
   for (const o of overridesData) {

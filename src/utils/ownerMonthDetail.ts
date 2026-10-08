@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import { fetchAllPages } from '../lib/fetchAllPages';
+import { fetchAllPages, fetchAllRows } from '../lib/fetchAllPages';
 import { computeMarginVisitsByMonth, type PricedVisit } from '../hooks/useSalesMarginData';
 import { toLocalISO } from './datePresets';
 import { lastDayOfMonth, shiftMonth } from './ownerFormat';
@@ -102,7 +102,7 @@ export async function loadMonthDetail(month: string, location: string): Promise<
   const start = `${month}-01`;
   const end = lastDayOfMonth(month);
 
-  const [current, previous, schedule, staffRes] = await Promise.all([
+  const [current, previous, schedule, staffRows] = await Promise.all([
     computeMarginVisitsByMonth({ start, end }),
     computeMarginVisitsByMonth({ start: `${lastYear}-01`, end: lastDayOfMonth(lastYear) }),
     fetchAllPages<ScheduleRow>((from, to) => supabase
@@ -112,10 +112,9 @@ export async function loadMonthDetail(month: string, location: string): Promise<
       .lte('start_datetime', `${end}T23:59:59`)
       .eq('stale', false)
       .order('id').range(from, to)),
-    supabase.from('staff').select('id, first_name, last_name'),
+    fetchAllRows<{ id: string; first_name: string | null; last_name: string | null }>('staff', 'id, first_name, last_name'),
   ]);
-  if (staffRes.error) throw new Error(staffRes.error.message);
-  const names = new Map((staffRes.data || []).map(s => [s.id, `${s.first_name || ''} ${s.last_name || ''}`.replace(/\s+/g, ' ').trim() || s.id]));
+  const names = new Map(staffRows.map(s => [s.id, `${s.first_name || ''} ${s.last_name || ''}`.replace(/\s+/g, ' ').trim() || s.id]));
 
   const visits = current.get(seriesKey(month, location)) || [];
   const lastYearVisits = previous.get(seriesKey(lastYear, location)) || [];

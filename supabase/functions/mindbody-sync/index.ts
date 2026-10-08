@@ -778,6 +778,62 @@ async function removeStaleStaffSessionTypes(
   return removed;
 }
 
+const EMPTY_LIST_PROTECTION_DAYS = 60;
+
+// Mindbody sometimes returns an empty service list for active staff; deleting then would wipe real pay rates.
+async function recentVisitCount(supabase: any, staffDbId: string): Promise<number | null> {
+  const since = new Date(Date.now() - EMPTY_LIST_PROTECTION_DAYS * 86400000).toISOString();
+  const { count, error } = await supabase
+    .from("appointments")
+    .select("id", { count: "exact", head: true })
+    .eq("staff_id", staffDbId)
+    .gte("start_datetime", since);
+  if (error) {
+    console.error(`[SST] Staff ${staffDbId} | recent visit count failed: ${error.message}`);
+    return null;
+  }
+  return count ?? 0;
+}
+
+function staffLabel(staff: { first_name?: string; last_name?: string; mindbody_id: string }): string {
+  const name = `${staff.first_name ?? ''} ${staff.last_name ?? ''}`.trim();
+  return name ? `${name} (${staff.mindbody_id})` : String(staff.mindbody_id);
+}
+
+async function removeStaleLinksSafely(
+  supabase: any,
+  staff: { id: string; mindbody_id: string; first_name?: string; last_name?: string },
+  items: any[],
+  sessionTypeLookup: Map<string, string>,
+): Promise<{ removed: number; warning: string | null }> {
+  if (items.length === 0) {
+    const visits = await recentVisitCount(supabase, staff.id);
+    if (visits === null || visits > 0) {
+      const reason = visits === null ? 'recent visits could not be checked' : `${visits} visits in the last ${EMPTY_LIST_PROTECTION_DAYS} days`;
+      const warning = `${staffLabel(staff)}: Mindbody returned an empty service list, but ${reason}. Existing service links were kept.`;
+      console.warn(`[SST] ${warning}`);
+      return { removed: 0, warning };
+    }
+  }
+  const removed = await removeStaleStaffSessionTypes(supabase, staff.id, staff.mindbody_id, items, sessionTypeLookup);
+  return { removed, warning: null };
+}
+
+async function logStaffServicesWarnings(supabase: any, warnings: string[]) {
+  if (warnings.length === 0) return;
+  const now = new Date().toISOString();
+  const { error } = await supabase.from("sync_logs").insert({
+    sync_type: "staff_services",
+    status: "warning",
+    started_at: now,
+    completed_at: now,
+    records_synced: 0,
+    error_message: `Staff service links kept (empty list from Mindbody): ${warnings.join(' | ')}`.slice(0, 2000),
+    raw_response: { protected_staff_warnings: warnings },
+  });
+  if (error) console.error(`[SST] Failed to write sync warning: ${error.message}`);
+}
+
 async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, staffOffset?: number, staffLimit?: number) {
   console.log('[SST] Syncing staff session types via /staff/sessiontypes');
 
@@ -809,6 +865,7 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, user
   console.log(`[SST] Loaded ${sessionTypeLookup.size} session types into lookup`);
 
   let removedLinks = 0;
+  const protectedWarnings: string[] = [];
   let testedStaff = 0;
   let staffWithData = 0;
   let importedRows = 0;
@@ -832,10 +889,13 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, user
       importedRows += importResult.imported;
       if (importResult.errors > 0) continue;
     }
-    removedLinks += await removeStaleStaffSessionTypes(supabase, staff.id, staff.mindbody_id, result.items, sessionTypeLookup);
+    const cleanup = await removeStaleLinksSafely(supabase, staff, result.items, sessionTypeLookup);
+    removedLinks += cleanup.removed;
+    if (cleanup.warning) protectedWarnings.push(cleanup.warning);
   }
 
-  const stats = { testedStaff, staffWithData, importedRows, emptyStaff, failedStaff, removedLinks };
+  await logStaffServicesWarnings(supabase, protectedWarnings);
+  const stats = { testedStaff, staffWithData, importedRows, emptyStaff, failedStaff, removedLinks, protectedStaff: protectedWarnings.length, warnings: protectedWarnings };
   console.log(`[SST] === SUMMARY ===`);
   console.log(`[SST] ${JSON.stringify(stats)}`);
   return stats;
@@ -880,15 +940,18 @@ async function syncStaffServicesOne(
 
   const report: SaveReport = {};
   const importResult = await importStaffSessionItems(supabase, staffRow.id, staffRow.mindbody_id, result.items, sessionTypeLookup, report);
-  const removedLinks = importResult.errors > 0
-    ? 0
-    : await removeStaleStaffSessionTypes(supabase, staffRow.id, staffRow.mindbody_id, result.items, sessionTypeLookup);
+  const cleanup = importResult.errors > 0
+    ? { removed: 0, warning: null }
+    : await removeStaleLinksSafely(supabase, staffRow, result.items, sessionTypeLookup);
+  const removedLinks = cleanup.removed;
+  if (cleanup.warning) await logStaffServicesWarnings(supabase, [cleanup.warning]);
 
   return {
     staff: `${staffRow.first_name} ${staffRow.last_name} (${staffRow.mindbody_id})`,
     apiItemsReturned: result.items.length,
     ...importResult,
     removedLinks,
+    warning: cleanup.warning,
     saveReport: report,
     rawTopLevelKeys: Object.keys(result.raw),
     firstItem: result.items.length > 0 ? result.items[0] : null,

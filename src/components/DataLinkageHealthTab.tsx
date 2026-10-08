@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { fetchAllRows } from '../lib/fetchAllPages';
 import { fetchByIds } from '../lib/fetchByIds';
 import {
   Download,
@@ -156,12 +157,10 @@ export function DataLinkageHealthTab() {
       }
 
       // Load session type names
-      const { data: stData } = await supabase.from('session_types').select('id, name, mindbody_id');
+      const stData = await fetchAllRows<{ id: string; name: string; mindbody_id: string | null }>('session_types', 'id, name, mindbody_id');
       const stNameByMbId = new Map<string, string>();
-      if (stData) {
-        for (const st of stData) {
-          if (st.mindbody_id) stNameByMbId.set(st.mindbody_id, st.name);
-        }
+      for (const st of stData) {
+        if (st.mindbody_id) stNameByMbId.set(st.mindbody_id, st.name);
       }
 
       type Category = 'fullChain' | 'dropIn' | 'unresolvable';
