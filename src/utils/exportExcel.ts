@@ -8,24 +8,11 @@ function triggerDownload(blob: Blob, filename: string) {
   link.style.display = 'none';
   document.body.appendChild(link);
   link.click();
-
-  // Fallback: if the click didn't trigger a download (sandboxed iframe),
-  // open in a new tab so the browser's native save dialog appears.
+  // Safari reads the blob asynchronously after click; revoking immediately cancels the download.
   setTimeout(() => {
-    document.body.removeChild(link);
+    link.remove();
     URL.revokeObjectURL(url);
-  }, 100);
-
-  // Secondary fallback via window.open for sandboxed environments
-  setTimeout(() => {
-    try {
-      const opened = window.open(url, '_blank');
-      if (opened) {
-        // Revoke later so the new tab can finish loading
-        setTimeout(() => URL.revokeObjectURL(url), 30000);
-      }
-    } catch { /* blocked by sandbox — link.click fallback covers it */ }
-  }, 300);
+  }, 1000);
 }
 
 function autoColWidths(data: any[]): { wch: number }[] {
@@ -52,6 +39,10 @@ function stamp(base: string): string {
   return `${base}_${new Date().toISOString().split('T')[0]}.xlsx`;
 }
 
+export function downloadWorkbook(workbook: XLSX.WorkBook, filename: string) {
+  triggerDownload(buildBlob(workbook), stamp(filename));
+}
+
 export function exportToExcel(data: any[], filename: string) {
   if (data.length === 0) {
     alert('No data to export');
@@ -64,7 +55,7 @@ export function exportToExcel(data: any[], filename: string) {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Data');
 
-  triggerDownload(buildBlob(workbook), stamp(filename));
+  downloadWorkbook(workbook, filename);
 }
 
 function csvCell(value: unknown): string {
@@ -104,5 +95,5 @@ export function exportMultiSheetExcel(sheets: SheetDef[], filename: string) {
     return;
   }
 
-  triggerDownload(buildBlob(workbook), stamp(filename));
+  downloadWorkbook(workbook, filename);
 }

@@ -437,57 +437,6 @@ async function syncStaff(supabase: any, config: MindbodyConfig) {
   return totalSynced;
 }
 
-async function syncPrograms(supabase: any, config: MindbodyConfig) {
-  console.log('Syncing programs (service categories)');
-
-  const url = `${MINDBODY_BASE_URL}/site/programs`;
-  const startTime = Date.now();
-
-  const response = await fetch(url, {
-    headers: getSourceHeaders(config),
-  });
-
-  const durationMs = Date.now() - startTime;
-  const responseText = await response.text();
-
-  let data;
-  let error = null;
-  try {
-    data = JSON.parse(responseText);
-  } catch (e) {
-    error = `Failed to parse response: ${e.message}`;
-    data = {};
-  }
-
-  await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
-
-  if (!response.ok) {
-    console.error(`Failed to fetch programs: ${response.status}`);
-    return 0;
-  }
-
-  const programs = data.Programs || [];
-  console.log(`Found ${programs.length} programs`);
-
-  await saveRawData(supabase, 'programs', data, programs.length, null);
-
-  for (const program of programs) {
-    const categoryData = {
-      id: String(program.Id),
-      mindbody_id: String(program.Id),
-      name: program.Name,
-      description: program.Description,
-      active: true,
-    };
-
-    await supabase.from("service_categories").upsert(categoryData, {
-      onConflict: "mindbody_id",
-    });
-  }
-
-  return programs.length;
-}
-
 async function syncSessionTypes(supabase: any, config: MindbodyConfig) {
   console.log('Syncing session types (appointment types)');
 
@@ -1787,146 +1736,6 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
 }
 
 
-async function backfillOrphanedClientServices(
-  supabase: any,
-  config: MindbodyConfig,
-  userToken: string,
-  clientIds: string[],
-  batchSize = 50
-): Promise<{
-  processed: number;
-  servicesUpserted: number;
-  linked: number;
-  rateLimitHits: number;
-  errors: string[];
-  lastProcessedClientId: string | null;
-}> {
-  console.log(`=== BACKFILL ORPHANED CLIENT_SERVICES: ${clientIds.length} clients, batchSize=${batchSize} ===`);
-
-  const { byProductId: pricingByProductId, byMindbodyId: pricingByMindbodyId } = await loadPricingLinkMaps(supabase);
-
-  let processed = 0;
-  let servicesUpserted = 0;
-  let linked = 0;
-  let rateLimitHits = 0;
-  const errors: string[] = [];
-  let lastProcessedClientId: string | null = null;
-  const TIMEOUT_MS = 8000;
-  const MAX_429_RETRIES = 4;
-  const BASE_BACKOFF_MS = 2000;
-
-  async function fetchWithBackoff(clientId: string): Promise<{ clientId: string; services: any[] }> {
-    const url = `${MINDBODY_BASE_URL}/client/clientservices?clientId=${clientId}`;
-
-    for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-      try {
-        const response = await fetch(url, {
-          headers: getUserHeaders(config, userToken),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-
-        if (response.status === 429) {
-          rateLimitHits++;
-          if (attempt < MAX_429_RETRIES) {
-            const delay = BASE_BACKOFF_MS * Math.pow(2, attempt);
-            console.log(`[BACKFILL] 429 for client ${clientId}, retry ${attempt + 1}/${MAX_429_RETRIES} after ${delay}ms`);
-            await new Promise(r => setTimeout(r, delay));
-            continue;
-          }
-          errors.push(`Client ${clientId}: 429 after ${MAX_429_RETRIES} retries`);
-          return { clientId, services: [] };
-        }
-
-        if (!response.ok) {
-          errors.push(`Client ${clientId}: HTTP ${response.status}`);
-          return { clientId, services: [] };
-        }
-
-        const data = await response.json();
-        return { clientId, services: data.ClientServices || [] };
-      } catch (err: any) {
-        clearTimeout(timeoutId);
-        if (err.name === 'AbortError' && attempt < MAX_429_RETRIES) {
-          console.log(`[BACKFILL] Timeout for client ${clientId}, retry ${attempt + 1}`);
-          await new Promise(r => setTimeout(r, 1000));
-          continue;
-        }
-        errors.push(`Client ${clientId}: ${err.message}`);
-        return { clientId, services: [] };
-      }
-    }
-    return { clientId, services: [] };
-  }
-
-  for (let i = 0; i < clientIds.length; i += batchSize) {
-    const batch = clientIds.slice(i, i + batchSize);
-    const batchResults = await Promise.all(batch.map(fetchWithBackoff));
-
-    const syncedAt = new Date().toISOString();
-    const allServicesData: any[] = [];
-
-    for (const { clientId, services } of batchResults) {
-      processed++;
-      lastProcessedClientId = clientId;
-
-      for (const cs of services) {
-        const productId = cs.ProductId ? String(cs.ProductId) : null;
-        const pricingOptionId = productId
-          ? (pricingByProductId.get(productId) || pricingByMindbodyId.get(productId))
-          : null;
-
-        const csData: any = {
-          mindbody_id: String(cs.Id),
-          client_id: clientId,
-          product_id: productId || String(cs.Id),
-          name: cs.Name,
-          payment_date: cs.PaymentDate,
-          active_date: cs.ActiveDate,
-          expiration_date: cs.ExpirationDate,
-          count: cs.Count,
-          remaining: cs.Remaining,
-          current: cs.Current || false,
-          program_id: cs.Program?.Id ? String(cs.Program.Id) : null,
-          program_name: cs.Program?.Name || cs.Program,
-          status: cs.Active ? 'Active' : 'Inactive',
-          activation_type: cs.ActivationType,
-          raw_data: cs,
-          synced_at: syncedAt,
-        };
-
-        if (pricingOptionId) {
-          csData.pricing_option_id = pricingOptionId;
-          linked++;
-        }
-
-        allServicesData.push(csData);
-      }
-    }
-
-    if (allServicesData.length > 0) {
-      await keepExistingPricingLinks(supabase, allServicesData);
-      const { error: upsertError } = await supabase.from("client_services").upsert(allServicesData, {
-        onConflict: "mindbody_id",
-      });
-      if (upsertError) {
-        errors.push(`Upsert batch error: ${upsertError.message}`);
-      } else {
-        servicesUpserted += allServicesData.length;
-      }
-    }
-
-    console.log(`[BACKFILL] Progress: ${processed}/${clientIds.length} clients, ${servicesUpserted} services upserted, ${linked} linked`);
-  }
-
-  console.log(`=== BACKFILL COMPLETE: ${processed} clients, ${servicesUpserted} services, ${linked} linked, ${errors.length} errors ===`);
-  return { processed, servicesUpserted, linked, rateLimitHits, errors, lastProcessedClientId };
-}
-
-
 async function syncTransactions(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number) {
   const targetYear = year || new Date().getFullYear();
   const hasMonthFilter = month && month > 0;
@@ -2421,119 +2230,6 @@ async function syncProducts(supabase: any, config: MindbodyConfig, userToken?: s
   return totalSynced;
 }
 
-async function diagStaffSessionTypes(supabase: any, config: MindbodyConfig, variant: string) {
-  console.log(`[SST-DIAG] Starting diagnostic variant="${variant}"`);
-
-  const { data: allStaff } = await supabase
-    .from("staff")
-    .select("id, mindbody_id, first_name, last_name")
-    .order("mindbody_id")
-    .limit(3);
-
-  if (!allStaff || allStaff.length === 0) {
-    return { error: "No staff in DB" };
-  }
-
-  let userToken: string | null = null;
-  if (variant === "request_dot_with_token" || variant === "plain_with_token") {
-    userToken = await getUserToken(supabase, config);
-    if (!userToken) {
-      return { error: "Could not obtain user token" };
-    }
-  }
-
-  const probes: any[] = [];
-
-  for (const staff of allStaff) {
-    const staffLabel = `${staff.first_name} ${staff.last_name} (${staff.mindbody_id})`;
-
-    let url: string;
-    if (variant === "request_dot" || variant === "request_dot_with_token") {
-      url = `${MINDBODY_BASE_URL}/staff/sessiontypes?request.staffId=${staff.mindbody_id}`;
-    } else {
-      url = `${MINDBODY_BASE_URL}/staff/staffsessiontypes?staffId=${staff.mindbody_id}`;
-    }
-
-    const headers = userToken
-      ? getUserHeaders(config, userToken)
-      : getSourceHeaders(config);
-
-    console.log(`[SST-DIAG] ${staffLabel} | URL: ${url} | Auth: ${userToken ? 'Bearer token' : 'Source headers'}`);
-
-    const startTime = Date.now();
-    let probe: any = { staff: staffLabel, url, variant, hasToken: !!userToken };
-
-    try {
-      const response = await fetch(url, { headers });
-      const durationMs = Date.now() - startTime;
-      const responseText = await response.text();
-
-      probe.httpStatus = response.status;
-      probe.responseBytes = responseText.length;
-      probe.durationMs = durationMs;
-
-      console.log(`[SST-DIAG] ${staffLabel} | HTTP ${response.status} | ${responseText.length} bytes | ${durationMs}ms`);
-
-      let data: any;
-      try {
-        data = JSON.parse(responseText);
-      } catch {
-        probe.parseError = true;
-        probe.rawFirst500 = responseText.substring(0, 500);
-        console.error(`[SST-DIAG] ${staffLabel} | JSON parse failed, raw: ${responseText.substring(0, 500)}`);
-        probes.push(probe);
-        continue;
-      }
-
-      probe.topLevelKeys = Object.keys(data);
-      console.log(`[SST-DIAG] ${staffLabel} | Top-level keys: ${probe.topLevelKeys.join(', ')}`);
-
-      const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
-      if (arrayKey) {
-        const arr = data[arrayKey];
-        probe.arrayKey = arrayKey;
-        probe.arrayLength = arr.length;
-        console.log(`[SST-DIAG] ${staffLabel} | Array "${arrayKey}" length: ${arr.length}`);
-
-        if (arr.length > 0) {
-          probe.firstItemKeys = Object.keys(arr[0]);
-          probe.firstItem = arr[0];
-          console.log(`[SST-DIAG] ${staffLabel} | First item keys: ${probe.firstItemKeys.join(', ')}`);
-          console.log(`[SST-DIAG] ${staffLabel} | First item: ${JSON.stringify(arr[0])}`);
-        }
-      } else {
-        probe.arrayKey = null;
-        probe.note = "No array found in response";
-        console.warn(`[SST-DIAG] ${staffLabel} | No array in response body`);
-      }
-
-      if (data.PaginationResponse) {
-        probe.pagination = data.PaginationResponse;
-      }
-
-      await saveRawData(supabase, `sst_diag_${variant}_staff_${staff.mindbody_id}`, data, probe.arrayLength || 0, data.PaginationResponse);
-      await logApiCall(supabase, url, "GET", { staffId: staff.mindbody_id, diagnostic: true, variant }, response.status, data, null, durationMs);
-
-    } catch (err: any) {
-      probe.fetchError = err.message;
-      console.error(`[SST-DIAG] ${staffLabel} | Fetch error: ${err.message}`);
-    }
-
-    probes.push(probe);
-  }
-
-  const { count: sessionTypesCount } = await supabase
-    .from("session_types")
-    .select("*", { count: "exact", head: true });
-
-  return {
-    variant,
-    staffTested: allStaff.length,
-    sessionTypesInDb: sessionTypesCount,
-    probes,
-  };
-}
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -2543,7 +2239,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { syncType = "quick", year, month, monthFrom, monthTo, staffId: requestStaffId, clientIds, batchSize, pageOffset, pageLimit, staffOffset, staffLimit } = await req.json().catch(() => ({}));
+    const { syncType = "quick", year, month, monthFrom, monthTo, staffId: requestStaffId, pageOffset, pageLimit, staffOffset, staffLimit } = await req.json().catch(() => ({}));
     const targetYear = year ? parseInt(year) : undefined;
     const targetMonth = month ? parseInt(month) : undefined;
     const targetMonthFrom = monthFrom ? parseInt(monthFrom) : undefined;
@@ -2588,145 +2284,6 @@ Deno.serve(async (req: Request) => {
       siteId: mindbodySiteId,
     };
 
-    if (syncType?.startsWith("sst_diag_")) {
-      const variant = syncType.replace("sst_diag_", "");
-      const diagResult = await diagStaffSessionTypes(supabase, config, variant);
-      return new Response(
-        JSON.stringify({ success: true, diagnostic: true, ...diagResult }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    if (syncType === "payroll_diag_source") {
-      const url = `${MINDBODY_BASE_URL}/payroll/scheduledserviceearnings?StartDateTime=2026-08-01T00:00:00&EndDateTime=2026-08-14T23:59:59&Limit=200&Offset=0`;
-      const startTime = Date.now();
-      const response = await fetch(url, { headers: getSourceHeaders(config) });
-      const durationMs = Date.now() - startTime;
-      const text = await response.text();
-      await logApiCall(supabase, url, "GET", { mode: "source_headers_only" }, response.status, text.substring(0, 2000), null, durationMs);
-      return new Response(
-        JSON.stringify({ httpStatus: response.status, durationMs, body: text.substring(0, 2000) }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    if (syncType === "payroll_diag") {
-      const userToken = await getUserToken(supabase, config);
-      if (!userToken) {
-        return new Response(
-          JSON.stringify({ error: "Could not obtain user token" }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const diagYear = year ? parseInt(year) : 2026;
-      const diagMonth = month ? parseInt(month) : 8;
-      const firstDay = new Date(diagYear, diagMonth - 1, 1);
-      const lastDay = new Date(diagYear, diagMonth, 0);
-
-      const chunks: { start: string; end: string }[] = [];
-      let chunkStart = new Date(firstDay);
-      while (chunkStart <= lastDay) {
-        const chunkEnd = new Date(chunkStart);
-        chunkEnd.setDate(chunkEnd.getDate() + 13);
-        if (chunkEnd > lastDay) chunkEnd.setTime(lastDay.getTime());
-        chunks.push({
-          start: chunkStart.toISOString().split('T')[0],
-          end: chunkEnd.toISOString().split('T')[0],
-        });
-        chunkStart = new Date(chunkEnd);
-        chunkStart.setDate(chunkStart.getDate() + 1);
-      }
-
-      console.log(`[PAYROLL-DIAG] Fetching ${chunks.length} chunks for ${diagYear}-${String(diagMonth).padStart(2,'0')}`);
-
-      const allRecords: any[] = [];
-      const chunkDetails: any[] = [];
-
-      for (const chunk of chunks) {
-        const url = `${MINDBODY_BASE_URL}/payroll/scheduledserviceearnings?StartDateTime=${chunk.start}T00:00:00&EndDateTime=${chunk.end}T23:59:59&Limit=200&Offset=0`;
-        console.log(`[PAYROLL-DIAG] ${url}`);
-        const startTime = Date.now();
-        const response = await fetch(url, { headers: getUserHeaders(config, userToken) });
-        const durationMs = Date.now() - startTime;
-        const text = await response.text();
-        let data: any;
-        try { data = JSON.parse(text); } catch { data = { parseError: true, raw: text.substring(0, 500) }; }
-
-        await logApiCall(supabase, url, "GET", { chunk }, response.status, data, null, durationMs);
-
-        const pagination = data.PaginationResponse;
-        const arrayKey = Object.keys(data).find(k => Array.isArray(data[k]));
-        const items = arrayKey ? data[arrayKey] : [];
-
-        let detail: any = { chunk, httpStatus: response.status, arrayKey, count: items.length, pagination, durationMs };
-
-        if (pagination && pagination.TotalResults > items.length) {
-          let offset = items.length;
-          while (offset < pagination.TotalResults) {
-            const pageUrl = `${MINDBODY_BASE_URL}/payroll/scheduledserviceearnings?StartDateTime=${chunk.start}T00:00:00&EndDateTime=${chunk.end}T23:59:59&Limit=200&Offset=${offset}`;
-            const pr = await fetch(pageUrl, { headers: getUserHeaders(config, userToken) });
-            const pt = await pr.text();
-            let pd: any;
-            try { pd = JSON.parse(pt); } catch { pd = {}; }
-            const pk = Object.keys(pd).find(k => Array.isArray(pd[k]));
-            const pi = pk ? pd[pk] : [];
-            items.push(...pi);
-            offset += pi.length;
-            if (pi.length === 0) break;
-          }
-          detail.countAfterPagination = items.length;
-        }
-
-        chunkDetails.push(detail);
-        allRecords.push(...items);
-      }
-
-      const firstRecord = allRecords.length > 0 ? allRecords[0] : null;
-      const firstRecordKeys = firstRecord ? Object.keys(firstRecord) : [];
-
-      const byStaff: Record<string, { name: string; total: number; count: number }> = {};
-      for (const r of allRecords) {
-        const staffName = r.Staff?.Name || r.StaffName || `Staff ${r.StaffId}`;
-        const staffId = String(r.Staff?.Id || r.StaffId || 'unknown');
-        const amount = Number(r.EarningAmount || r.Amount || r.Pay || 0);
-        if (!byStaff[staffId]) byStaff[staffId] = { name: staffName, total: 0, count: 0 };
-        byStaff[staffId].total += amount;
-        byStaff[staffId].count++;
-      }
-
-      const { data: locData } = await supabase
-        .from("appointments")
-        .select("id, location_id, staff_id")
-        .gte("start_date_time", `${diagYear}-${String(diagMonth).padStart(2,'0')}-01`)
-        .lt("start_date_time", diagMonth === 12 ? `${diagYear + 1}-01-01` : `${diagYear}-${String(diagMonth + 1).padStart(2,'0')}-01`);
-
-      const apptMap = new Map<string, any>();
-      (locData || []).forEach((a: any) => apptMap.set(a.id, a));
-
-      let matched = 0;
-      for (const r of allRecords) {
-        const apptId = String(r.AppointmentId || r.ScheduledServiceId || '');
-        if (apptMap.has(apptId)) matched++;
-      }
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          diagnostic: "payroll",
-          period: `${diagYear}-${String(diagMonth).padStart(2,'0')}`,
-          chunks: chunkDetails,
-          totalRecords: allRecords.length,
-          firstRecordKeys,
-          firstRecord,
-          secondRecord: allRecords.length > 1 ? allRecords[1] : null,
-          byStaff,
-          appointmentsInDb: locData?.length || 0,
-          matchedToAppointments: matched,
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
 
     if (syncType === "staff_services_one") {
       if (!requestStaffId) {
@@ -2749,65 +2306,6 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    if (syncType === "backfill_orphaned_client_services") {
-      if (!clientIds || !Array.isArray(clientIds) || clientIds.length === 0) {
-        return new Response(
-          JSON.stringify({ error: "clientIds array is required for backfill_orphaned_client_services" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const userToken = await getUserToken(supabase, config);
-      if (!userToken) {
-        return new Response(
-          JSON.stringify({ error: "Could not obtain user token. Staff credentials required." }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const { data: logData } = await supabase
-        .from("sync_logs")
-        .insert({
-          sync_type: "backfill_orphaned_client_services",
-          status: "started",
-          started_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
-      const backfillLogId = logData?.id;
-
-      try {
-        const result = await backfillOrphanedClientServices(
-          supabase, config, userToken, clientIds, batchSize || 50
-        );
-
-        if (backfillLogId) {
-          await supabase.from("sync_logs").update({
-            status: "completed",
-            completed_at: new Date().toISOString(),
-            records_synced: result.servicesUpserted,
-            raw_response: result,
-          }).eq("id", backfillLogId);
-        }
-
-        return new Response(
-          JSON.stringify({ success: true, syncType, ...result }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      } catch (err: any) {
-        if (backfillLogId) {
-          await supabase.from("sync_logs").update({
-            status: "failed",
-            completed_at: new Date().toISOString(),
-            error_message: err.message,
-          }).eq("id", backfillLogId);
-        }
-        return new Response(
-          JSON.stringify({ error: err.message }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-    }
 
     const { data: logData } = await supabase
       .from("sync_logs")
@@ -2995,7 +2493,7 @@ Deno.serve(async (req: Request) => {
       }
 
 
-      if (userToken && (shouldSyncAll || syncType === "transactions")) {
+      if (userToken && syncType === "transactions") {
         try {
           console.log('\n--- Syncing Transactions ---');
           results.transactions = await syncTransactions(supabase, config, userToken, saveReport, targetYear, targetMonth);
@@ -3007,7 +2505,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      if (userToken && (shouldSyncAll || syncType === "client_visits")) {
+      if (userToken && syncType === "client_visits") {
         try {
           console.log('\n--- Syncing Client Visits ---');
           results.client_visits = await syncClientVisits(supabase, config, userToken);

@@ -1,3 +1,5 @@
+> **Outdated, see SYSTEM_REFERENCE.md** (section 2 for endpoints, section 6 for row counts). Status snapshot from the first days of the project; clients, appointments, client visits, programs and services are all implemented now. Kept for history only.
+
 # Mindbody API Endpoints
 
 ## Implemented Endpoints

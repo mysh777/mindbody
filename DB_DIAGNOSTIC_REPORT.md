@@ -1,3 +1,5 @@
+> **Historical report (04.10.2026).** Figures are a snapshot and are not maintained. Lasting rules (archived-service placeholders, sync statuses) are in SYSTEM_REFERENCE.md; the current nightly schedule is in MINDBODY_SETUP.md.
+
 # Этап 1 — покрытие данных и докачка истории 2025 года
 
 Дата проверки: 04.10.2026. Прод. **Часть A выполнена только чтением** — в базе и коде ничего не менялось.

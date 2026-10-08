@@ -50,7 +50,6 @@ const tableSectionMap: Record<string, MenuSection> = {
   'products': 'references',
   'sites': 'references',
   'sale_items': 'sale-items',
-  'transactions': 'transactions',
   'client_services': 'client-services',
   'retail_products': 'references',
 };
@@ -224,8 +223,6 @@ export function Dashboard() {
         {page('sales', <SalesExpandableView onNavigate={handleNavigate} />)}
         {page('sale-items', <TableView tableName="sale_items" displayName="Sale Items" section="sale-items" onNavigate={handleNavigate} selectedId={selectedId} />)}
         {page('pivot-reports', <SimplePage section="pivot-reports"><PivotTable /></SimplePage>)}
-
-        {page('transactions', <TableView tableName="transactions" displayName="Transactions" section="transactions" onNavigate={handleNavigate} selectedId={selectedId} />)}
       </div>
     </div>
   );

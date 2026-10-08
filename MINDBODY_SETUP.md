@@ -1,7 +1,9 @@
 # Mindbody Analytics System - Setup Guide
 
+**Last updated:** 2026-10-08
+
 ## Overview
-This system syncs all data from your Mindbody account and provides comprehensive reporting, pivot tables, charts, and Excel export capabilities.
+This system syncs data from your Mindbody account every night and provides owner reports, pivot tables, Excel export and PDF printing. Page list: see README.md.
 
 ## Mindbody API Authentication
 
@@ -18,45 +20,40 @@ These credentials provide access to most read-only endpoints:
 
 ✓ These are already configured and working!
 
-### 2. Staff Credentials (Optional - For Write Operations)
+### 2. Staff Credentials (Required)
 
-Staff credentials are only needed if you want to:
-- Modify client data (add/update clients)
-- Book appointments or classes
-- Process sales/payments
-- Access sensitive staff information
+- **MINDBODY_STAFF_USERNAME**, **MINDBODY_STAFF_PASSWORD**
 
-For read-only operations (which this system uses), Staff credentials are NOT required.
-
-**Current Status**: The system works with Source Credentials only for all data synchronization.
+The sync exchanges these for a user token (`POST /usertoken/issue`). The token is required for sales, appointments, client_services, pricing_options, staff_services and staff_schedule. Without it those steps are skipped.
 
 ## Features
 
 ### 1. Data Synchronization
-- **Manual Sync**: Click "Sync Now" button in the dashboard
+- **Manual Sync**: Admin → Sync Data page, one button per step or a full sync
 - **Automatic Daily Sync**: Runs automatically via scheduled jobs (see below)
 
 ### 2. Synced Data Types
-- Clients (contact information, demographics)
-- Appointments (bookings, schedules)
-- Classes (class schedules, descriptions)
-- Class Visits (client class attendance)
-- Sales (transactions, revenue)
-- Staff (team members)
-- Locations (studio locations)
-- Products (retail items)
-- Services (pricing options)
+- Sites, locations, staff
+- Service categories (`programs` step), session types (`services` step), staff services and pay rates
+- Pricing options and pricing option ↔ session type links
+- Clients and client services (packages, memberships, remaining visits)
+- Appointments (per staff member)
+- Sales, sale items and payments (by quarter)
+- Packages, retail products
+- Transactions and client visits are no longer synced (not in the nightly run or the full sync). Existing rows stay in the database; both steps can still be run on request by `syncType`.
+- Staff schedule (availability / unavailability, table `staff_schedule_items`)
 
 ### 3. Reporting Features
-- **Data Tables**: View and filter all synced data
-- **Pivot Tables**: Create custom pivot analysis with configurable rows, columns, and aggregations
-- **Charts**: Visualize trends (monthly revenue, appointments by staff, clients by location)
-- **Excel Export**: Export any view to CSV/Excel format
-- **Sync History**: Track all sync operations and their status
+- Owner reports: Overview, Client Card, Expiring Packages, Sleeping Clients, Client Segments, Margin by Service, Margin by Staff
+- Admin tables, Pivot Reports, Excel export, PDF printing
+- **Reconciliation**: checks dashboard figures against Mindbody reports (see RECONCILIATION_RULES.md)
+- **Sync History**: every sync step and its status
 
 ## Automatic Daily Sync
 
-Automatic synchronization runs every day between **03:00 and 03:32 UTC**, broken into 19 separate steps. Each step syncs one data type and runs as an independent job. This ensures every step completes within the platform's time limit (150 seconds per call).
+Automatic synchronization runs every day between **03:00 and 03:36 UTC**, broken into 19 separate data steps, followed by the Overview totals job at 03:45.
+
+The `programs`, `transactions` and `client_visits` steps were removed from the schedule on 2026-10-08 (service categories are refreshed by the `services` step). Each step syncs one data type and runs as an independent job. This ensures every step completes within the platform's time limit (150 seconds per call).
 
 ### Schedule
 
@@ -65,30 +62,31 @@ Automatic synchronization runs every day between **03:00 and 03:32 UTC**, broken
 | 03:00      | sites              | ~2s             |
 | 03:01      | locations          | ~2s             |
 | 03:02      | staff              | ~2s             |
-| 03:03      | programs           | ~2s             |
 | 03:04      | services           | ~7s             |
 | 03:05      | staff_services     | ~10s            |
-| 03:06      | pricing_options    | ~122s           |
-| 03:09      | build_pricing_links| ~67s            |
-| 03:12      | clients            | ~39s            |
-| 03:15      | client_services    | ~48s            |
-| 03:18      | appointments       | ~32s            |
-| 03:20      | sales Q1 (Jan-Mar) | ~58s            |
-| 03:22      | sales Q2 (Apr-Jun) | ~57s            |
-| 03:24      | sales Q3 (Jul-Sep) | ~55s            |
-| 03:26      | sales Q4 (Oct-Dec) | ~1s (future)    |
-| 03:28      | transactions       | ~15s            |
-| 03:30      | client_visits      | ~2s             |
-| 03:31      | packages           | ~3s             |
-| 03:32      | retail_products    | ~5s             |
+| 03:06      | pricing_options 1/3 (offset 0)   |  |
+| 03:08      | pricing_options 2/3 (offset 100) |  |
+| 03:10      | pricing_options 3/3 (offset 200) |  |
+| 03:12      | build_pricing_links|                 |
+| 03:15      | clients            |                 |
+| 03:18      | client_services    |                 |
+| 03:21      | appointments       |                 |
+| 03:23      | sales Q1 (Jan-Mar) |                 |
+| 03:25      | sales Q2 (Apr-Jun) |                 |
+| 03:27      | sales Q3 (Jul-Sep) |                 |
+| 03:29      | sales Q4 (Oct-Dec) |                 |
+| 03:34      | packages           |                 |
+| 03:35      | retail_products    |                 |
+| 03:36      | staff_schedule     |                 |
+| 03:45      | overview-totals (separate function, fills `overview_monthly_totals`; on the 1st of each month also saves the obligations total for the last day of the previous month to `obligation_snapshots`) | |
 
-Sales is split into quarterly chunks because a full-year sync exceeds the 150-second limit. All other data types sync in a single call.
+Sales (by quarter) and pricing options (by 100 rows) are split into chunks because a single call would exceed the 150-second limit. All other data types sync in a single call.
 
 A safety job (`cleanup-stuck-sync-logs`) runs every 30 minutes to mark any sync that has been stuck for more than 10 minutes as timed out.
 
 ### Monitoring
 
-Check the **Sync History** page in the app to see each step's status. Every step creates its own log entry, so you can tell exactly which data types succeeded and which ones had issues.
+Check the **Sync History** page in the app to see each step's status. Every step creates its own log entry, so you can tell exactly which data types succeeded and which ones had issues. Statuses: `started`, `completed`, `partial` (some records skipped), `error`, `timeout` (set by the safety job).
 
 ### Changing the schedule
 
@@ -109,7 +107,7 @@ To see all scheduled jobs: `SELECT jobname, schedule FROM cron.job ORDER BY jobi
 
 ## Data Retention
 
-The system stores the last 3 months of historical data by default. You can modify the date ranges in the edge function if you need different retention periods.
+Sales and appointments are kept from January 2025 onwards (2025 was back-filled once). The nightly run refreshes the current year: sales by quarter, appointments for the configured window. Older data is not deleted.
 
 ## Troubleshooting
 
@@ -133,8 +131,9 @@ Some heavier data types (sales, pricing_options, client_services) may occasional
 
 ## API Endpoints
 
-- **Manual Sync**: `POST /functions/v1/mindbody-sync`
-- **Daily Sync (legacy wrapper)**: `POST /functions/v1/daily-sync`
+- **Sync steps**: `POST /functions/v1/mindbody-sync` with `{"syncType": "<step>"}`
+- **Overview totals**: `POST /functions/v1/overview-totals`
+- **Activation code**: `POST /functions/v1/get-activation-code`
 
 ## Support
 

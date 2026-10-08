@@ -1,3 +1,5 @@
+> **Outdated, see SYSTEM_REFERENCE.md** (section 2, the endpoints the code actually calls). Generic Mindbody API tutorial: covers classes the app does not use and says source credentials are enough, while most sync steps need a user token. Kept for history only.
+
 # Mindbody Public API v6 - Complete Guide
 
 ## Overview

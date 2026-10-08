@@ -1,13 +1,13 @@
 # System Reference: Database Structure & Mindbody API Mapping
 
-**Last updated:** 2026-09-16
+**Last updated:** 2026-10-08
 **Purpose:** Single source of truth for all known schema details, Mindbody API behaviour, field mappings, quirks, and structural issues discovered during the project. Prevents re-investigating the same surprises.
 
 ---
 
 ## 1. Database Schema
 
-28 tables in `public` schema. Tables grouped by domain.
+37 tables in `public` schema. Tables grouped by domain.
 
 ### ID Convention
 
@@ -109,7 +109,7 @@ Stores full client info snapshots. Rarely used.
 
 ### 1.2 Appointments
 
-#### `appointments` (~7,822 rows)
+#### `appointments` (~16,270 rows)
 
 | Column | Type | Nullable | Notes |
 |--------|------|----------|-------|
@@ -127,6 +127,8 @@ Stores full client info snapshots. Rarely used.
 | first_appointment | boolean | YES | |
 | client_service_id | text | YES | **Mindbody ClientServiceId** — matches `client_services.mindbody_id`. NOT a UUID, NOT an FK |
 | raw_data | jsonb | YES | Full Mindbody response |
+| last_seen_at | timestamptz | YES | Last nightly sync that returned this appointment |
+| stale | boolean | NO | `true` when a sync of its period no longer returns it (deleted/moved in Mindbody); reports exclude stale rows |
 | synced_at, created_at, updated_at | timestamptz | YES | |
 
 **Critical detail:** `client_service_id` stores the Mindbody service instance ID (e.g. "281387") which maps to `client_services.mindbody_id`. There is no formal FK constraint — the join is: `appointments.client_service_id = client_services.mindbody_id`.
@@ -396,7 +398,7 @@ Manual rate overrides per staff per session type.
 | raw_data | jsonb | YES | |
 | created_at, synced_at | timestamptz | YES | |
 
-#### `transactions` (~8,086 rows)
+#### `transactions` (~8,310 rows, no longer synced since 2026-10-08; no page shows it)
 
 | Column | Type | Nullable | Notes |
 |--------|------|----------|-------|
@@ -488,7 +490,7 @@ From `/sale/packages`. Appears mostly unused.
 |--------|------|----------|-------|
 | id | uuid PK | NO | |
 | sync_type | text | NO | Step name (e.g. "appointments", "client_services") |
-| status | text | NO | "started", "completed", "failed" |
+| status | text | NO | "started", "completed", "partial" (some records skipped), "error", "timeout" (set by `cleanup-stuck-sync-logs`) |
 | started_at | timestamptz | YES | |
 | completed_at | timestamptz | YES | |
 | records_synced | integer | YES | |
@@ -523,6 +525,45 @@ Full paginated API responses stored as snapshots.
 | record_count | integer | |
 | pagination_info | jsonb | |
 | synced_at, created_at | timestamptz | |
+
+### 1.9 Report Settings & Pre-computed Data (added 2026-09-24 … 2026-10-07)
+
+#### `sleeping_client_settings` (~18 rows)
+Thresholds for Sleeping Clients, one row per client group. Columns: `group_key` (PK), `group_name`, `threshold_days`, `min_visits`, `lookback_days`, `max_days_silent`, `updated_at`.
+
+#### `client_segment_settings` (1 row)
+Settings for Client Segments. Has `excluded_client_ids text[]` (clients manually left out of segment counts).
+
+#### `staff_schedule_items` (~13,500 rows)
+Staff availability / unavailability blocks from `/appointment/scheduleitems` (step `staff_schedule`, 03:36). Used for staff working hours in the Overview month detail (`src/utils/ownerMonthDetail.ts`).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | text PK | Built from the Mindbody item |
+| kind | text | `available` or `unavailable` |
+| staff_id | text | Mindbody StaffId (no FK) |
+| location_id | text | |
+| start_datetime, end_datetime | timestamptz | |
+| description | text | |
+| raw_data | jsonb | |
+| synced_at, last_seen_at | timestamptz | |
+| stale | boolean | Same meaning as `appointments.stale` |
+
+#### `overview_monthly_totals` (~66 rows)
+Overview figures pre-computed nightly by the `overview-totals` edge function (03:45). PK (`month`, `location`); `metrics`, `categories`, `tariffs` are jsonb; `computed_at`. The Overview page only reads this table; it can also trigger a recompute.
+
+#### `obligation_snapshots` (1+ rows)
+Month-end snapshot of studio obligations (unused visits). PK `as_of_date`; `total`, `paid_part`, `catalog_part`, `remaining_visits`, `clients`, `active_packages`, `computed_at`. Written by the `overview-totals` job (03:45 UTC): on the 1st of each month it saves the value for the last day of the previous month; `{"obligationsAsOf": "YYYY-MM-DD"}` saves any date on request. Starting row: 2026-10-08.
+
+#### Reconciliation tables
+See RECONCILIATION_RULES.md for the rules.
+
+| Table | Rows | Purpose |
+|-------|------|---------|
+| `reconciliation_references` | ~28 | Reference figures from Mindbody reports: `period`, `metric`, `location`, `value`, `source`, `note` |
+| `reconciliation_baseline` | ~392 | Frozen per-key figures (`period`, `report`, `location`, `key`, `qty`, `value`), UNIQUE (period, report, location, key) |
+| `reconciliation_cases` | ~9 | Hand-checked cases (`case_number`, `report`, `client_id`, `tariff_name`, `expected_value`, `expected_qty`, `tolerance`) |
+| `reconciliation_status` | 1 | Single row (`id = 1`): `checked_at`, `all_ok`, `error_count` of the last check |
 
 ---
 
@@ -570,8 +611,7 @@ Token obtained via POST `/usertoken/issue` with staff username/password.
 - **Auth:** Source Credentials
 - **Pagination:** No
 - **Response key:** `Programs[]`
-- **Used in:** `syncPrograms()`, `syncServiceCategories()`
-- **Note:** Called twice in the sync — once for programs table, once for service_categories
+- **Used in:** `syncServiceCategories()`
 
 ### 2.6 GET `/site/sessiontypes?limit=N&offset=N`
 
@@ -662,7 +702,7 @@ Token obtained via POST `/usertoken/issue` with staff username/password.
 - **Auth:** User Token
 - **Pagination:** Yes (limit=200)
 - **Response key:** `Appointments[]`
-- **Used in:** `syncAppointmentsDirect()`
+- **Used in:** `syncAppointmentsDirect()` — fallback only, when the `staff` table is empty. The normal path is 2.10.
 - **Sample raw response per item:**
 ```json
 {
@@ -702,7 +742,7 @@ Token obtained via POST `/usertoken/issue` with staff username/password.
 - **Auth:** User Token
 - **Pagination:** No (per client)
 - **Response key:** `ClientServices[]`
-- **Used in:** `syncClientServices()`, `backfillOrphanedClientServices()`
+- **Used in:** `syncClientServices()`
 - **Sample raw response per item:**
 ```json
 {
@@ -786,7 +826,13 @@ Token obtained via POST `/usertoken/issue` with staff username/password.
 - **Auth:** User Token preferred, Source Credentials fallback
 - **Pagination:** Yes (limit=200)
 - **Response key:** `Products[]`
-- **Used in:** `syncProducts()`
+- **Used in:** `syncProducts()` — writes to `retail_products`
+
+### 2.18 GET `/appointment/scheduleitems?request.startDate=X&request.endDate=Y&request.staffIds=…&request.limit=100&request.offset=N`
+
+- **Auth:** User Token
+- **Pagination:** Yes (limit=100, staff in batches of 10)
+- **Used in:** `syncStaffSchedule()` — writes to `staff_schedule_items`; items not returned by a complete run are marked `stale`
 
 ---
 
@@ -948,8 +994,8 @@ Token obtained via POST `/usertoken/issue` with staff username/password.
 | 2 | `sale_items.payment_ref_id` — is this consistently the client_services.mindbody_id? | Important for sale-to-service linking |
 | 3 | `staff.phone` vs `staff.mobile_phone` — which is populated from what? | |
 | 4 | `staff.role` — where does it come from? Not in MB raw_data | May be manually set |
-| 5 | `products` table (0 rows) — is it actually used? | Could be dead code |
-| 6 | `client_visits` table (~0 rows) — is the /clientvisits sync actually running? | May be disabled or broken |
+| 5 | `products` table (0 rows) — is it actually used? | Confirmed unused: nothing syncs into it; retail items go to `retail_products` |
+| 6 | `client_visits` table (0 rows) — is the /clientvisits sync actually running? | Not scheduled since 2026-10-08; no page reads the table |
 | 7 | `appointment_addons` (0 rows) — are addons synced? | Appointments with AddOns show `null` in raw_data |
 | 8 | `sale_categories` — purpose? | |
 | 9 | `pricing_options.mindbody_id` type is string in MB ("13253") vs other tables where IDs are numeric | Confirmed working but unusual |
@@ -957,29 +1003,34 @@ Token obtained via POST `/usertoken/issue` with staff username/password.
 
 ---
 
-## 6. Approximate Row Counts (as of 2026-09-16)
+## 6. Approximate Row Counts (as of 2026-10-08)
 
 | Table | Rows |
 |-------|------|
-| payments | ~8,091 |
-| transactions | ~8,086 |
-| appointments | ~7,822 |
-| sales | ~7,821 |
-| clients | ~6,165 |
-| sale_items | ~5,138 |
-| client_services | ~2,945 |
-| pricing_option_session_types | ~2,686 |
-| api_logs | ~1,172 |
-| staff_session_types | ~817 |
-| api_raw_data | ~507 |
-| sync_logs | ~228 |
+| appointments | ~16,270 |
+| staff_schedule_items | ~13,530 |
+| sale_items | ~12,440 |
+| payments | ~8,310 |
+| transactions | ~8,310 |
+| sales | ~8,030 |
+| clients | ~6,240 |
+| api_logs | ~4,370 |
+| api_raw_data | ~4,360 |
+| client_services | ~3,210 |
+| staff_session_types | ~875 |
+| sync_logs | ~770 |
+| reconciliation_baseline | ~392 |
+| pricing_option_session_types | ~260 |
 | pricing_options | ~218 |
-| retail_products | ~151 |
-| session_types | ~138 |
-| staff | ~30 |
+| retail_products | ~152 |
+| session_types | ~142 |
+| overview_monthly_totals | ~66 |
+| staff | ~32 |
+| reconciliation_references | ~28 |
+| sleeping_client_settings | ~18 |
 | service_categories | ~17 |
-| locations, sites, packages, etc. | <10 each |
-| products, appointment_addons, client_visits, payment_types, sale_categories, staff_appointment_rates | 0 |
+| staff_appointment_rates, packages, reconciliation_cases, locations, sites | <=10 each |
+| products, appointment_addons, client_visits, payment_types, sale_categories, service_subcategories, client_complete_info_snapshots, obligation_snapshots | 0 |
 
 ---
 
@@ -1015,3 +1066,17 @@ Token obtained via POST `/usertoken/issue` with staff username/password.
 - `sale_items.sale_id` → `sales.id`
 - `sale_items.payment_ref_id` → `client_services.mindbody_id`
 - `payments.sale_id` → `sales.id`
+
+---
+
+## 8. Edge Functions & Schedule
+
+| Function | verify_jwt | Called by | Purpose |
+|----------|-----------|-----------|---------|
+| `mindbody-sync` | false | pg_cron (nightly), Sync Data page | All sync steps, chosen by `syncType` (`sites`, `locations`, `staff`, `programs` = service categories, `services`, `staff_services`, `pricing_options` + offset, `build_pricing_links`, `clients`, `client_services`, `appointments`, `sales` + quarter, `packages`, `retail_products`, `staff_schedule`, `all`, `quick`; on request only: `transactions`, `client_visits`, `staff_services_one`, `ping`) |
+| `overview-totals` | false | pg_cron 03:45, Overview page | Recomputes `overview_monthly_totals` and, on the 1st of the month, `obligation_snapshots`; bundles `src/jobs/overviewTotalsJob.ts` (`npm run build:overview-job`) |
+| `get-activation-code` | true | Sync Data page | Mindbody site activation code |
+
+Removed 2026-10-08: `client-audit`, `daily-sync`, `mb-probe`; debug modes `sst_diag_*`, `payroll_diag*`, `backfill_orphaned_client_services`.
+
+Nightly schedule and the safety job `cleanup-stuck-sync-logs`: see MINDBODY_SETUP.md.

@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Database, BarChart3, Calendar, DollarSign, FileText, Package, ShoppingBag,
+  Database, BarChart3, Calendar, DollarSign, FileText, Package,
   UserCog, HeartPulse, UserCircle, Flame, TrendingUp, UserCheck, Moon, Users, LayoutDashboard,
-  RefreshCw, History, ShieldCheck, AlertTriangle, FileJson, ChevronRight, Archive, Settings, ListChecks,
+  RefreshCw, History, ShieldCheck, AlertTriangle, FileJson, ChevronRight, Settings, ListChecks,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { PAGES, MENU_GROUPS, type MenuSection, type MenuGroup } from '../lib/pages';
@@ -37,29 +37,25 @@ const ICONS: Record<MenuSection, typeof Database> = {
   'api-logs': FileText,
   'raw-api': FileJson,
   'staff-rates': UserCog,
-  'transactions': ShoppingBag,
 };
 
 const TABLE_COUNTS: Partial<Record<MenuSection, string>> = {
   'appointments': 'appointments',
   'sales': 'sales',
   'client-services': 'client_services',
-  'transactions': 'transactions',
   'sale-items': 'sale_items',
 };
 
 const SECTIONS = Object.keys(PAGES) as MenuSection[];
 const sectionsOf = (group: MenuGroup) => SECTIONS.filter(s => PAGES[s].group === group);
-const isAdminGroup = (s: MenuSection) => PAGES[s].group === 'admin' || PAGES[s].group === 'legacy';
+const isAdminGroup = (s: MenuSection) => PAGES[s].group === 'admin';
 
 export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: SidebarProps) {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [adminOpen, setAdminOpen] = useState(() => isAdminGroup(activeSection));
-  const [legacyOpen, setLegacyOpen] = useState(() => PAGES[activeSection].group === 'legacy');
 
   useEffect(() => {
     if (isAdminGroup(activeSection)) setAdminOpen(true);
-    if (PAGES[activeSection].group === 'legacy') setLegacyOpen(true);
   }, [activeSection]);
 
   const loadCounts = useCallback(async () => {
@@ -133,7 +129,7 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
       </div>
 
       <nav className="flex-1 overflow-y-auto p-4 space-y-0.5">
-        {MENU_GROUPS.filter(g => g.id !== 'admin' && g.id !== 'legacy').map(g => (
+        {MENU_GROUPS.filter(g => g.id !== 'admin').map(g => (
           <div key={g.id} className="space-y-0.5">
             {g.label && groupHeading(g.label)}
             {sectionsOf(g.id).map(id => renderItem(id))}
@@ -146,14 +142,6 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
         {adminOpen && (
           <div className="mt-1 space-y-0.5">
             {sectionsOf('admin').map(id => renderItem(id, true))}
-            <div className="pt-2">
-              {toggle('Legacy', legacyOpen, () => setLegacyOpen(o => !o), Archive, true)}
-              {legacyOpen && (
-                <div className="mt-1 space-y-0.5 pl-2">
-                  {sectionsOf('legacy').map(id => renderItem(id, true))}
-                </div>
-              )}
-            </div>
           </div>
         )}
       </div>

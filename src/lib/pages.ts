@@ -21,10 +21,9 @@ export type MenuSection =
   | 'pivot-reports'
   | 'api-logs'
   | 'raw-api'
-  | 'staff-rates'
-  | 'transactions';
+  | 'staff-rates';
 
-export type MenuGroup = 'overview' | 'clients' | 'finance' | 'reference' | 'admin' | 'legacy';
+export type MenuGroup = 'overview' | 'clients' | 'finance' | 'reference' | 'admin';
 
 export interface PageInfo {
   label: string;
@@ -62,8 +61,6 @@ export const PAGES: Record<MenuSection, PageInfo> = {
   'api-logs': { group: 'admin', label: 'API Logs', purpose: 'Technical log of requests to Mindbody.' },
   'raw-api': { group: 'admin', label: 'Raw API Data', purpose: 'Unprocessed Mindbody responses.' },
   'staff-rates': { group: 'admin', label: 'Staff Rates', purpose: 'Staff pay rates for treatments.' },
-
-  'transactions': { group: 'legacy', label: 'Transactions', purpose: 'Old page: payment transactions from Mindbody.' },
 };
 
 export const MENU_GROUPS: { id: MenuGroup; label: string }[] = [
@@ -72,7 +69,6 @@ export const MENU_GROUPS: { id: MenuGroup; label: string }[] = [
   { id: 'finance', label: 'Finance' },
   { id: 'reference', label: 'Reference' },
   { id: 'admin', label: 'Admin' },
-  { id: 'legacy', label: 'Legacy' },
 ];
 
 const REDIRECTS: Record<string, MenuSection> = {
@@ -86,6 +82,7 @@ const REDIRECTS: Record<string, MenuSection> = {
   'staff-report': 'margin-by-staff',
   'sales-by-pricing': 'margin-by-service',
   'by-service': 'margin-by-service',
+  'transactions': 'sales',
 };
 
 const REDIRECT_PARAMS: Record<string, Record<string, string>> = {

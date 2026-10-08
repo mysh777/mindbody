@@ -1,3 +1,5 @@
+> **Outdated, see SYSTEM_REFERENCE.md** (sections 1 and 7). Early draft from March 2026: lists dropped tables (`classes`, `class_descriptions`), wrong appointment links and the old Quick/Full sync. Kept for history only.
+
 # Database Structure
 
 ## Overview
