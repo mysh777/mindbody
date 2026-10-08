@@ -120,7 +120,7 @@ export function StaffPayRates({ initialStaffId }: Props) {
           fetchAllRows<any>('staff', 'id, first_name, last_name, raw_data'),
           fetchAllRows<{ program_id: string; program_name: string }>('pricing_options', 'program_id, program_name',
             q => q.not('program_id', 'is', null).not('program_name', 'is', null)),
-          supabase.from('sync_logs').select('completed_at').eq('sync_type', 'staff_services').eq('status', 'completed').order('completed_at', { ascending: false }).limit(1),
+          supabase.from('sync_logs').select('completed_at').eq('sync_type', 'staff_services').in('status', ['completed', 'warning']).order('completed_at', { ascending: false }).limit(1),
         ]);
         if (syncRes.error) throw syncRes.error;
         staffRows = staffData;

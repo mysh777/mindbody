@@ -62,6 +62,9 @@ export interface SyncLog {
   completed_at: string | null;
   records_synced: number;
   error_message: string | null;
+  run_id?: string | null;
+  run_type?: string | null;
+  raw_response?: unknown;
 }
 
 export interface PivotTableConfig {

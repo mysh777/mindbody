@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { supabase } from '../lib/supabase';
+import { fetchAllRows } from '../lib/fetchAllPages';
+import { errorMessage } from '../utils/errorMessage';
 import { PagePurpose } from './PageHeader';
+import { LoadErrorBanner } from './LoadErrorBanner';
+import { SyncRunRow, STATUS_COLORS, StatusBadge, formatDate, formatTime, runStatusLabel } from './SyncRunRow';
+import { groupSyncRuns, friendlyType, runTitle, RUN_KIND_LABELS } from '../utils/syncRuns';
+import type { RunKind, RunStep, SyncRunGroup } from '../utils/syncRuns';
 import {
-  Clock,
-  CheckCircle,
-  XCircle,
-  AlertCircle,
-  AlertTriangle,
   RefreshCw,
   ChevronLeft,
   ChevronRight,
@@ -15,96 +15,46 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  Timer,
   Database,
   Filter,
+  Moon,
 } from 'lucide-react';
 import type { SyncLog } from '../types/mindbody';
 
-type SortField = 'started_at' | 'sync_type' | 'status' | 'records_synced' | 'duration';
+type SortField = 'started_at' | 'run' | 'status' | 'records' | 'duration';
 type SortDir = 'asc' | 'desc';
 
-const PAGE_SIZE = 30;
+const PAGE_SIZE = 25;
 
 const STATUS_OPTIONS = ['completed', 'warning', 'partial', 'error', 'failed', 'timeout', 'started'] as const;
-
-const STATUS_COLORS: Record<string, { badge: string; icon: string }> = {
-  completed: { badge: 'bg-emerald-100 text-emerald-700', icon: 'text-emerald-600' },
-  warning:   { badge: 'bg-yellow-100 text-yellow-800',   icon: 'text-yellow-600' },
-  partial:   { badge: 'bg-orange-100 text-orange-700',   icon: 'text-orange-600' },
-  error:     { badge: 'bg-red-100 text-red-700',         icon: 'text-red-600' },
-  failed:    { badge: 'bg-red-100 text-red-700',         icon: 'text-red-600' },
-  timeout:   { badge: 'bg-amber-100 text-amber-700',     icon: 'text-amber-600' },
-  started:   { badge: 'bg-blue-100 text-blue-700',       icon: 'text-blue-600' },
-};
-
-const statusIcon = (status: string) => {
-  const cls = `w-4 h-4 ${STATUS_COLORS[status]?.icon ?? 'text-slate-400'}`;
-  switch (status) {
-    case 'completed': return <CheckCircle className={cls} />;
-    case 'failed':
-    case 'error':     return <XCircle className={cls} />;
-    case 'timeout':   return <AlertCircle className={cls} />;
-    case 'warning':   return <AlertTriangle className={cls} />;
-    case 'started':   return <Clock className={`${cls} animate-pulse`} />;
-    default:          return <AlertCircle className={cls} />;
-  }
-};
-
-const formatDuration = (started: string, completed: string | null) => {
-  if (!completed) return '-';
-  const diff = Math.round((new Date(completed).getTime() - new Date(started).getTime()) / 1000);
-  if (diff < 0) return '-';
-  if (diff < 60) return `${diff}s`;
-  const m = Math.floor(diff / 60);
-  const s = diff % 60;
-  return `${m}m ${s}s`;
-};
-
-const durationSeconds = (started: string, completed: string | null) => {
-  if (!completed) return null;
-  return (new Date(completed).getTime() - new Date(started).getTime()) / 1000;
-};
-
-const formatDateTime = (iso: string) => {
-  const d = new Date(iso);
-  return `${d.getDate().toString().padStart(2, '0')}.${(d.getMonth() + 1).toString().padStart(2, '0')}.${d.getFullYear()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
-};
-
-const friendlyType = (t: string) => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+const RUN_KIND_OPTIONS: RunKind[] = ['nightly', 'quick', 'full', 'manual', 'time_grouped'];
+const STATUS_RANK: Record<SyncRunGroup['status'], number> = { error: 0, warning: 1, running: 2, completed: 3 };
 
 export function SyncHistory() {
   const [allLogs, setAllLogs] = useState<SyncLog[]>([]);
   const [loading, setLoading] = useState(true);
-  const [typeOptions, setTypeOptions] = useState<string[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Filters
   const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
-  const [typeFilter, setTypeFilter] = useState<string>('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [kindFilter, setKindFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [showMaintenance, setShowMaintenance] = useState(false);
 
-  // Sort & pagination
   const [sortField, setSortField] = useState<SortField>('started_at');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [page, setPage] = useState(0);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const loadAll = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
-      const { data, error } = await supabase
-        .from('sync_logs')
-        .select('*')
-        .order('started_at', { ascending: false })
-        .limit(2000);
-      if (error) throw error;
-      const logs = data || [];
-      setAllLogs(logs);
-      const types = [...new Set(logs.map(l => l.sync_type))].sort();
-      setTypeOptions(types);
+      setAllLogs(await fetchAllRows<SyncLog>('sync_logs', '*'));
     } catch (err) {
-      console.error('Error loading sync logs:', err);
+      setLoadError(errorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -112,86 +62,81 @@ export function SyncHistory() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // Filtered + sorted
+  const allRuns = useMemo(() => groupSyncRuns(allLogs), [allLogs]);
+  const typeOptions = useMemo(() => [...new Set(allLogs.map(l => l.sync_type))].sort(), [allLogs]);
+  const maintenanceCount = useMemo(() => allRuns.filter(r => r.kind === 'maintenance').length, [allRuns]);
+  const lastNightly = useMemo(() => allRuns.find(r => r.kind === 'nightly'), [allRuns]);
+
+  const hasStepFilter = statusFilter.size > 0 || !!typeFilter || !!searchQuery;
+  const query = searchQuery.toLowerCase();
+
+  const stepMatches = useCallback((step: RunStep) => {
+    const l = step.log;
+    if (statusFilter.size > 0 && !statusFilter.has(l.status)) return false;
+    if (typeFilter && l.sync_type !== typeFilter) return false;
+    if (query && !(
+      l.sync_type.toLowerCase().includes(query) ||
+      step.label.toLowerCase().includes(query) ||
+      l.status.toLowerCase().includes(query) ||
+      (l.error_message?.toLowerCase().includes(query) ?? false)
+    )) return false;
+    return true;
+  }, [statusFilter, typeFilter, query]);
+
+  const isHighlighted = useCallback((step: RunStep) => hasStepFilter && stepMatches(step), [hasStepFilter, stepMatches]);
+
   const filtered = useMemo(() => {
-    let result = allLogs;
+    const from = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null;
+    const to = dateTo ? new Date(`${dateTo}T23:59:59`).getTime() : null;
+    const result = allRuns.filter(run => {
+      if (run.kind === 'maintenance' && !showMaintenance) return false;
+      if (kindFilter && run.kind !== kindFilter) return false;
+      if (from != null && run.startedAt < from) return false;
+      if (to != null && run.startedAt > to) return false;
+      if (!hasStepFilter) return true;
+      return run.steps.some(stepMatches) || (!!query && runTitle(run).toLowerCase().includes(query) && statusFilter.size === 0 && !typeFilter);
+    });
 
-    if (statusFilter.size > 0) {
-      result = result.filter(l => statusFilter.has(l.status));
-    }
-    if (typeFilter) {
-      result = result.filter(l => l.sync_type === typeFilter);
-    }
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter(l =>
-        l.sync_type.toLowerCase().includes(q) ||
-        l.status.toLowerCase().includes(q) ||
-        (l.error_message && l.error_message.toLowerCase().includes(q))
-      );
-    }
-    if (dateFrom) {
-      const from = new Date(`${dateFrom}T00:00:00`).getTime();
-      result = result.filter(l => new Date(l.started_at).getTime() >= from);
-    }
-    if (dateTo) {
-      const to = new Date(`${dateTo}T23:59:59`).getTime();
-      result = result.filter(l => new Date(l.started_at).getTime() <= to);
-    }
-
-    // Sort
-    result = [...result].sort((a, b) => {
+    return result.sort((a, b) => {
       let cmp = 0;
       switch (sortField) {
-        case 'started_at':
-          cmp = new Date(a.started_at).getTime() - new Date(b.started_at).getTime();
-          break;
-        case 'sync_type':
-          cmp = a.sync_type.localeCompare(b.sync_type);
-          break;
-        case 'status':
-          cmp = a.status.localeCompare(b.status);
-          break;
-        case 'records_synced':
-          cmp = (a.records_synced || 0) - (b.records_synced || 0);
-          break;
-        case 'duration': {
-          const da = durationSeconds(a.started_at, a.completed_at) ?? -1;
-          const db = durationSeconds(b.started_at, b.completed_at) ?? -1;
-          cmp = da - db;
-          break;
-        }
+        case 'started_at': cmp = a.startedAt - b.startedAt; break;
+        case 'run': cmp = runTitle(a).localeCompare(runTitle(b)); break;
+        case 'status': cmp = STATUS_RANK[a.status] - STATUS_RANK[b.status]; break;
+        case 'records': cmp = a.records - b.records; break;
+        case 'duration': cmp = (a.endedAt - a.startedAt) - (b.endedAt - b.startedAt); break;
       }
       return sortDir === 'asc' ? cmp : -cmp;
     });
+  }, [allRuns, showMaintenance, kindFilter, dateFrom, dateTo, hasStepFilter, stepMatches, query, statusFilter, typeFilter, sortField, sortDir]);
 
-    return result;
-  }, [allLogs, statusFilter, typeFilter, searchQuery, dateFrom, dateTo, sortField, sortDir]);
-
-  // Stats
   const stats = useMemo(() => {
-    const s = { total: filtered.length, completed: 0, warning: 0, failed: 0, timeout: 0, started: 0, totalRecords: 0 };
-    for (const l of filtered) {
-      if (l.status === 'completed') { s.completed++; s.totalRecords += l.records_synced || 0; }
-      else if (l.status === 'failed' || l.status === 'error' || l.status === 'partial') s.failed++;
-      else if (l.status === 'warning') s.warning++;
-      else if (l.status === 'timeout') s.timeout++;
-      else if (l.status === 'started') s.started++;
+    const s = { total: filtered.length, completed: 0, warning: 0, error: 0, running: 0, records: 0 };
+    for (const r of filtered) {
+      s[r.status]++;
+      s.records += r.records;
     }
     return s;
   }, [filtered]);
 
-  // Pagination
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePageNum = Math.min(page, totalPages - 1);
   const pageItems = filtered.slice(safePageNum * PAGE_SIZE, (safePageNum + 1) * PAGE_SIZE);
 
-  useEffect(() => { setPage(0); }, [statusFilter, typeFilter, searchQuery, dateFrom, dateTo, sortField, sortDir]);
+  useEffect(() => { setPage(0); }, [statusFilter, typeFilter, kindFilter, searchQuery, dateFrom, dateTo, sortField, sortDir, showMaintenance]);
 
   const toggleStatus = (s: string) => {
     setStatusFilter(prev => {
       const next = new Set(prev);
       if (next.has(s)) next.delete(s); else next.add(s);
+      return next;
+    });
+  };
+
+  const toggleExpanded = (key: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
       return next;
     });
   };
@@ -205,18 +150,23 @@ export function SyncHistory() {
     }
   };
 
-  const SortIcon = ({ field }: { field: SortField }) => {
-    if (sortField !== field) return <ArrowUpDown className="w-3.5 h-3.5 text-slate-300" />;
-    return sortDir === 'asc'
-      ? <ArrowUp className="w-3.5 h-3.5 text-blue-600" />
-      : <ArrowDown className="w-3.5 h-3.5 text-blue-600" />;
-  };
+  const SortHeader = ({ field, label, align = 'left' }: { field: SortField; label: string; align?: 'left' | 'right' }) => (
+    <th className={`px-3 py-3 text-${align}`}>
+      <button onClick={() => handleSort(field)} className={`flex items-center gap-1 font-medium text-slate-600 hover:text-slate-900 ${align === 'right' ? 'ml-auto' : ''}`}>
+        {label}
+        {sortField !== field
+          ? <ArrowUpDown className="w-3.5 h-3.5 text-slate-300" />
+          : sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5 text-blue-600" /> : <ArrowDown className="w-3.5 h-3.5 text-blue-600" />}
+      </button>
+    </th>
+  );
 
-  const hasAnyFilter = statusFilter.size > 0 || typeFilter || searchQuery || dateFrom || dateTo;
+  const hasAnyFilter = hasStepFilter || !!kindFilter || !!dateFrom || !!dateTo;
 
   const clearAll = () => {
     setStatusFilter(new Set());
     setTypeFilter('');
+    setKindFilter('');
     setSearchQuery('');
     setDateFrom('');
     setDateTo('');
@@ -224,7 +174,6 @@ export function SyncHistory() {
 
   return (
     <div className="w-full bg-slate-50 min-h-full">
-      {/* Header */}
       <div className="bg-white border-b border-slate-200 shadow-sm px-6 py-6">
         <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
           <Database className="w-6 h-6 text-blue-500" />
@@ -232,20 +181,35 @@ export function SyncHistory() {
         </h2>
         <PagePurpose section="sync-history" />
         <p className="text-slate-600 mt-1 text-sm">
-          All synchronization logs from the Mindbody API&nbsp;&mdash;&nbsp;{allLogs.length} total entries stored, no automatic cleanup
+          Synchronization runs from the Mindbody API, one row per run&nbsp;&mdash;&nbsp;{allRuns.length} runs, {allLogs.length} steps stored, no automatic cleanup
         </p>
+        {lastNightly && (
+          <button
+            onClick={() => { setExpanded(prev => new Set(prev).add(lastNightly.key)); clearAll(); }}
+            className="mt-3 inline-flex flex-wrap items-center gap-2 text-sm text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 transition-colors"
+          >
+            <Moon className="w-4 h-4 text-slate-500" />
+            <span>Last nightly sync: <span className="font-medium text-slate-900">{formatDate(lastNightly.startedAt)} {formatTime(lastNightly.startedAt)}</span></span>
+            <span className="text-slate-400">&mdash;</span>
+            <StatusBadge status={lastNightly.status} />
+            <span className="text-slate-500">
+              {lastNightly.status === 'running' ? runStatusLabel(lastNightly).replace(/^Running /, '') : `(${lastNightly.steps.length} steps)`}
+            </span>
+          </button>
+        )}
       </div>
 
       <div className="p-6 space-y-5">
-        {/* Stats bar */}
+        {loadError && <LoadErrorBanner title="Could not load sync history" message={loadError} onRetry={loadAll} />}
+
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {[
-            { label: 'Total', value: stats.total, label_cls: 'text-slate-600', value_cls: 'text-slate-900' },
+            { label: 'Runs', value: stats.total, label_cls: 'text-slate-600', value_cls: 'text-slate-900' },
             { label: 'Completed', value: stats.completed, label_cls: 'text-emerald-600', value_cls: 'text-emerald-900' },
-            { label: 'Warnings', value: stats.warning, label_cls: 'text-yellow-700', value_cls: 'text-yellow-900' },
-            { label: 'Failed', value: stats.failed, label_cls: 'text-red-600', value_cls: 'text-red-900' },
-            { label: 'Timeout', value: stats.timeout, label_cls: 'text-amber-600', value_cls: 'text-amber-900' },
-            { label: 'Records synced', value: stats.totalRecords.toLocaleString(), label_cls: 'text-blue-600', value_cls: 'text-blue-900' },
+            { label: 'Warning', value: stats.warning, label_cls: 'text-yellow-700', value_cls: 'text-yellow-900' },
+            { label: 'Error', value: stats.error, label_cls: 'text-red-600', value_cls: 'text-red-900' },
+            { label: 'Running', value: stats.running, label_cls: 'text-blue-600', value_cls: 'text-blue-900' },
+            { label: 'Records synced', value: stats.records.toLocaleString(), label_cls: 'text-slate-600', value_cls: 'text-slate-900' },
           ].map(s => (
             <div key={s.label} className="bg-white rounded-lg border border-slate-200 px-4 py-3">
               <div className={`text-xs font-medium ${s.label_cls} uppercase tracking-wider mb-0.5`}>{s.label}</div>
@@ -254,11 +218,11 @@ export function SyncHistory() {
           ))}
         </div>
 
-        {/* Filters */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
           <div className="flex items-center gap-2 mb-3">
             <Filter className="w-4 h-4 text-slate-500" />
             <span className="text-sm font-semibold text-slate-700">Filters</span>
+            {hasStepFilter && <span className="text-xs text-slate-500">Runs with at least one matching step; matching steps are highlighted</span>}
             {hasAnyFilter && (
               <button onClick={clearAll} className="ml-auto text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1">
                 <X className="w-3 h-3" /> Clear all
@@ -267,46 +231,50 @@ export function SyncHistory() {
           </div>
 
           <div className="flex flex-wrap items-end gap-4">
-            {/* Status toggles */}
             <div>
-              <div className="text-xs text-slate-500 mb-1.5">Status</div>
-              <div className="flex gap-1.5">
+              <div className="text-xs text-slate-500 mb-1.5">Step status</div>
+              <div className="flex flex-wrap gap-1.5">
                 {STATUS_OPTIONS.map(s => {
                   const active = statusFilter.has(s);
-                  const colors = STATUS_COLORS[s];
                   return (
                     <button
                       key={s}
                       onClick={() => toggleStatus(s)}
                       className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all border ${
-                        active
-                          ? `${colors.badge} border-current shadow-sm`
-                          : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                        active ? `${STATUS_COLORS[s].badge} border-current shadow-sm` : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
                       }`}
                     >
-                      {s.charAt(0).toUpperCase() + s.slice(1)}
+                      {s === 'started' ? 'Running' : s.charAt(0).toUpperCase() + s.slice(1)}
                     </button>
                   );
                 })}
               </div>
             </div>
 
-            {/* Type select */}
             <div>
-              <div className="text-xs text-slate-500 mb-1.5">Sync Type</div>
+              <div className="text-xs text-slate-500 mb-1.5">Run type</div>
+              <select
+                value={kindFilter}
+                onChange={e => setKindFilter(e.target.value)}
+                className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 min-w-[160px]"
+              >
+                <option value="">All runs</option>
+                {RUN_KIND_OPTIONS.map(k => <option key={k} value={k}>{RUN_KIND_LABELS[k]}</option>)}
+              </select>
+            </div>
+
+            <div>
+              <div className="text-xs text-slate-500 mb-1.5">Step</div>
               <select
                 value={typeFilter}
                 onChange={e => setTypeFilter(e.target.value)}
                 className="px-3 py-1.5 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400 min-w-[180px]"
               >
-                <option value="">All types</option>
-                {typeOptions.map(t => (
-                  <option key={t} value={t}>{friendlyType(t)}</option>
-                ))}
+                <option value="">All steps</option>
+                {typeOptions.map(t => <option key={t} value={t}>{friendlyType(t)}</option>)}
               </select>
             </div>
 
-            {/* Date range */}
             <div>
               <div className="text-xs text-slate-500 mb-1.5">Date Range</div>
               <div className="flex items-center gap-1.5">
@@ -326,7 +294,6 @@ export function SyncHistory() {
               </div>
             </div>
 
-            {/* Search */}
             <div>
               <div className="text-xs text-slate-500 mb-1.5">Search</div>
               <div className="relative">
@@ -335,7 +302,7 @@ export function SyncHistory() {
                   type="text"
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Type, status, error..."
+                  placeholder="Step, status, message..."
                   className="pl-8 pr-7 py-1.5 border border-slate-300 rounded-lg text-sm w-52 focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400"
                 />
                 {searchQuery && (
@@ -346,7 +313,13 @@ export function SyncHistory() {
               </div>
             </div>
 
-            {/* Refresh */}
+            {maintenanceCount > 0 && (
+              <label className="flex items-center gap-2 text-sm text-slate-600 self-end pb-1.5 cursor-pointer">
+                <input type="checkbox" checked={showMaintenance} onChange={e => setShowMaintenance(e.target.checked)} className="rounded border-slate-300" />
+                Show maintenance ({maintenanceCount})
+              </label>
+            )}
+
             <button
               onClick={loadAll}
               disabled={loading}
@@ -358,7 +331,6 @@ export function SyncHistory() {
           </div>
         </div>
 
-        {/* Table */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           {loading ? (
             <div className="p-12 text-center">
@@ -369,7 +341,7 @@ export function SyncHistory() {
             <div className="p-12 text-center">
               <Database className="w-10 h-10 text-slate-300 mx-auto mb-3" />
               <p className="text-sm text-slate-500">
-                {hasAnyFilter ? 'No entries match the current filters' : 'No sync history available'}
+                {hasAnyFilter ? 'No runs match the current filters' : 'No sync history available'}
               </p>
             </div>
           ) : (
@@ -378,81 +350,35 @@ export function SyncHistory() {
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
-                      <th className="px-4 py-3 text-left">
-                        <button onClick={() => handleSort('started_at')} className="flex items-center gap-1 font-medium text-slate-600 hover:text-slate-900">
-                          Date/Time <SortIcon field="started_at" />
-                        </button>
-                      </th>
-                      <th className="px-4 py-3 text-left">
-                        <button onClick={() => handleSort('sync_type')} className="flex items-center gap-1 font-medium text-slate-600 hover:text-slate-900">
-                          Type <SortIcon field="sync_type" />
-                        </button>
-                      </th>
-                      <th className="px-4 py-3 text-left">
-                        <button onClick={() => handleSort('status')} className="flex items-center gap-1 font-medium text-slate-600 hover:text-slate-900">
-                          Status <SortIcon field="status" />
-                        </button>
-                      </th>
-                      <th className="px-4 py-3 text-right">
-                        <button onClick={() => handleSort('duration')} className="flex items-center gap-1 font-medium text-slate-600 hover:text-slate-900 ml-auto">
-                          Duration <SortIcon field="duration" />
-                        </button>
-                      </th>
-                      <th className="px-4 py-3 text-right">
-                        <button onClick={() => handleSort('records_synced')} className="flex items-center gap-1 font-medium text-slate-600 hover:text-slate-900 ml-auto">
-                          Records <SortIcon field="records_synced" />
-                        </button>
-                      </th>
-                      <th className="px-4 py-3 text-left font-medium text-slate-600">Error</th>
+                      <th className="w-6" />
+                      <SortHeader field="run" label="Run" />
+                      <SortHeader field="started_at" label="Date" />
+                      <th className="px-3 py-3 text-left font-medium text-slate-600">Time</th>
+                      <SortHeader field="duration" label="Duration" align="right" />
+                      <th className="px-3 py-3 text-right font-medium text-slate-600">Steps</th>
+                      <th className="px-3 py-3 text-left font-medium text-slate-600">Result</th>
+                      <SortHeader field="records" label="Records" align="right" />
+                      <SortHeader field="status" label="Status" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {pageItems.map(log => {
-                      const colors = STATUS_COLORS[log.status] || STATUS_COLORS.started;
-                      return (
-                        <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                          <td className="px-4 py-3 whitespace-nowrap text-slate-700">
-                            {formatDateTime(log.started_at)}
-                          </td>
-                          <td className="px-4 py-3 whitespace-nowrap">
-                            <span className="text-slate-900 font-medium">{friendlyType(log.sync_type)}</span>
-                          </td>
-                          <td className="px-4 py-3 whitespace-nowrap">
-                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${colors.badge}`}>
-                              {statusIcon(log.status)}
-                              {log.status.charAt(0).toUpperCase() + log.status.slice(1)}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right whitespace-nowrap text-slate-600">
-                            <span className="inline-flex items-center gap-1">
-                              <Timer className="w-3 h-3 text-slate-400" />
-                              {formatDuration(log.started_at, log.completed_at)}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right whitespace-nowrap font-medium text-slate-900">
-                            {log.records_synced > 0 ? log.records_synced.toLocaleString() : '-'}
-                          </td>
-                          <td className="px-4 py-3 max-w-xs">
-                            {log.error_message ? (
-                              <span className={`${log.status === 'warning' ? 'text-yellow-700' : 'text-red-600'} text-xs truncate block`} title={log.error_message}>
-                                {log.error_message.length > 80 ? log.error_message.slice(0, 80) + '...' : log.error_message}
-                              </span>
-                            ) : (
-                              <span className="text-slate-300">-</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {pageItems.map(run => (
+                      <SyncRunRow
+                        key={run.key}
+                        run={run}
+                        expanded={expanded.has(run.key)}
+                        onToggle={() => toggleExpanded(run.key)}
+                        isHighlighted={isHighlighted}
+                      />
+                    ))}
                   </tbody>
                 </table>
               </div>
 
-              {/* Pagination */}
               {totalPages > 1 && (
                 <div className="flex items-center justify-between px-4 py-3 border-t border-slate-200 bg-slate-50/50">
                   <span className="text-xs text-slate-500">
-                    Showing {safePageNum * PAGE_SIZE + 1}&ndash;{Math.min((safePageNum + 1) * PAGE_SIZE, filtered.length)} of {filtered.length}
+                    Showing {safePageNum * PAGE_SIZE + 1}&ndash;{Math.min((safePageNum + 1) * PAGE_SIZE, filtered.length)} of {filtered.length} runs
                   </span>
                   <div className="flex items-center gap-1">
                     <button
@@ -464,23 +390,15 @@ export function SyncHistory() {
                     </button>
                     {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
                       let pageNum: number;
-                      if (totalPages <= 7) {
-                        pageNum = i;
-                      } else if (safePageNum < 4) {
-                        pageNum = i;
-                      } else if (safePageNum > totalPages - 5) {
-                        pageNum = totalPages - 7 + i;
-                      } else {
-                        pageNum = safePageNum - 3 + i;
-                      }
+                      if (totalPages <= 7 || safePageNum < 4) pageNum = i;
+                      else if (safePageNum > totalPages - 5) pageNum = totalPages - 7 + i;
+                      else pageNum = safePageNum - 3 + i;
                       return (
                         <button
                           key={pageNum}
                           onClick={() => setPage(pageNum)}
                           className={`w-8 h-8 rounded-lg text-xs font-medium transition-colors ${
-                            safePageNum === pageNum
-                              ? 'bg-blue-600 text-white'
-                              : 'text-slate-600 hover:bg-slate-200'
+                            safePageNum === pageNum ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-200'
                           }`}
                         >
                           {pageNum + 1}

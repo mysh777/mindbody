@@ -132,6 +132,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     setQuickSteps([...steps]);
 
     const overallStart = Date.now();
+    const runId = crypto.randomUUID();
     let successCount = 0;
     let errorCount = 0;
     let totalRecords = 0;
@@ -143,7 +144,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
       setQuickSteps([...steps]);
 
       const stepStart = Date.now();
-      const result = await callEdgeFunction(QUICK_SYNC_STEPS[i].payload);
+      const result = await callEdgeFunction({ ...QUICK_SYNC_STEPS[i].payload, runId, runType: 'quick' });
       const durationSec = Math.round((Date.now() - stepStart) / 1000);
 
       if (result.ok) {
@@ -184,7 +185,9 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
     setSyncResult(null);
 
     try {
-      const payload: Record<string, unknown> = { syncType };
+      const isPeriodStep = syncType === 'appointments' || syncType === 'sales' || syncType === 'client_services';
+      const isBackfill = syncType === 'all' || (isPeriodStep && !(month && month > 0));
+      const payload: Record<string, unknown> = { syncType, runId: crypto.randomUUID(), runType: isBackfill ? 'full' : 'manual' };
       if (year) payload.year = year;
       if (month && month > 0) payload.month = month;
 

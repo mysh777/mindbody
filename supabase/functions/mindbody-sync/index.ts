@@ -819,17 +819,31 @@ async function removeStaleLinksSafely(
   return { removed, warning: null };
 }
 
-async function logStaffServicesWarnings(supabase: any, warnings: string[]) {
+type SyncRun = { runId: string; runType: string };
+
+const RUN_TYPES = new Set(["nightly", "quick", "full", "manual", "maintenance"]);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function resolveRun(runId: unknown, runType: unknown): SyncRun {
+  return {
+    runId: typeof runId === "string" && UUID_RE.test(runId) ? runId : crypto.randomUUID(),
+    runType: typeof runType === "string" && RUN_TYPES.has(runType) ? runType : "manual",
+  };
+}
+
+async function logStaffServicesWarnings(supabase: any, warnings: string[], run: SyncRun) {
   if (warnings.length === 0) return;
   const now = new Date().toISOString();
   const { error } = await supabase.from("sync_logs").insert({
-    sync_type: "staff_services",
+    sync_type: "staff_services_one",
     status: "warning",
     started_at: now,
     completed_at: now,
     records_synced: 0,
-    error_message: `Staff service links kept (empty list from Mindbody): ${warnings.join(' | ')}`.slice(0, 2000),
-    raw_response: { protected_staff_warnings: warnings },
+    error_message: warnings.join(' | ').slice(0, 2000),
+    raw_response: { warnings },
+    run_id: run.runId,
+    run_type: run.runType,
   });
   if (error) console.error(`[SST] Failed to write sync warning: ${error.message}`);
 }
@@ -843,7 +857,7 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, user
 
   if (!allStaff || allStaff.length === 0) {
     console.warn('[SST] No staff found. Run staff sync first.');
-    return { testedStaff: 0, staffWithData: 0, importedRows: 0, emptyStaff: 0, failedStaff: 0 };
+    return { testedStaff: 0, staffWithData: 0, importedRows: 0, emptyStaff: 0, failedStaff: 0, removedLinks: 0, protectedStaff: 0, warnings: [] as string[] };
   }
 
   let realStaff = allStaff.filter(isRealStaff);
@@ -894,7 +908,6 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, user
     if (cleanup.warning) protectedWarnings.push(cleanup.warning);
   }
 
-  await logStaffServicesWarnings(supabase, protectedWarnings);
   const stats = { testedStaff, staffWithData, importedRows, emptyStaff, failedStaff, removedLinks, protectedStaff: protectedWarnings.length, warnings: protectedWarnings };
   console.log(`[SST] === SUMMARY ===`);
   console.log(`[SST] ${JSON.stringify(stats)}`);
@@ -906,6 +919,7 @@ async function syncStaffServicesOne(
   config: MindbodyConfig,
   userToken: string,
   targetStaffId: string,
+  run: SyncRun,
 ) {
   console.log(`[SST-ONE] Single staff sync for mindbody_id=${targetStaffId}`);
 
@@ -944,7 +958,7 @@ async function syncStaffServicesOne(
     ? { removed: 0, warning: null }
     : await removeStaleLinksSafely(supabase, staffRow, result.items, sessionTypeLookup);
   const removedLinks = cleanup.removed;
-  if (cleanup.warning) await logStaffServicesWarnings(supabase, [cleanup.warning]);
+  if (cleanup.warning) await logStaffServicesWarnings(supabase, [cleanup.warning], run);
 
   return {
     staff: `${staffRow.first_name} ${staffRow.last_name} (${staffRow.mindbody_id})`,
@@ -2340,7 +2354,8 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const { syncType = "quick", year, month, monthFrom, monthTo, staffId: requestStaffId, pageOffset, pageLimit, staffOffset, staffLimit } = await req.json().catch(() => ({}));
+    const { syncType = "quick", year, month, monthFrom, monthTo, staffId: requestStaffId, pageOffset, pageLimit, staffOffset, staffLimit, runId: requestRunId, runType: requestRunType } = await req.json().catch(() => ({}));
+    const run = resolveRun(requestRunId, requestRunType);
     const targetYear = year ? parseInt(year) : undefined;
     const targetMonth = month ? parseInt(month) : undefined;
     const targetMonthFrom = monthFrom ? parseInt(monthFrom) : undefined;
@@ -2400,7 +2415,7 @@ Deno.serve(async (req: Request) => {
           { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-      const oneResult = await syncStaffServicesOne(supabase, config, userToken, String(requestStaffId));
+      const oneResult = await syncStaffServicesOne(supabase, config, userToken, String(requestStaffId), run);
       return new Response(
         JSON.stringify({ success: !oneResult.error, syncType, ...oneResult }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -2414,6 +2429,8 @@ Deno.serve(async (req: Request) => {
         sync_type: syncType,
         status: "started",
         started_at: new Date().toISOString(),
+        run_id: run.runId,
+        run_type: run.runType,
       })
       .select()
       .single();
@@ -2430,6 +2447,7 @@ Deno.serve(async (req: Request) => {
       const results: Record<string, number> = {};
       const saveReport: SaveReport = {};
       const stepFailures: string[] = [];
+      const warnings: string[] = [];
       const fail = (step: string, e: unknown) => stepFailures.push(`${step}: ${(e as Error)?.message ?? String(e)}`);
       const isQuickMode = syncType === "quick";
       const shouldSyncAll = syncType === "all";
@@ -2515,6 +2533,7 @@ Deno.serve(async (req: Request) => {
           const sstStats = await syncStaffSessionTypes(supabase, config, userToken, saveReport, sstStaffOffset, sstStaffLimit);
           results.staff_session_types = sstStats.importedRows;
           results.staff_session_types_stats = sstStats as any;
+          warnings.push(...sstStats.warnings);
           console.log(`Staff-Session relationships synced: ${JSON.stringify(sstStats)}`);
         } catch (e) {
           console.error('Staff-Session relationships sync failed:', e);
@@ -2661,7 +2680,7 @@ Deno.serve(async (req: Request) => {
       const totalSaved = tracked.reduce((s, t) => s + t.saved, 0);
       const notSaved = totalReceived - totalSaved;
       const hasProblems = notSaved > 0 || stepFailures.length > 0;
-      const status = !hasProblems ? "completed" : (totalSaved > 0 ? "partial" : "error");
+      const status = hasProblems ? (totalSaved > 0 ? "partial" : "error") : (warnings.length > 0 ? "warning" : "completed");
 
       const problemLines = [
         ...stepFailures,
@@ -2677,7 +2696,10 @@ Deno.serve(async (req: Request) => {
       return {
         success: !hasProblems,
         status,
-        message: hasProblems ? problemLines.join("\n") : "Sync completed successfully",
+        message: hasProblems
+          ? [...problemLines, ...warnings].join("\n")
+          : warnings.length > 0 ? warnings.join("\n") : "Sync completed successfully",
+        warnings,
         results,
         saveReport,
         stepFailures,
@@ -2699,8 +2721,8 @@ Deno.serve(async (req: Request) => {
             status: syncResult.status,
             completed_at: new Date().toISOString(),
             records_synced: syncResult.totalRecords,
-            raw_response: { ...syncResult.results, save_report: syncResult.saveReport, step_failures: syncResult.stepFailures },
-            error_message: syncResult.success ? null : syncResult.message.slice(0, 2000),
+            raw_response: { ...syncResult.results, save_report: syncResult.saveReport, step_failures: syncResult.stepFailures, warnings: syncResult.warnings },
+            error_message: syncResult.status === "completed" ? null : syncResult.message.slice(0, 2000),
           })
           .eq("id", logId);
       }

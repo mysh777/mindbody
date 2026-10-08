@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+
 /* The print-report block is cloned to <body> by handlePrint().
    While cloned, #root is hidden and .print-clone is the only visible tree. */
 @media print {
