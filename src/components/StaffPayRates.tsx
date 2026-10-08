@@ -12,6 +12,8 @@ import {
   Wrench,
 } from 'lucide-react';
 import { CopyLinkButton } from './CopyLinkButton';
+import { LoadErrorBanner } from './LoadErrorBanner';
+import { errorMessage } from '../utils/errorMessage';
 import { exportToExcel } from '../utils/exportExcel';
 
 // ── Types ──
@@ -100,15 +102,26 @@ export function StaffPayRates({ initialStaffId }: Props) {
   const [programMap, setProgramMap] = useState<Record<string, string>>({});
   const [lastSync, setLastSync] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refLoadError, setRefLoadError] = useState<string | null>(null);
+  const [ratesLoadError, setRatesLoadError] = useState<string | null>(null);
+  const loadError = refLoadError || ratesLoadError;
+  const [reloadKey, setReloadKey] = useState(0);
 
   // ── Load reference data ──
   useEffect(() => {
     (async () => {
+      setRefLoadError(null);
       const [staffRes, progRes, syncRes] = await Promise.all([
         supabase.from('staff').select('id, first_name, last_name, raw_data'),
         supabase.from('pricing_options').select('program_id, program_name').not('program_id', 'is', null).not('program_name', 'is', null),
         supabase.from('sync_logs').select('completed_at').eq('sync_type', 'staff_services').eq('status', 'completed').order('completed_at', { ascending: false }).limit(1),
       ]);
+      const refError = staffRes.error || progRes.error || syncRes.error;
+      if (refError) {
+        setRefLoadError(errorMessage(refError));
+        setLoading(false);
+        return;
+      }
 
       const staff: StaffOption[] = (staffRes.data || []).map(s => ({
         id: s.id,
@@ -129,24 +142,27 @@ export function StaffPayRates({ initialStaffId }: Props) {
         setSelectedStaff(realStaff[0]?.id || staff[0].id);
       }
     })();
-  }, [initialStaffId]);
+  }, [initialStaffId, reloadKey]);
 
   // ── Load rate data ──
   useEffect(() => {
     if (!selectedStaff) return;
     setLoading(true);
+    setRatesLoadError(null);
 
     (async () => {
+      try {
       if (selectedStaff === ALL_STAFF) {
         // Load all — paginated
         let allSst: any[] = [];
         let from = 0;
         const PAGE = 1000;
         while (true) {
-          const { data } = await supabase
+          const { data, error } = await supabase
             .from('staff_session_types')
             .select('staff_id, session_type_id, pay_rate, raw_data, time_length')
             .range(from, from + PAGE - 1);
+          if (error) throw error;
           if (!data || data.length === 0) break;
           allSst.push(...data);
           if (data.length < PAGE) break;
@@ -157,10 +173,11 @@ export function StaffPayRates({ initialStaffId }: Props) {
 
         setSstRows(allSst.map(r => toSstRow(r, stMap)));
 
-        const { data: manData } = await supabase
+        const { data: manData, error: manError } = await supabase
           .from('staff_appointment_rates')
           .select('staff_id, session_type_id, rate_per_appointment, rate_type')
           .is('effective_to', null);
+        if (manError) throw manError;
         const manStIds = (manData || []).map(r => r.session_type_id).filter(Boolean) as string[];
         const manStMap = await loadSessionTypeMap(manStIds);
         setManualRows((manData || []).map(r => ({
@@ -183,6 +200,8 @@ export function StaffPayRates({ initialStaffId }: Props) {
             .eq('staff_id', selectedStaff)
             .is('effective_to', null),
         ]);
+        if (sstRes.error) throw sstRes.error;
+        if (manRes.error) throw manRes.error;
 
         const stIds = [...new Set((sstRes.data || []).map(r => r.session_type_id))];
         const manStIds = (manRes.data || []).map(r => r.session_type_id).filter(Boolean) as string[];
@@ -200,18 +219,21 @@ export function StaffPayRates({ initialStaffId }: Props) {
           source: 'manual' as const,
         })));
       }
-      setLoading(false);
+      } catch (error) {
+        console.error('Error loading staff pay rates:', error);
+        setSstRows([]);
+        setManualRows([]);
+        setRatesLoadError(errorMessage(error));
+      } finally {
+        setLoading(false);
+      }
     })();
-  }, [selectedStaff, programMap]);
+  }, [selectedStaff, programMap, reloadKey]);
 
   async function loadSessionTypeMap(ids: string[]): Promise<Record<string, string>> {
     const map: Record<string, string> = {};
-    try {
-      const data = await fetchByIds<{ id: string; name: string | null }>('session_types', 'id', ids, 'id, name');
-      data.forEach(st => { map[st.id] = st.name || st.id; });
-    } catch (error) {
-      console.error('Error loading session types:', error);
-    }
+    const data = await fetchByIds<{ id: string; name: string | null }>('session_types', 'id', ids, 'id, name');
+    data.forEach(st => { map[st.id] = st.name || st.id; });
     return map;
   }
 
@@ -463,6 +485,8 @@ export function StaffPayRates({ initialStaffId }: Props) {
 
       {loading ? (
         <div className="text-center py-12 text-slate-400">Loading rates...</div>
+      ) : loadError ? (
+        <LoadErrorBanner title="Could not load Staff Pay Rates." message={loadError} onRetry={() => setReloadKey(k => k + 1)} />
       ) : staffFilteredRows.length === 0 ? (
         <div className="text-center py-12 text-slate-400">No rates found</div>
       ) : (

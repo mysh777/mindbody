@@ -6,6 +6,7 @@ import { NON_CASH_PAYMENT_TYPES, isPaymentOnAccount, isGiftCard } from './useSal
 import { DateRange } from '../utils/salesFilters';
 import { getSessionTypeMedianPrices } from '../utils/sessionTypeMedianPrice';
 import type { MedianEntry } from '../utils/sessionTypeMedianPrice';
+import { errorMessage } from '../utils/errorMessage';
 
 export type NoDataReason = 'ok' | 'cs_not_synced' | 'no_pricing_option' | 'no_client_service';
 
@@ -126,20 +127,25 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
     setLoading(true);
     setLoadError(null);
     try {
-      const [staffRes, locationsMap, sessionTypesMap, pricingMap, apptData, costRates] =
+      const [staffRes, locationsMap, sessionTypesMap, pricingMap, allApptData, costRates] =
         await Promise.all([
           loadStaffMap(),
           loadLocationsMap(),
           loadSessionTypesMap(),
           loadPricingMap(),
-          loadMarginAppointments(dateRange, selectedLocation, statusFilter),
+          loadMarginAppointments(dateRange, statusFilter),
           loadCostRates(),
         ]);
 
       const csRevenueMap = await loadClientServiceRevenue(
-        apptData.map(a => a.client_service_id).filter(Boolean) as string[], pricingMap);
-      const { visits, medianMap: stMedianMap } = priceVisits(apptData, csRevenueMap, costRates);
+        allApptData.map(a => a.client_service_id).filter(Boolean) as string[], pricingMap);
+      // Estimates come from both studios together so a studio's figures add up to the "all" view.
+      const { visits: allVisits, medianMap: stMedianMap } = priceVisits(allApptData, csRevenueMap, costRates);
       setMedianMap(stMedianMap);
+      const atLocation = <T extends { location_id: string | null }>(rows: T[]) =>
+        selectedLocation === 'all' ? rows : rows.filter(r => r.location_id === selectedLocation);
+      const apptData = atLocation(allApptData);
+      const visits = atLocation(allVisits);
 
       const salesData = await fetchAllPages<{ id: string; client_id: string | null; sale_datetime: string; location_id: string | null; total: number | null }>((from, to) => {
         let q = supabase
@@ -267,7 +273,7 @@ export function useSalesMarginData({ dateRange, selectedLocation, statusFilter =
 
     } catch (error) {
       console.error('Error loading margin data:', error);
-      setLoadError(error instanceof Error ? error.message : String(error));
+      setLoadError(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -466,7 +472,7 @@ export interface PricedVisit extends MarginAppointment {
 
 export type VisitTotals = Omit<MarginSummary, keyof MoneyReceived>;
 
-async function loadMarginAppointments(dateRange: DateRange, location: string, statusFilter: AppointmentStatusFilter): Promise<MarginAppointment[]> {
+async function loadMarginAppointments(dateRange: DateRange, statusFilter: AppointmentStatusFilter): Promise<MarginAppointment[]> {
   return fetchAllPages<MarginAppointment>((from, to) => {
     let q = supabase
       .from('appointments')
@@ -475,7 +481,6 @@ async function loadMarginAppointments(dateRange: DateRange, location: string, st
       .lte('start_datetime', dateRange.end + 'T23:59:59')
       .eq('stale', false);
     q = statusFilter === 'all' ? q.in('status', ['Completed', 'Booked']) : q.eq('status', statusFilter);
-    if (location !== 'all') q = q.eq('location_id', location);
     return q.order('id').range(from, to);
   });
 }
@@ -561,19 +566,31 @@ function groupByMonthAndLocation<T>(rows: T[], dateOf: (r: T) => string, locatio
   return out;
 }
 
-// Same pricing as Margin by Staff, applied per "YYYY-MM|location" group (location "all" included),
-// so every group equals that report run for the same month and location.
+function groupByMonth<T>(rows: T[], dateOf: (r: T) => string): Map<string, T[]> {
+  const out = new Map<string, T[]>();
+  for (const r of rows) {
+    const m = dateOf(r).slice(0, 7);
+    const list = out.get(m) ?? [];
+    list.push(r);
+    out.set(m, list);
+  }
+  return out;
+}
+
+// Same pricing as Margin by Staff run for one month: each month is priced once across both studios,
+// then split into "YYYY-MM|location" groups (location "all" included), so the studios add up to "all".
 export async function computeMarginVisitsByMonth(dateRange: DateRange): Promise<Map<string, PricedVisit[]>> {
   const [pricingMap, appts, costRates] = await Promise.all([
     loadPricingMap(),
-    loadMarginAppointments(dateRange, 'all', 'Completed'),
+    loadMarginAppointments(dateRange, 'Completed'),
     loadCostRates(),
   ]);
   const csRevenueMap = await loadClientServiceRevenue(
     appts.map(a => a.client_service_id).filter(Boolean) as string[], pricingMap);
   const out = new Map<string, PricedVisit[]>();
-  for (const [key, list] of groupByMonthAndLocation(appts, a => a.start_datetime, a => a.location_id)) {
-    out.set(key, priceVisits(list, csRevenueMap, costRates).visits);
+  for (const list of groupByMonth(appts, a => a.start_datetime).values()) {
+    const priced = priceVisits(list, csRevenueMap, costRates).visits;
+    for (const [key, group] of groupByMonthAndLocation(priced, v => v.start_datetime, v => v.location_id)) out.set(key, group);
   }
   return out;
 }

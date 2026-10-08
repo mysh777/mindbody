@@ -3,6 +3,7 @@ import { handlePrint } from '../utils/printReport';
 import { formatApptDate, formatApptTime } from '../utils/formatDateTime';
 import { Users, ArrowUpDown, AlertTriangle, Sparkles, Loader2, ChevronDown, ChevronRight, Search, X, Download, Printer } from 'lucide-react';
 import { CopyLinkButton } from './CopyLinkButton';
+import { LoadErrorBanner } from './LoadErrorBanner';
 import { useSalesMarginData } from '../hooks/useSalesMarginData';
 import { formatCurrency } from '../utils/salesFilters';
 import { exportToExcel } from '../utils/exportExcel';
@@ -110,7 +111,7 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
   );
   const [committedLoc, setCommittedLoc] = useState(urlParams?.location || 'all');
 
-  const { loading, byStaff, appointments } = useSalesMarginData({
+  const { loading, loadError, reload, byStaff, appointments } = useSalesMarginData({
     dateRange: committedRange,
     selectedLocation: committedLoc,
     statusFilter: 'Completed',
@@ -140,10 +141,10 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
   }, []);
 
   useEffect(() => {
-    if (generated && !loading) {
+    if (generated && !loading && !loadError) {
       setLoadedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
     }
-  }, [generated, loading]);
+  }, [generated, loading, loadError]);
 
   const rows: Row[] = useMemo(() => {
     if (!generated) return [];
@@ -312,13 +313,17 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
           </div>
         )}
 
-        {generated && !loading && rows.length === 0 && (
+        {generated && !loading && loadError && (
+          <LoadErrorBanner title="Could not load Margin by Staff." message={loadError} onRetry={reload} />
+        )}
+
+        {generated && !loading && !loadError && rows.length === 0 && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center text-slate-500">
             No completed appointments in selected period
           </div>
         )}
 
-        {generated && !loading && rows.length > 0 && (
+        {generated && !loading && !loadError && rows.length > 0 && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex items-center justify-between gap-3">
               <h3 className="font-semibold text-slate-800 shrink-0">Profitability by Staff Member</h3>

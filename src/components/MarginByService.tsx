@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { handlePrint } from '../utils/printReport';
 import { TrendingUp, ArrowUpDown, AlertTriangle, Sparkles, Loader2, Search, X, Download, Printer, ChevronDown, ChevronRight } from 'lucide-react';
 import { CopyLinkButton } from './CopyLinkButton';
+import { LoadErrorBanner } from './LoadErrorBanner';
 import { useSalesMarginData } from '../hooks/useSalesMarginData';
 import { useSalesByDateData } from '../hooks/useSalesByDateData';
 import { formatCurrency } from '../utils/salesFilters';
@@ -111,16 +112,21 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
   );
   const [committedLoc, setCommittedLoc] = useState(urlParams?.location || 'all');
 
-  const { loading: loadingVisits, byService, appointments } = useSalesMarginData({
+  const { loading: loadingVisits, loadError: visitsError, reload: reloadVisits, byService, appointments } = useSalesMarginData({
     dateRange: committedRange,
     selectedLocation: committedLoc,
     statusFilter: 'Completed',
   });
 
-  const { loading: loadingSales, rows: salesRows, totalReturned, unallocatedAmount, clientTariffBreakdown } = useSalesByDateData({
+  const { loading: loadingSales, loadError: salesError, reload: reloadSales, rows: salesRows, totalReturned, unallocatedAmount, clientTariffBreakdown } = useSalesByDateData({
     dateRange: committedRange,
     selectedLocation: committedLoc,
   });
+  const loadError = visitsError || salesError;
+  const retryLoad = () => {
+    if (visitsError) reloadVisits();
+    if (salesError) reloadSales();
+  };
 
   const [clientNames, setClientNames] = useState<Map<string, string>>(new Map());
   const [namesLoading, setNamesLoading] = useState(false);
@@ -205,10 +211,10 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
   }, []);
 
   useEffect(() => {
-    if (generated && !loading) {
+    if (generated && !loading && !loadError) {
       setLoadedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
     }
-  }, [generated, loading]);
+  }, [generated, loading, loadError]);
 
   // =================== SALE DATE MODE ===================
   const mergedRows: MergedRow[] = useMemo(() => {
@@ -427,9 +433,9 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
   const expandAll = () => setExpandedCats(new Set(allCatNames));
   const collapseAll = () => setExpandedCats(new Set());
 
-  const hasData = revenueBasis === 'sale_date'
+  const hasData = !loadError && (revenueBasis === 'sale_date'
     ? mergedFiltered.length > 0 || salesRows.length > 0
-    : visitRows.length > 0;
+    : visitRows.length > 0);
 
   // =================== EXPORTS ===================
   const handleExportXlsx = () => {
@@ -639,7 +645,11 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
           </div>
         )}
 
-        {generated && !loading && !hasData && (
+        {generated && !loading && loadError && (
+          <LoadErrorBanner title="Could not load Margin by Service." message={loadError} onRetry={retryLoad} />
+        )}
+
+        {generated && !loading && !loadError && !hasData && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center text-slate-500">
             No data in selected period
           </div>
@@ -721,7 +731,7 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
         )}
 
         {/* =============== VISIT DATE TABLE =============== */}
-        {generated && !loading && revenueBasis === 'visit_date' && visitRows.length > 0 && (
+        {generated && !loading && !loadError && revenueBasis === 'visit_date' && visitRows.length > 0 && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">

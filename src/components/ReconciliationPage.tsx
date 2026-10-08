@@ -430,6 +430,8 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
           {result ? (
             result.allOk ? (
               <div className="p-2 bg-emerald-100 rounded-lg"><ShieldCheck className="w-6 h-6 text-emerald-600" /></div>
+            ) : result.errors.length > 0 ? (
+              <div className="p-2 bg-amber-100 rounded-lg"><ShieldAlert className="w-6 h-6 text-amber-600" /></div>
             ) : (
               <div className="p-2 bg-red-100 rounded-lg"><ShieldAlert className="w-6 h-6 text-red-600" /></div>
             )
@@ -485,6 +487,13 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
               <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
               <span className="text-sm font-medium text-emerald-800">
                 All checks passed — report totals match Mindbody reference values.
+              </span>
+            </div>
+          ) : result.errors.length > 0 ? (
+            <div className="flex items-center gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg">
+              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+              <span className="text-sm font-medium text-amber-800">
+                The check could not finish because some data failed to load (see below). Results are incomplete and were not saved; press Check Now to try again.
               </span>
             </div>
           ) : (

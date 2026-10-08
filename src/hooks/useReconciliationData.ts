@@ -563,10 +563,10 @@ export async function saveReconciliationBaseline(): Promise<BaselineSaveResult> 
   };
 }
 
-async function persistCheckStatus(allOk: boolean, errorCount: number) {
+async function persistCheckStatus(allOk: boolean) {
   await supabase
     .from('reconciliation_status')
-    .upsert({ id: 1, checked_at: new Date().toISOString(), all_ok: allOk, error_count: errorCount }, { onConflict: 'id' });
+    .upsert({ id: 1, checked_at: new Date().toISOString(), all_ok: allOk, error_count: 0 }, { onConflict: 'id' });
 }
 
 export async function getLastCheckStatus(): Promise<{ checkedAt: string | null; allOk: boolean }> {
@@ -578,26 +578,45 @@ export async function getLastCheckStatus(): Promise<{ checkedAt: string | null; 
   return { checkedAt: data?.checked_at ?? null, allOk: data?.all_ok ?? false };
 }
 
+const MAX_TIMEOUT_RETRIES = 2;
+
+const isTimeoutError = (message: string) => /statement timeout|57014/i.test(message);
+
+function dropFailedCacheEntries(cache: SalesCache) {
+  for (const [key, entry] of cache) if (!entry.ok) cache.delete(key);
+}
+
+// Database timeouts are transient under load, so a step that hit one is run again before giving up.
+async function withTimeoutRetry<T extends { errors: string[] }>(cache: SalesCache, step: () => Promise<T>): Promise<T> {
+  let result = await step();
+  for (let attempt = 1; attempt <= MAX_TIMEOUT_RETRIES && result.errors.some(isTimeoutError); attempt++) {
+    dropFailedCacheEntries(cache);
+    await new Promise(resolve => setTimeout(resolve, 1500 * attempt));
+    result = await step();
+  }
+  return result;
+}
+
 export async function runReconciliationCheck(): Promise<ReconciliationResult> {
   const cache: SalesCache = new Map();
   const allErrors: string[] = [];
 
   const { refs, error: loadErr } = await loadReferences();
   if (loadErr) allErrors.push(loadErr);
-  const { checks: references, errors: refErrors } = await evaluateReferences(refs, cache);
+  const { checks: references, errors: refErrors } = await withTimeoutRetry(cache, () => evaluateReferences(refs, cache));
   allErrors.push(...refErrors);
   const refPeriods = [...new Set(refs.map(r => r.period))];
 
   const [{ drifts: baselineDrifts, exists: baselineExists, errors: blErrors }, { checks: cases, errors: caseErrors }, { types: unknownPaymentTypes, errors: ptErrors }, { checks: tariffQuality, errors: tqErrors }] = await Promise.all([
-    checkBaseline(cache, refPeriods),
-    checkCases(cache),
-    checkUnknownPaymentTypes(),
-    checkTariffQuality(),
+    withTimeoutRetry(cache, () => checkBaseline(cache, refPeriods)),
+    withTimeoutRetry(cache, () => checkCases(cache)),
+    withTimeoutRetry(cache, () => checkUnknownPaymentTypes()),
+    withTimeoutRetry(cache, () => checkTariffQuality()),
   ]);
   allErrors.push(...blErrors, ...caseErrors, ...ptErrors, ...tqErrors);
 
   // Runs after the other checks: segment loading times out when it competes with them.
-  const { checks: storedTotals, errors: stErrors } = await checkStoredTotals(refPeriods);
+  const { checks: storedTotals, errors: stErrors } = await withTimeoutRetry(cache, () => checkStoredTotals(refPeriods));
   allErrors.push(...stErrors);
 
   const hasErrors = allErrors.length > 0;
@@ -610,7 +629,8 @@ export async function runReconciliationCheck(): Promise<ReconciliationResult> {
     tariffQuality.every(t => t.ok) &&
     storedTotals.every(s => s.ok);
 
-  await persistCheckStatus(allOk, allErrors.length);
+  // An incomplete run says nothing about the data, so the last real verdict is kept.
+  if (!hasErrors) await persistCheckStatus(allOk);
 
   return {
     references, baselineDrifts, cases, unknownPaymentTypes, tariffQuality, storedTotals,

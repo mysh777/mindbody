@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CalendarDays, Clock, Loader2, MapPin, Printer, RefreshCw } from 'lucide-react';
+import { CalendarDays, Clock, Loader2, MapPin, Printer, RefreshCw } from 'lucide-react';
+import { LoadErrorBanner } from './LoadErrorBanner';
 import { OwnerOverviewCards, type CardLink, type OverviewCard } from './OwnerOverviewCards';
 import { OwnerOverviewCharts } from './OwnerOverviewCharts';
 import { OwnerMoneyBreakdown } from './OwnerMoneyBreakdown';
@@ -141,7 +142,7 @@ export function OwnerOverview({ urlParams, onParamsChange, onOpenReport }: Owner
     { id: 'avg', label: 'Average per visit', value: m.avgPerVisit, format: 'eur', hint: HINTS.avgPerVisit, prevMonth: prev?.avgPerVisit, lastYear: ly?.avgPerVisit, link: { section: 'margin-by-staff', params: range } },
     { id: 'new', label: 'New clients', value: m.newClients, format: 'count', hint: HINTS.newClients, prevMonth: prev?.newClients, lastYear: ly?.newClients, link: { section: 'client-segments', params: { end: month, loc: location } } },
     {
-      id: 'obligations', label: 'Obligations', value: obligations?.total ?? 0, format: 'eur',
+      id: 'obligations', label: 'Obligations', value: obligationsError ? null : obligations?.total ?? null, format: 'eur',
       note: obligationsError ? 'Could not load.' : obligations
         ? `As of today, all locations: ${obligations.remainingVisits} unused visits held by ${obligations.clients} clients.`
         : 'Loading…',
@@ -208,16 +209,7 @@ export function OwnerOverview({ urlParams, onParamsChange, onOpenReport }: Owner
         </div>
       </div>
 
-      {seriesError && (
-        <div className="flex items-start gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-lg">
-          <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-          <div className="text-sm text-red-800">
-            <p className="font-medium">Could not load the overview.</p>
-            <p className="text-xs text-red-700 mt-0.5">{seriesError}</p>
-          </div>
-          <button onClick={() => loadSeries()} className="ml-auto text-sm font-medium text-red-700 hover:text-red-900">Retry</button>
-        </div>
-      )}
+      {seriesError && <LoadErrorBanner title="Could not load the overview." message={seriesError} onRetry={() => loadSeries()} />}
 
       {!series && !seriesError && (
         <div className="bg-white rounded-xl border border-slate-200 p-10 flex flex-col items-center text-center gap-3">

@@ -8707,11 +8707,10 @@ async function loadClientServiceRevenue(clientServiceIds, pricingMap) {
   }
   return revenueMap;
 }
-async function loadMarginAppointments(dateRange, location, statusFilter) {
+async function loadMarginAppointments(dateRange, statusFilter) {
   return fetchAllPages((from, to) => {
     let q = supabase.from("appointments").select("id, client_id, staff_id, session_type_id, location_id, start_datetime, end_datetime, status, client_service_id").gte("start_datetime", dateRange.start).lte("start_datetime", dateRange.end + "T23:59:59").eq("stale", false);
     q = statusFilter === "all" ? q.in("status", ["Completed", "Booked"]) : q.eq("status", statusFilter);
-    if (location !== "all") q = q.eq("location_id", location);
     return q.order("id").range(from, to);
   });
 }
@@ -8790,10 +8789,20 @@ function groupByMonthAndLocation(rows, dateOf, locationOf) {
   }
   return out;
 }
+function groupByMonth(rows, dateOf) {
+  const out = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    const m = dateOf(r).slice(0, 7);
+    const list = out.get(m) ?? [];
+    list.push(r);
+    out.set(m, list);
+  }
+  return out;
+}
 async function computeMarginVisitsByMonth(dateRange) {
   const [pricingMap, appts, costRates] = await Promise.all([
     loadPricingMap(),
-    loadMarginAppointments(dateRange, "all", "Completed"),
+    loadMarginAppointments(dateRange, "Completed"),
     loadCostRates()
   ]);
   const csRevenueMap = await loadClientServiceRevenue(
@@ -8801,8 +8810,9 @@ async function computeMarginVisitsByMonth(dateRange) {
     pricingMap
   );
   const out = /* @__PURE__ */ new Map();
-  for (const [key, list] of groupByMonthAndLocation(appts, (a) => a.start_datetime, (a) => a.location_id)) {
-    out.set(key, priceVisits(list, csRevenueMap, costRates).visits);
+  for (const list of groupByMonth(appts, (a) => a.start_datetime).values()) {
+    const priced = priceVisits(list, csRevenueMap, costRates).visits;
+    for (const [key, group] of groupByMonthAndLocation(priced, (v) => v.start_datetime, (v) => v.location_id)) out.set(key, group);
   }
   return out;
 }
@@ -9333,9 +9343,9 @@ function computeObligations(packages, today = toLocalISO(/* @__PURE__ */ new Dat
     activePackages: 0,
     remainingVisits: 0,
     clients: 0,
-    byPackage: /* @__PURE__ */ new Map()
+    byPackage: /* @__PURE__ */ new Map(),
+    byClient: /* @__PURE__ */ new Map()
   };
-  const clients = /* @__PURE__ */ new Set();
   for (const pkg of packages) {
     if (!isPackageActive(pkg, today)) continue;
     const value = packageObligation(pkg);
@@ -9343,8 +9353,18 @@ function computeObligations(packages, today = toLocalISO(/* @__PURE__ */ new Dat
     summary.remainingVisits += pkg.remaining;
     summary.total += value;
     summary.byPackage.set(pkg.id, value);
-    if (pkg.client_id) clients.add(pkg.client_id);
-    if (pkg.price_source === "actual" || pkg.price_source === "direct_sale_item") {
+    const isPaid = pkg.price_source === "actual" || pkg.price_source === "direct_sale_item";
+    if (pkg.client_id) {
+      const c = summary.byClient.get(pkg.client_id) || { clientId: pkg.client_id, value: 0, paidPart: 0, visits: 0, packages: 0, nextExpiry: null };
+      c.value += value;
+      if (isPaid) c.paidPart += value;
+      c.visits += pkg.remaining;
+      c.packages++;
+      const exp = pkg.expiration_date ? pkg.expiration_date.slice(0, 10) : null;
+      if (exp && (!c.nextExpiry || exp < c.nextExpiry)) c.nextExpiry = exp;
+      summary.byClient.set(pkg.client_id, c);
+    }
+    if (isPaid) {
       summary.paidPart += value;
     } else if (pkg.price_source === "catalog_approximate") {
       summary.catalogPart += value;
@@ -9353,7 +9373,7 @@ function computeObligations(packages, today = toLocalISO(/* @__PURE__ */ new Dat
       summary.noDataPackages++;
     }
   }
-  summary.clients = clients.size;
+  summary.clients = summary.byClient.size;
   return summary;
 }
 async function loadStudioObligations(asOf) {

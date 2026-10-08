@@ -10,7 +10,7 @@ export interface CardLink {
 export interface OverviewCard {
   id: string;
   label: string;
-  value: number;
+  value: number | null;
   format: 'eur' | 'count';
   secondary?: string;
   hint?: string;
@@ -31,7 +31,10 @@ interface CardsProps {
   onOpen: (link: CardLink) => void;
 }
 
-const fmt = (v: number, format: OverviewCard['format']) => (format === 'eur' ? formatEur(v) : formatNumber(v));
+const fmt = (v: number | null, format: OverviewCard['format']) => {
+  if (v === null) return '—';
+  return format === 'eur' ? formatEur(v) : formatNumber(v);
+};
 
 function Change({ label, current, previous, neutral }: { label: string; current: number; previous?: number; neutral?: boolean }) {
   const pct = percentChange(current, previous);
@@ -76,7 +79,7 @@ export function OwnerOverviewCards({ cards, prevMonth, lastYearMonth, incomplete
             <span className="text-2xl print:text-lg font-semibold text-slate-900 tabular-nums whitespace-nowrap">{fmt(card.value, card.format)}</span>
             {card.secondary && <span className="text-sm font-medium text-slate-500 tabular-nums">{card.secondary}</span>}
           </div>
-          {card.note ? (
+          {card.note || card.value === null ? (
             <p className="mt-3 print:mt-1 text-xs text-slate-500 leading-relaxed">{card.note}</p>
           ) : (
             <div className="mt-3 print:mt-1 space-y-1 print:space-y-0 border-t border-slate-100 pt-3 print:pt-1">

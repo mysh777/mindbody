@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { fetchAllPages } from '../lib/fetchAllPages';
 import { fetchByIds, mapLimited } from '../lib/fetchByIds';
 import { DateRange } from '../utils/salesFilters';
+import { errorMessage } from '../utils/errorMessage';
 
 export const NON_CASH_PAYMENT_TYPES = ['Prepaid Gift Card', 'Account', 'Comp/Guest', 'Other'];
 
@@ -484,6 +485,7 @@ export async function computeSalesByDateData(
 
 export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDateDataProps) {
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [rows, setRows] = useState<SaleDateTariffRow[]>([]);
   const [totalReturned, setTotalReturned] = useState(0);
   const [unallocatedAmount, setUnallocatedAmount] = useState(0);
@@ -491,12 +493,15 @@ export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDa
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const result = await computeSalesByDateData(dateRange, selectedLocation);
       setRows(result.rows);
       setTotalReturned(result.totalReturned);
       setUnallocatedAmount(result.unallocatedAmount);
       setClientTariffBreakdown(result.clientTariffBreakdown);
+    } catch (error) {
+      setLoadError(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -504,5 +509,5 @@ export function useSalesByDateData({ dateRange, selectedLocation }: UseSalesByDa
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  return { loading, rows, totalReturned, unallocatedAmount, clientTariffBreakdown, reload: loadData };
+  return { loading, loadError, rows, totalReturned, unallocatedAmount, clientTariffBreakdown, reload: loadData };
 }

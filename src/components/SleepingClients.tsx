@@ -19,6 +19,8 @@ import {
   Save,
 } from 'lucide-react';
 import { CopyLinkButton } from './CopyLinkButton';
+import { LoadErrorBanner } from './LoadErrorBanner';
+import { errorMessage } from '../utils/errorMessage';
 import { exportToExcel } from '../utils/exportExcel';
 import { isPackageActive, toLocalISO, PACKAGE_STATUS_COLUMNS } from '../utils/packageStatus';
 import { PagePurpose } from './PageHeader';
@@ -107,6 +109,7 @@ function medianOf(arr: number[]): number | null {
 export function SleepingClients({ onViewClient, urlParams, onParamsChange }: SleepingClientsProps) {
   const [clients, setClients] = useState<SleepingClientRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [generated, setGenerated] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [onlyWithPackage, setOnlyWithPackage] = useState(urlParams?.pkg === '1');
@@ -230,6 +233,7 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
 
   const refresh = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       // 1. Load categories (programs)
       const categories = await fetchAllPages<{ id: string; name: string }>((from, to) => supabase
@@ -423,6 +427,9 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
       setLoadedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
       console.error('Error loading sleeping clients:', err);
+      setClients([]);
+      setSleepingCountByGroup({});
+      setLoadError(errorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -693,7 +700,7 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
         )}
 
         {/* Empty state */}
-        {!generated && !loading && (
+        {!generated && !loading && !loadError && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
             <Moon className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-slate-600 mb-2">Click Refresh to load</h3>
@@ -712,7 +719,11 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
         )}
 
         {/* No results */}
-        {generated && filtered.length === 0 && !loading && (
+        {loadError && !loading && (
+          <LoadErrorBanner title="Could not load Sleeping Clients." message={loadError} onRetry={refresh} />
+        )}
+
+        {generated && !loadError && filtered.length === 0 && !loading && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
             <Moon className="w-10 h-10 text-slate-300 mx-auto mb-3" />
             <p className="text-slate-500 text-sm">No sleeping clients found for this filter</p>
@@ -720,7 +731,7 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
         )}
 
         {/* Results */}
-        {generated && filtered.length > 0 && !loading && (
+        {generated && !loadError && filtered.length > 0 && !loading && (
           <div className="space-y-3">
             {filtered.map(row => (
               <div

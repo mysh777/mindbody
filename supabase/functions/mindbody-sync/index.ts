@@ -746,6 +746,38 @@ async function importStaffSessionItems(
   return { imported, skipped, errors };
 }
 
+// Manual rates live in staff_appointment_rates and are never touched here.
+async function removeStaleStaffSessionTypes(
+  supabase: any,
+  staffDbId: string,
+  mindbodyStaffId: string,
+  items: any[],
+  sessionTypeLookup: Map<string, string>,
+): Promise<number> {
+  if (sessionTypeLookup.size === 0) return 0;
+  const keep = new Set<string>();
+  for (const sst of items) {
+    const sstId = extractSessionTypeId(sst);
+    if (!sstId) return 0;
+    const dbId = sessionTypeLookup.get(sstId);
+    if (dbId) keep.add(dbId);
+  }
+
+  let query = supabase.from("staff_session_types").delete().eq("staff_id", staffDbId);
+  if (keep.size > 0) {
+    const list = [...keep].map(id => `"${String(id).replace(/"/g, '')}"`).join(",");
+    query = query.not("session_type_id", "in", `(${list})`);
+  }
+  const { data, error } = await query.select("session_type_id");
+  if (error) {
+    console.error(`[SST] Staff ${mindbodyStaffId} | stale link cleanup failed: ${error.message}`);
+    return 0;
+  }
+  const removed = data?.length ?? 0;
+  if (removed > 0) console.log(`[SST] Staff ${mindbodyStaffId} | removed ${removed} links no longer in Mindbody`);
+  return removed;
+}
+
 async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, staffOffset?: number, staffLimit?: number) {
   console.log('[SST] Syncing staff session types via /staff/sessiontypes');
 
@@ -767,15 +799,16 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, user
   console.log(`[SST] Total staff: ${allStaff.length}, real: ${totalReal}, processing slice: ${realStaff.length} (offset=${staffOffset ?? 0}, limit=${staffLimit ?? 'ALL'})`);
 
   // Pre-load all session types into a lookup map (mindbody_id -> db id)
-  const { data: allSessionTypes } = await supabase.from("session_types").select("id, mindbody_id");
+  const { data: allSessionTypes, error: sessionTypesError } = await supabase.from("session_types").select("id, mindbody_id");
   const sessionTypeLookup = new Map<string, string>();
-  if (allSessionTypes) {
+  if (allSessionTypes && !sessionTypesError) {
     for (const st of allSessionTypes) {
       sessionTypeLookup.set(st.mindbody_id, st.id);
     }
   }
   console.log(`[SST] Loaded ${sessionTypeLookup.size} session types into lookup`);
 
+  let removedLinks = 0;
   let testedStaff = 0;
   let staffWithData = 0;
   let importedRows = 0;
@@ -793,15 +826,16 @@ async function syncStaffSessionTypes(supabase: any, config: MindbodyConfig, user
 
     if (result.items.length === 0) {
       emptyStaff++;
-      continue;
+    } else {
+      staffWithData++;
+      const importResult = await importStaffSessionItems(supabase, staff.id, staff.mindbody_id, result.items, sessionTypeLookup, report);
+      importedRows += importResult.imported;
+      if (importResult.errors > 0) continue;
     }
-
-    staffWithData++;
-    const importResult = await importStaffSessionItems(supabase, staff.id, staff.mindbody_id, result.items, sessionTypeLookup, report);
-    importedRows += importResult.imported;
+    removedLinks += await removeStaleStaffSessionTypes(supabase, staff.id, staff.mindbody_id, result.items, sessionTypeLookup);
   }
 
-  const stats = { testedStaff, staffWithData, importedRows, emptyStaff, failedStaff };
+  const stats = { testedStaff, staffWithData, importedRows, emptyStaff, failedStaff, removedLinks };
   console.log(`[SST] === SUMMARY ===`);
   console.log(`[SST] ${JSON.stringify(stats)}`);
   return stats;
@@ -836,9 +870,9 @@ async function syncStaffServicesOne(
   }
 
   // Pre-load session types lookup for the single-staff variant
-  const { data: allSessionTypes } = await supabase.from("session_types").select("id, mindbody_id");
+  const { data: allSessionTypes, error: sessionTypesError } = await supabase.from("session_types").select("id, mindbody_id");
   const sessionTypeLookup = new Map<string, string>();
-  if (allSessionTypes) {
+  if (allSessionTypes && !sessionTypesError) {
     for (const st of allSessionTypes) {
       sessionTypeLookup.set(st.mindbody_id, st.id);
     }
@@ -846,11 +880,15 @@ async function syncStaffServicesOne(
 
   const report: SaveReport = {};
   const importResult = await importStaffSessionItems(supabase, staffRow.id, staffRow.mindbody_id, result.items, sessionTypeLookup, report);
+  const removedLinks = importResult.errors > 0
+    ? 0
+    : await removeStaleStaffSessionTypes(supabase, staffRow.id, staffRow.mindbody_id, result.items, sessionTypeLookup);
 
   return {
     staff: `${staffRow.first_name} ${staffRow.last_name} (${staffRow.mindbody_id})`,
     apiItemsReturned: result.items.length,
     ...importResult,
+    removedLinks,
     saveReport: report,
     rawTopLevelKeys: Object.keys(result.raw),
     firstItem: result.items.length > 0 ? result.items[0] : null,

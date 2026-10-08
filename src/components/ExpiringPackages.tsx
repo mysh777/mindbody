@@ -16,6 +16,8 @@ import {
   X,
 } from 'lucide-react';
 import { CopyLinkButton } from './CopyLinkButton';
+import { LoadErrorBanner } from './LoadErrorBanner';
+import { errorMessage } from '../utils/errorMessage';
 import { exportToExcel } from '../utils/exportExcel';
 import { isPackageActive, toLocalISO, PACKAGE_STATUS_COLUMNS } from '../utils/packageStatus';
 import { PagePurpose } from './PageHeader';
@@ -60,6 +62,7 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [totalServices, setTotalServices] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [generated, setGenerated] = useState(false);
   const [loadedAt, setLoadedAt] = useState<string | null>(null);
   const initFilter = (urlParams?.filter === 'visits' || urlParams?.filter === 'days') ? urlParams.filter : 'both';
@@ -75,6 +78,7 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
 
   const refresh = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const csData = await fetchAllPages<any>((from, to) => supabase
         .from('client_services')
@@ -206,6 +210,9 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
       setLoadedAt(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
       console.error('Error loading expiring packages:', err);
+      setClients([]);
+      setTotalServices(0);
+      setLoadError(errorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -355,14 +362,18 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
           </div>
         </div>
 
-        {generated && filtered.length === 0 && !loading && (
+        {loadError && !loading && (
+          <LoadErrorBanner title="Could not load Expiring Packages." message={loadError} onRetry={refresh} />
+        )}
+
+        {generated && !loadError && filtered.length === 0 && !loading && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
             <Flame className="w-10 h-10 text-slate-300 mx-auto mb-3" />
             <p className="text-slate-500 text-sm">No expiring packages found for this filter</p>
           </div>
         )}
 
-        {generated && filtered.length > 0 && !loading && (
+        {generated && !loadError && filtered.length > 0 && !loading && (
           <div className="space-y-3">
             {filtered.map(row => (
               <div
@@ -439,7 +450,7 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
           </div>
         )}
 
-        {!generated && !loading && (
+        {!generated && !loading && !loadError && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
             <Flame className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-slate-600 mb-2">Click Refresh to load</h3>
