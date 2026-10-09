@@ -71,8 +71,10 @@ Nine specific client/tariff scenarios, each with expected value and/or quantity.
 | 3 | Mixed payment splits (Veidenbauma) | 19.07 +/-0.01 |
 | 4 | Cash return +65/-65 + rebuy (Karbanova) | 117.00 |
 | 5 | Account debt covered by PoA (Luse) | 470.00 |
-| 6 | PoA + refund on balance (Serebro) | 52.50 |
-| 7 | Product on balance + Account on PoA (Kazakova) | 145.75 |
+| 6 | PoA + refund on balance (Serebro) | 112.00 |
+| 7 | Product on balance + Account on PoA (Kazakova) | 192.50 |
+
+Cases 6 and 7 can grow after the period closes: Mindbody books later spending of a deposit back to the month the deposit was made, so references for such months must be re-verified in Mindbody when the client keeps spending the balance.
 | 8 | Gift card PoA not revenue (Bacarova) | 15.00 |
 | 9 | Gift card PoAs zero revenue (Sniedze + Bautre) | 0.00 |
 
