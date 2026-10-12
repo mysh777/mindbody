@@ -11,9 +11,74 @@ interface MindbodyConfig {
   sourceName: string;
   sourcePassword: string;
   siteId: string;
+  calls?: CallRecorder;
 }
 
 const MINDBODY_BASE_URL = "https://api.mindbodyonline.com/public/v6";
+
+class CallRecorder {
+  private buffer: Record<string, unknown>[] = [];
+  private pending: Promise<void>[] = [];
+
+  constructor(private supabase: any, private step: string, private runId: string | null, private runType: string | null) {}
+
+  record(row: Record<string, unknown>) {
+    this.buffer.push({ ...row, step: this.step, run_id: this.runId, run_type: this.runType });
+    if (this.buffer.length >= 50) this.pending.push(this.write());
+  }
+
+  private async write() {
+    const rows = this.buffer.splice(0);
+    if (rows.length === 0) return;
+    const { error } = await this.supabase.from("mindbody_api_calls").insert(rows);
+    if (error) console.error("Failed to record Mindbody calls:", error.message);
+  }
+
+  async flush() {
+    this.pending.push(this.write());
+    await Promise.allSettled(this.pending.splice(0));
+  }
+}
+
+function firstParam(params: URLSearchParams, names: string[]): string | null {
+  for (const name of names) {
+    const value = params.get(name);
+    if (value) return value;
+  }
+  return null;
+}
+
+function toInt(value: string | null): number | null {
+  const n = value == null ? NaN : parseInt(value, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Every HTTP request to Mindbody must go through here so each billed call is recorded.
+async function mbFetch(config: MindbodyConfig, url: string, init: RequestInit = {}): Promise<Response> {
+  const parsed = new URL(url);
+  const params = parsed.searchParams;
+  const offset = toInt(firstParam(params, ["request.offset", "offset", "Offset"]));
+  const limit = toInt(firstParam(params, ["request.limit", "limit", "Limit"]));
+  const meta = {
+    method: (init.method ?? "GET").toUpperCase(),
+    endpoint: parsed.pathname.replace(/^\/public\/v6\//, ""),
+    page_offset: offset,
+    page_limit: limit,
+    page: offset != null && limit ? Math.floor(offset / limit) + 1 : null,
+    staff_id: firstParam(params, ["request.staffIds", "request.staffId", "staffIds", "staffId", "StaffIds", "StaffId"]),
+    client_id: firstParam(params, ["request.clientId", "request.clientIds", "clientId", "ClientId", "ClientIds"]),
+    session_type_id: firstParam(params, ["request.sessionTypeIds[]", "request.sessionTypeIds", "sessionTypeIds", "SessionTypeIds", "request.sessionTypeId"]),
+  };
+  const started = Date.now();
+  try {
+    const response = await fetch(url, init);
+    config.calls?.record({ ...meta, http_status: response.status, duration_ms: Date.now() - started });
+    return response;
+  } catch (error) {
+    config.calls?.record({ ...meta, http_status: 0, duration_ms: Date.now() - started, error: error instanceof Error ? error.message : String(error) });
+    throw error;
+  }
+}
 
 async function getUserToken(supabase: any, config: MindbodyConfig): Promise<string | null> {
   const staffUsername = Deno.env.get("MINDBODY_STAFF_USERNAME");
@@ -32,11 +97,12 @@ async function getUserToken(supabase: any, config: MindbodyConfig): Promise<stri
     Username: staffUsername,
     Password: staffPassword,
   };
+  const loggedBody = { Username: staffUsername, Password: "[redacted]" };
 
   console.log(`Requesting user token for: ${staffUsername}`);
 
   try {
-    const response = await fetch(url, {
+    const response = await mbFetch(config, url, {
       method: "POST",
       headers: {
         "Api-Key": config.apiKey,
@@ -60,7 +126,7 @@ async function getUserToken(supabase: any, config: MindbodyConfig): Promise<stri
       supabase,
       url,
       "POST",
-      requestBody,
+      loggedBody,
       response.status,
       responseBody,
       null,
@@ -86,7 +152,7 @@ async function getUserToken(supabase: any, config: MindbodyConfig): Promise<stri
       supabase,
       url,
       "POST",
-      requestBody,
+      loggedBody,
       0,
       null,
       error instanceof Error ? error.message : String(error),
@@ -252,7 +318,7 @@ async function syncSites(supabase: any, config: MindbodyConfig) {
   const url = `${MINDBODY_BASE_URL}/site/sites`;
   const startTime = Date.now();
 
-  const response = await fetch(url, {
+  const response = await mbFetch(config, url, {
     headers: getSourceHeaders(config),
   });
 
@@ -301,7 +367,7 @@ async function syncLocations(supabase: any, config: MindbodyConfig) {
   const url = `${MINDBODY_BASE_URL}/site/locations`;
   const startTime = Date.now();
 
-  const response = await fetch(url, {
+  const response = await mbFetch(config, url, {
     headers: getSourceHeaders(config),
   });
 
@@ -370,7 +436,7 @@ async function syncStaff(supabase: any, config: MindbodyConfig) {
     const url = `${MINDBODY_BASE_URL}/staff/staff?limit=${limit}&offset=${offset}&StaffEmail=true`;
     const startTime = Date.now();
 
-    const response = await fetch(url, {
+    const response = await mbFetch(config, url, {
       headers: getSourceHeaders(config),
     });
 
@@ -448,7 +514,7 @@ async function syncSessionTypes(supabase: any, config: MindbodyConfig) {
     const url = `${MINDBODY_BASE_URL}/site/sessiontypes?limit=${limit}&offset=${offset}`;
     const startTime = Date.now();
 
-    const response = await fetch(url, {
+    const response = await mbFetch(config, url, {
       headers: getSourceHeaders(config),
     });
 
@@ -512,7 +578,7 @@ async function syncServiceCategories(supabase: any, config: MindbodyConfig) {
   const url = `${MINDBODY_BASE_URL}/site/programs`;
   const startTime = Date.now();
 
-  const response = await fetch(url, {
+  const response = await mbFetch(config, url, {
     headers: getSourceHeaders(config),
   });
 
@@ -641,7 +707,7 @@ async function fetchStaffSessionTypesFromApi(
     const url = `${MINDBODY_BASE_URL}/staff/sessiontypes?request.staffId=${mindbodyStaffId}&request.onlineOnly=false&request.limit=${limit}&request.offset=${offset}`;
     const startTime = Date.now();
 
-    const response = await fetch(url, {
+    const response = await mbFetch(config, url, {
       headers: getUserHeaders(config, userToken),
     });
 
@@ -985,7 +1051,7 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
     const url = `${MINDBODY_BASE_URL}/sale/services?limit=${limit}&offset=${offset}`;
     const startTime = Date.now();
 
-    const response = await fetch(url, {
+    const response = await mbFetch(config, url, {
       headers: getUserHeaders(config, userToken),
     });
 
@@ -1115,7 +1181,7 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
       const url = `${MINDBODY_BASE_URL}/appointment/staffappointments?staffIds=${staff.mindbody_id}&startDate=${startDateStr}&endDate=${endDateStr}&limit=${limit}&offset=${offset}`;
       const startTime = Date.now();
 
-      const response = await fetch(url, {
+      const response = await mbFetch(config, url, {
         headers: getUserHeaders(config, userToken),
       });
 
@@ -1243,7 +1309,7 @@ async function syncStaffSchedule(supabase: any, config: MindbodyConfig, userToke
     while (true) {
       const ids = batch.map((id: string) => `request.staffIds=${id}`).join('&');
       const url = `${MINDBODY_BASE_URL}/appointment/scheduleitems?request.startDate=${startStr}T00:00:00&request.endDate=${endStr}T23:59:59&${ids}&request.limit=${PAGE}&request.offset=${offset}`;
-      const response = await fetch(url, { headers: getUserHeaders(config, userToken) });
+      const response = await mbFetch(config, url, { headers: getUserHeaders(config, userToken) });
       if (!response.ok) {
         console.error(`[SCHEDULE] Failed for staff ${batch.join(',')}: ${response.status}`);
         fetchComplete = false;
@@ -1313,7 +1379,7 @@ async function syncAppointmentsDirect(supabase: any, config: MindbodyConfig, use
     const url = `${MINDBODY_BASE_URL}/appointment/appointments?startDate=${startDateStr}&endDate=${endDateStr}&limit=${limit}&offset=${offset}`;
     const startTime = Date.now();
 
-    const response = await fetch(url, {
+    const response = await mbFetch(config, url, {
       headers: getUserHeaders(config, userToken),
     });
 
@@ -1396,7 +1462,7 @@ async function syncClients(supabase: any, config: MindbodyConfig, report: SaveRe
 
     console.log(`[CLIENTS] Page ${pageNumber} | Offset: ${offset} | Limit: ${limit}`);
 
-    const response = await fetch(url, {
+    const response = await mbFetch(config, url, {
       headers: userToken ? getUserHeaders(config, userToken) : getSourceHeaders(config),
     });
 
@@ -1523,7 +1589,7 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
 
     console.log(`[SALES] Page ${pageNumber} | Offset: ${offset} | Year: ${targetYear}`);
 
-    const response = await fetch(url, {
+    const response = await mbFetch(config, url, {
       headers: getUserHeaders(config, userToken),
     });
 
@@ -1763,7 +1829,7 @@ async function syncClientServices(supabase: any, config: MindbodyConfig, userTok
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
     try {
-      const response = await fetch(url, {
+      const response = await mbFetch(config, url, {
         headers: getUserHeaders(config, userToken),
         signal: controller.signal,
       });
@@ -1882,7 +1948,7 @@ async function syncTransactions(supabase: any, config: MindbodyConfig, userToken
 
     console.log(`[TRANSACTIONS] Page ${pageNumber} | Offset: ${offset} | Year: ${targetYear}`);
 
-    const response = await fetch(url, {
+    const response = await mbFetch(config, url, {
       headers: getUserHeaders(config, userToken),
     });
 
@@ -1986,7 +2052,7 @@ async function syncClientVisits(supabase: any, config: MindbodyConfig, userToken
     const url = `${MINDBODY_BASE_URL}/client/clientvisits?startDate=${startDate.toISOString().split('T')[0]}&endDate=${endDate.toISOString().split('T')[0]}&limit=${limit}&offset=${offset}`;
     const startTime = Date.now();
 
-    const response = await fetch(url, {
+    const response = await mbFetch(config, url, {
       headers: getUserHeaders(config, userToken),
     });
 
@@ -2063,7 +2129,7 @@ async function syncPackages(supabase: any, config: MindbodyConfig, userToken: st
     const url = `${MINDBODY_BASE_URL}/sale/packages?limit=${limit}&offset=${offset}`;
     const startTime = Date.now();
 
-    const response = await fetch(url, {
+    const response = await mbFetch(config, url, {
       headers: getUserHeaders(config, userToken),
     });
 
@@ -2149,7 +2215,7 @@ async function buildPricingSessionTypeLinks(supabase: any, config: MindbodyConfi
     const startTime = Date.now();
 
     try {
-      const response = await fetch(url, {
+      const response = await mbFetch(config, url, {
         headers: getUserHeaders(config, userToken),
       });
 
@@ -2268,7 +2334,7 @@ async function syncProducts(supabase: any, config: MindbodyConfig, userToken?: s
     const url = `${MINDBODY_BASE_URL}/sale/products?limit=${limit}&offset=${offset}`;
     const startTime = Date.now();
 
-    const response = await fetch(url, {
+    const response = await mbFetch(config, url, {
       headers: userToken ? getUserHeaders(config, userToken) : getSourceHeaders(config),
     });
 
@@ -2353,6 +2419,7 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+  let recorder: CallRecorder | undefined;
   try {
     const { syncType = "quick", year, month, monthFrom, monthTo, staffId: requestStaffId, pageOffset, pageLimit, staffOffset, staffLimit, runId: requestRunId, runType: requestRunType } = await req.json().catch(() => ({}));
     const run = resolveRun(requestRunId, requestRunType);
@@ -2399,6 +2466,8 @@ Deno.serve(async (req: Request) => {
       sourcePassword: mindbodySourcePassword,
       siteId: mindbodySiteId,
     };
+    recorder = new CallRecorder(supabase, String(syncType), run.runId, run.runType);
+    config.calls = recorder;
 
 
     if (syncType === "staff_services_one") {
@@ -2773,5 +2842,7 @@ Deno.serve(async (req: Request) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       }
     );
+  } finally {
+    await recorder?.flush();
   }
 });

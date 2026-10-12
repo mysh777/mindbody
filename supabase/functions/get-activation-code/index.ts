@@ -1,4 +1,19 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+
+async function recordCall(httpStatus: number, durationMs: number, error: string | null) {
+  const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+  const { error: insertError } = await supabase.from("mindbody_api_calls").insert({
+    method: "POST",
+    endpoint: "0_5/SiteService.asmx GetActivationCode",
+    step: "activation_code",
+    run_type: "manual",
+    http_status: httpStatus,
+    duration_ms: durationMs,
+    error,
+  });
+  if (insertError) console.error("Failed to record Mindbody call:", insertError.message);
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -46,17 +61,25 @@ Deno.serve(async (req: Request) => {
 
     console.log("Sending SOAP request...");
 
-    const response = await fetch(
-      "https://api.mindbodyonline.com/0_5/SiteService.asmx",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "text/xml; charset=utf-8",
-          "SOAPAction": "http://clients.mindbodyonline.com/api/0_5/GetActivationCode",
-        },
-        body: soapEnvelope,
-      }
-    );
+    const started = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(
+        "https://api.mindbodyonline.com/0_5/SiteService.asmx",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/xml; charset=utf-8",
+            "SOAPAction": "http://clients.mindbodyonline.com/api/0_5/GetActivationCode",
+          },
+          body: soapEnvelope,
+        }
+      );
+    } catch (fetchError) {
+      await recordCall(0, Date.now() - started, fetchError instanceof Error ? fetchError.message : String(fetchError));
+      throw fetchError;
+    }
+    await recordCall(response.status, Date.now() - started, null);
 
     const responseText = await response.text();
     console.log("Response status:", response.status);
