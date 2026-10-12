@@ -93,7 +93,7 @@ interface PaidVisit {
 export interface SegmentData {
   visitsByClient: Map<string, PaidVisit[]>;
   freeVisitsByClient: Map<string, PaidVisit[]>;
-  clientsWithFutureBooking: Set<string>;
+  nextBookingByClient: Map<string, string>;
   clients: Map<string, SegmentClient>;
   staleVisitsIgnored: number;
   today: string;
@@ -132,8 +132,8 @@ export async function loadSegmentData(): Promise<SegmentData> {
       .eq('status', 'Completed').eq('stale', false)
       .order('id').range(from, to)),
     supabase.from('appointments').select('id', { count: 'exact', head: true }).eq('status', 'Completed').eq('stale', true),
-    fetchAllPages<{ client_id: string | null }>((from, to) => supabase
-      .from('appointments').select('client_id')
+    fetchAllPages<{ client_id: string | null; start_datetime: string }>((from, to) => supabase
+      .from('appointments').select('client_id, start_datetime')
       .in('status', ['Booked', 'Confirmed']).eq('stale', false).gte('start_datetime', today)
       .order('id').range(from, to)),
     loadFreeClientServiceIds(),
@@ -154,6 +154,14 @@ export async function loadSegmentData(): Promise<SegmentData> {
     target.set(a.client_id, list);
   }
   for (const list of visitsByClient.values()) list.sort((x, y) => x.date.localeCompare(y.date));
+
+  const nextBookingByClient = new Map<string, string>();
+  for (const f of future) {
+    if (!f.client_id) continue;
+    const date = f.start_datetime.slice(0, 10);
+    const prev = nextBookingByClient.get(f.client_id);
+    if (!prev || date < prev) nextBookingByClient.set(f.client_id, date);
+  }
 
   const activePackageByClient = new Map<string, { name: string; remaining: number }>();
   for (const cs of packages) {
@@ -188,7 +196,7 @@ export async function loadSegmentData(): Promise<SegmentData> {
   return {
     visitsByClient,
     freeVisitsByClient,
-    clientsWithFutureBooking: new Set(future.map(f => f.client_id).filter((id): id is string => !!id)),
+    nextBookingByClient,
     clients,
     staleVisitsIgnored: staleCount.count ?? 0,
     today,
@@ -331,7 +339,7 @@ export function computeSegments(data: SegmentData, settings: SegmentSettings, en
       continue;
     }
     const hasLaterVisit = days[days.length - 1] > lastVisit;
-    if (periodDays.length <= settings.oneoffMaxVisits && !hasLaterVisit && !data.clientsWithFutureBooking.has(clientId)) {
+    if (periodDays.length <= settings.oneoffMaxVisits && !hasLaterVisit && !data.nextBookingByClient.has(clientId)) {
       if (daysBetween(lastVisit, data.today) >= settings.oneoffMinDaysSinceLast) segments.oneoff.push(row);
       else segments.tooEarly.push(row);
       continue;

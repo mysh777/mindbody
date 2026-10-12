@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Loader2, UserPlus } from 'lucide-react';
 import type { ClientIndex } from '../../utils/campaignMatch';
 import { addMembers, clientsToMembers, deleteMember, updateMember, type ListMember } from '../../utils/campaignLists';
+import { loadCandidateStats, type CandidateStats } from '../../utils/campaignResults';
 import { ClientPicker } from './ClientPicker';
 import { MatchReview, type ReviewRow } from './MatchReview';
 
@@ -16,6 +17,19 @@ export function MembersPanel({ listId, members, index, onChange }: MembersPanelP
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const memberClientIds = useMemo(() => new Set(members.map(m => m.client_id).filter((id): id is string => !!id)), [members]);
+  const [candidateStats, setCandidateStats] = useState<Map<string, CandidateStats> | null>(null);
+  const [statsError, setStatsError] = useState(false);
+  const candidateKey = useMemo(() => [...new Set(members.filter(m => m.match_status === 'ambiguous').flatMap(m => m.candidate_ids))].sort().join(','), [members]);
+
+  useEffect(() => {
+    if (!candidateKey) return;
+    let cancelled = false;
+    setStatsError(false);
+    loadCandidateStats(candidateKey.split(','))
+      .then(stats => { if (!cancelled) setCandidateStats(stats); })
+      .catch(() => { if (!cancelled) setStatsError(true); });
+    return () => { cancelled = true; };
+  }, [candidateKey]);
 
   const rows: ReviewRow[] = useMemo(() => members.map(m => {
     const client = m.client_id ? index?.clients.get(m.client_id) : undefined;
@@ -77,7 +91,8 @@ export function MembersPanel({ listId, members, index, onChange }: MembersPanelP
         {busy === 'add' && <div className="text-xs text-slate-500">Adding...</div>}
       </div>
       {error && <div className="bg-rose-50 border border-rose-200 text-rose-700 text-sm rounded-lg px-4 py-3">{error}</div>}
-      <MatchReview rows={rows} index={index} onResolve={resolve} onRemove={remove} busyKey={busy} />
+      {statsError && <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-4 py-3">Could not load visit and payment details for the possible clients.</div>}
+      <MatchReview rows={rows} index={index} onResolve={resolve} onRemove={remove} busyKey={busy} candidateStats={candidateKey && !statsError ? candidateStats ?? 'loading' : undefined} />
     </div>
   );
 }

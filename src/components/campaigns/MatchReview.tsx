@@ -1,7 +1,11 @@
 import { useMemo, useState } from 'react';
 import { Check, AlertCircle, HelpCircle, UserX, SkipForward, Search, RotateCcw, Trash2 } from 'lucide-react';
 import type { ClientIndex, MatchMethod, MatchStatus } from '../../utils/campaignMatch';
+import type { CandidateStats } from '../../utils/campaignResults';
+import { formatEur } from '../../utils/ownerFormat';
 import { ClientLabel, ClientPicker } from './ClientPicker';
+
+type CandidateStatsProp = Map<string, CandidateStats> | 'loading';
 
 export interface ReviewRow {
   key: string;
@@ -50,11 +54,12 @@ interface MatchReviewProps {
   onResolve: (key: string, clientId: string | null) => void;
   onRemove?: (key: string) => void;
   busyKey?: string | null;
+  candidateStats?: CandidateStatsProp;
 }
 
 type Tab = 'attention' | 'matched' | 'all';
 
-export function MatchReview({ rows, index, onResolve, onRemove, busyKey }: MatchReviewProps) {
+export function MatchReview({ rows, index, onResolve, onRemove, busyKey, candidateStats }: MatchReviewProps) {
   const counts = matchCounts(rows);
   const attention = counts.ambiguous + counts.not_found;
   const [tab, setTab] = useState<Tab>(attention > 0 ? 'attention' : 'all');
@@ -116,7 +121,7 @@ export function MatchReview({ rows, index, onResolve, onRemove, busyKey }: Match
                   </div>
                   </div>
                 </div>
-                <RowDecision row={r} index={index} searching={searching === r.key}
+                <RowDecision row={r} index={index} searching={searching === r.key} candidateStats={candidateStats}
                   onSearch={open => setSearching(open ? r.key : null)}
                   onResolve={id => { setSearching(null); onResolve(r.key, id); }} />
               </div>
@@ -134,9 +139,10 @@ interface RowDecisionProps {
   searching: boolean;
   onSearch: (open: boolean) => void;
   onResolve: (clientId: string | null) => void;
+  candidateStats?: CandidateStatsProp;
 }
 
-function RowDecision({ row, index, searching, onSearch, onResolve }: RowDecisionProps) {
+function RowDecision({ row, index, searching, onSearch, onResolve, candidateStats }: RowDecisionProps) {
   if (searching) return <ClientPicker index={index} autoFocus onPick={c => onResolve(c.id)} onClose={() => onSearch(false)} />;
 
   if (row.status === 'matched' && row.clientId) {
@@ -184,6 +190,7 @@ function RowDecision({ row, index, searching, onSearch, onResolve }: RowDecision
                 className="text-left px-2.5 py-1.5 border border-slate-200 rounded-lg hover:border-teal-400 hover:bg-teal-50 transition-colors">
                 <div className="text-xs font-medium text-slate-800">{c?.name || `Client ${id}`}</div>
                 <div className="text-[11px] text-slate-500">{c?.phone || c?.email || `ID ${id}`}</div>
+                {candidateStats && <CandidateFacts stats={candidateStats === 'loading' ? 'loading' : candidateStats.get(id)} />}
               </button>
             );
           })}
@@ -193,6 +200,18 @@ function RowDecision({ row, index, searching, onSearch, onResolve }: RowDecision
         <SmallButton onClick={() => onSearch(true)} icon={Search}>Search a client</SmallButton>
         <SmallButton onClick={() => onResolve(null)} icon={SkipForward}>Skip</SmallButton>
       </div>
+    </div>
+  );
+}
+
+function CandidateFacts({ stats }: { stats: CandidateStats | 'loading' | undefined }) {
+  if (stats === 'loading') return <div className="mt-1 h-3 w-32 bg-slate-100 rounded animate-pulse" />;
+  if (!stats) return null;
+  return (
+    <div className="mt-1 pt-1 border-t border-slate-100 text-[11px] text-slate-600 tabular-nums space-x-2">
+      <span>Card {stats.createdAt ? formatLead(stats.createdAt) : '-'}</span>
+      <span className={stats.visits ? 'text-slate-800 font-medium' : ''}>{stats.visits} visit{stats.visits === 1 ? '' : 's'}</span>
+      <span className={stats.moneyPaid ? 'text-slate-800 font-medium' : ''}>{formatEur(stats.moneyPaid)}</span>
     </div>
   );
 }

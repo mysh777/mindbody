@@ -5,7 +5,7 @@ import { normalizeText } from '../../utils/campaignMatch';
 import { STATUS_LABELS, type ClientResult } from '../../utils/campaignResults';
 import { formatLead } from './MatchReview';
 
-type SortKey = 'name' | 'leadDate' | 'firstVisitEver' | 'visits' | 'moneyPaid' | 'salesByService' | 'revenueEarned' | 'lastVisit' | 'packageVisitsLeft' | 'obligations';
+type SortKey = 'name' | 'leadDate' | 'firstVisitEver' | 'visits' | 'procedures' | 'moneyPaid' | 'salesByService' | 'revenueEarned' | 'lastVisit' | 'packageVisitsLeft' | 'obligations';
 
 interface Column {
   key: SortKey;
@@ -28,6 +28,7 @@ export function ResultsTable({ clients, showLead, onViewClient }: ResultsTablePr
     ...(showLead ? [{ key: 'leadDate' as const, label: 'Lead date' }] : []),
     { key: 'firstVisitEver', label: 'First visit' },
     { key: 'visits', label: 'Visits', numeric: true },
+    { key: 'procedures', label: 'Procedures', numeric: true },
     { key: 'moneyPaid', label: 'Money paid', numeric: true },
     { key: 'salesByService', label: 'Sales by service', numeric: true },
     { key: 'revenueEarned', label: 'Revenue earned', numeric: true },
@@ -83,12 +84,14 @@ export function ResultsTable({ clients, showLead, onViewClient }: ResultsTablePr
                   <div className="text-xs text-slate-500 flex flex-wrap gap-x-2">
                     {c.phone && <span>{c.phone}</span>}
                     {c.status && <StatusTag status={c.status} />}
+                    {c.status === 'booked' && c.nextBooking && <span className="text-cyan-700">on {fmtDate(c.nextBooking)}</span>}
                     {c.newInPeriod && <span className="text-teal-700 font-medium">New in period</span>}
                   </div>
                 </td>
                 {showLead && <td className="px-3 py-2 whitespace-nowrap text-slate-600">{fmtDate(c.leadDate)}</td>}
                 <td className="px-3 py-2 whitespace-nowrap text-slate-600">{fmtDate(c.firstVisitEver)}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{c.visits || '-'}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-600">{c.procedures || '-'}</td>
                 <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-900">{c.moneyPaid ? formatEur(c.moneyPaid) : '-'}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{c.salesByService ? formatEur(c.salesByService) : '-'}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{c.revenueEarned ? formatEur(c.revenueEarned) : '-'}</td>
@@ -104,6 +107,7 @@ export function ResultsTable({ clients, showLead, onViewClient }: ResultsTablePr
               {showLead && <td />}
               <td />
               <td className="px-3 py-2.5 text-right tabular-nums">{formatNumber(sum(c => c.visits))}</td>
+              <td className="px-3 py-2.5 text-right tabular-nums">{formatNumber(sum(c => c.procedures))}</td>
               <td className="px-3 py-2.5 text-right tabular-nums">{formatEur(sum(c => c.moneyPaid))}</td>
               <td className="px-3 py-2.5 text-right tabular-nums">{formatEur(sum(c => c.salesByService))}</td>
               <td className="px-3 py-2.5 text-right tabular-nums">{formatEur(sum(c => c.revenueEarned))}</td>
@@ -118,7 +122,7 @@ export function ResultsTable({ clients, showLead, onViewClient }: ResultsTablePr
   );
 }
 
-const STATUS_TONES = { new: 'text-emerald-700', existing: 'text-sky-700', noVisits: 'text-amber-700', notFound: 'text-rose-700' };
+const STATUS_TONES = { new: 'text-emerald-700', existing: 'text-sky-700', booked: 'text-cyan-700', noVisits: 'text-amber-700', notFound: 'text-rose-700' };
 
 function StatusTag({ status }: { status: keyof typeof STATUS_TONES }) {
   return <span className={STATUS_TONES[status]}>{STATUS_LABELS[status]}</span>;

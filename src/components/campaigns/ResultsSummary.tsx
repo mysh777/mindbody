@@ -12,7 +12,8 @@ interface ResultsSummaryProps {
 const STATUS_STYLE: Record<LeadStatus, { bar: string; text: string; hint: string }> = {
   new: { bar: 'bg-emerald-500', text: 'text-emerald-700', hint: 'First visit ever on or after the lead date' },
   existing: { bar: 'bg-sky-500', text: 'text-sky-700', hint: 'Already a client before the lead' },
-  noVisits: { bar: 'bg-amber-400', text: 'text-amber-700', hint: 'In Mindbody, no visit after the lead yet' },
+  booked: { bar: 'bg-cyan-500', text: 'text-cyan-700', hint: 'In Mindbody, no visit yet, has a future booking' },
+  noVisits: { bar: 'bg-amber-400', text: 'text-amber-700', hint: 'In Mindbody, no visit after the lead and nothing booked' },
   notFound: { bar: 'bg-rose-400', text: 'text-rose-700', hint: 'No matching client (incl. skipped)' },
 };
 
@@ -22,13 +23,13 @@ export function ResultsSummary({ result, campaignCost }: ResultsSummaryProps) {
   const t = result.totals;
   const people = result.funnel[1].count;
   const leads = result.funnel[0].count;
-  const paying = result.funnel[4].count;
+  const paying = result.clients.filter(c => c.moneyPaid > 0).length;
   const newClients = result.hasStatus ? result.statusCounts.new : t.newClients;
 
   return (
     <div className="space-y-5">
       {result.hasStatus && (
-        <section className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <section className="grid grid-cols-2 lg:grid-cols-5 gap-3">
           {(Object.keys(STATUS_LABELS) as LeadStatus[]).map(s => (
             <div key={s} className="bg-white border border-slate-200 rounded-xl p-4">
               <div className={`text-sm font-medium ${STATUS_STYLE[s].text}`}>{STATUS_LABELS[s]}</div>
@@ -56,18 +57,19 @@ export function ResultsSummary({ result, campaignCost }: ResultsSummaryProps) {
           <h3 className="text-base font-semibold text-slate-900">Campaign funnel</h3>
           <div className="mt-4 space-y-2.5">
             {result.funnel.map((step, i) => {
-              const prev = i > 0 ? result.funnel[i - 1].count : step.count;
+              const base = result.funnel.slice(0, i).filter(s => !s.branch).pop();
+              const prev = base ? base.count : step.count;
               return (
-                <div key={step.label}>
+                <div key={step.label} className={step.branch ? 'pl-4 border-l-2 border-cyan-200' : ''}>
                   <div className="flex items-center justify-between text-sm mb-1">
-                    <span className="text-slate-700">{step.label}</span>
+                    <span className={step.branch ? 'text-cyan-800' : 'text-slate-700'}>{step.label}</span>
                     <span className="tabular-nums">
                       <b className="text-slate-900">{formatNumber(step.count)}</b>
-                      <span className="text-slate-400 ml-2 inline-block w-24 text-right">{i === 0 ? '' : `${share(step.count, prev)} of prev.`}</span>
+                      <span className="text-slate-400 ml-2 inline-block w-24 text-right">{i === 0 ? '' : `${share(step.count, prev)} of ${step.branch ? 'found' : 'prev.'}`}</span>
                     </span>
                   </div>
                   <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-gradient-to-r from-teal-500 to-teal-400 rounded-full transition-all duration-700"
+                    <div className={`h-full bg-gradient-to-r ${step.branch ? 'from-cyan-500 to-cyan-400' : 'from-teal-500 to-teal-400'} rounded-full transition-all duration-700`}
                       style={{ width: `${leads ? Math.max((step.count / leads) * 100, step.count ? 1 : 0) : 0}%` }} />
                   </div>
                 </div>
@@ -112,7 +114,7 @@ export function ResultsSummary({ result, campaignCost }: ResultsSummaryProps) {
           <Metric label="Revenue earned" value={formatEur(t.revenueEarned)} sub="From visits, same rule as Margin by Staff" large />
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mt-3">
-          <Metric label="Visits" value={formatNumber(t.visits)} />
+          <Metric label="Visits" value={formatNumber(t.visits)} sub={`${formatNumber(t.procedures)} procedures`} />
           <Metric label="Clients with visits" value={formatNumber(t.clientsWithVisits)} />
           <Metric label="New clients" value={formatNumber(t.newClients)} sub="First paid visit in period" />
           <Metric label="Returned (2+ visits)" value={formatNumber(t.returned)} />

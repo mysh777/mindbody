@@ -7,11 +7,12 @@ import { loadStudioObligations } from './obligations';
 import type { ListMember } from './campaignLists';
 
 export type PeriodMode = 'sinceLead' | 'fixed';
-export type LeadStatus = 'new' | 'existing' | 'noVisits' | 'notFound';
+export type LeadStatus = 'new' | 'existing' | 'booked' | 'noVisits' | 'notFound';
 
 export const STATUS_LABELS: Record<LeadStatus, string> = {
   new: 'New client',
   existing: 'Existing client',
+  booked: 'Booked, not visited yet',
   noVisits: 'Found, no visits yet',
   notFound: 'Not found',
 };
@@ -27,7 +28,8 @@ export interface ClientResult {
   firstVisitEver: string | null;
   newInPeriod: boolean;
   visits: number;
-  visitDays: number;
+  procedures: number;
+  nextBooking: string | null;
   moneyPaid: number;
   moneyGiftCards: number;
   moneyDeposits: number;
@@ -42,6 +44,7 @@ export interface ClientResult {
 export interface FunnelStep {
   label: string;
   count: number;
+  branch?: boolean;
 }
 
 export interface CampaignTotals {
@@ -52,6 +55,7 @@ export interface CampaignTotals {
   salesByService: number;
   revenueEarned: number;
   visits: number;
+  procedures: number;
   clientsWithVisits: number;
   newClients: number;
   returned: number;
@@ -91,6 +95,32 @@ export interface CampaignQuery {
 }
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
+
+export interface CandidateStats {
+  createdAt: string | null;
+  visits: number;
+  moneyPaid: number;
+}
+
+export async function loadCandidateStats(ids: string[]): Promise<Map<string, CandidateStats>> {
+  const [cards, appts, sales] = await Promise.all([
+    fetchByIds<{ id: string; created: string | null }>('clients', 'id', ids, 'id, created:raw_data->>CreationDate'),
+    fetchByIds<{ client_id: string; start_datetime: string }>('appointments', 'client_id', ids, 'client_id, start_datetime',
+      qb => qb.eq('status', 'Completed').eq('stale', false)),
+    fetchByIds<{ id: string; total: number | null; client_id: string }>('sales', 'client_id', ids, 'id, total, client_id'),
+  ]);
+  const moneyBySale = await computeMoneyReceivedBySale(sales);
+  const out = new Map<string, CandidateStats>();
+  for (const id of ids) {
+    const created = cards.find(c => c.id === id)?.created;
+    out.set(id, {
+      createdAt: created ? created.slice(0, 10) : null,
+      visits: new Set(appts.filter(a => a.client_id === id).map(a => a.start_datetime.slice(0, 10))).size,
+      moneyPaid: round2(sales.filter(s => s.client_id === id).reduce((s, sale) => s + (moneyBySale.get(sale.id)?.cashIn ?? 0), 0)),
+    });
+  }
+  return out;
+}
 const inRange = (d: string, start: string, end: string) => d >= start && d <= end;
 
 interface Period { start: string; end: string; leadDate: string | null }
@@ -117,7 +147,8 @@ function leadStatus(data: SegmentData, clientId: string, lead: string, fad: stri
   const ours = [...(data.visitsByClient.get(clientId) ?? []), ...(data.freeVisitsByClient.get(clientId) ?? [])].map(v => v.date);
   const firstEver = [fad, ...ours].filter((d): d is string => !!d).sort()[0] ?? null;
   if (firstEver && firstEver < lead) return 'existing';
-  return ours.some(d => d >= lead) ? 'new' : 'noVisits';
+  if (ours.some(d => d >= lead)) return 'new';
+  return data.nextBookingByClient.has(clientId) ? 'booked' : 'noVisits';
 }
 
 export async function computeCampaign(q: CampaignQuery): Promise<CampaignResult> {
@@ -198,8 +229,9 @@ export async function computeCampaign(q: CampaignQuery): Promise<CampaignResult>
       status: p.leadDate ? leadStatus(segData, clientId, p.leadDate, fad) : null,
       firstVisitEver: [fad, ours[0]].filter((d): d is string => !!d).sort()[0] ?? null,
       newInPeriod: check === 'new' && !!firstVisit && inRange(firstVisit.date, p.start, p.end) && atLocation(firstVisit.locationId),
-      visits: visits.length,
-      visitDays: days.size,
+      visits: days.size,
+      procedures: visits.length,
+      nextBooking: segData.nextBookingByClient.get(clientId) ?? null,
       moneyPaid: round2(money.reduce((s, m) => s + m!.cashIn, 0)),
       moneyGiftCards: round2(money.reduce((s, m) => s + m!.cashInGiftCards, 0)),
       moneyDeposits: round2(money.reduce((s, m) => s + m!.cashInDeposits, 0)),
@@ -215,7 +247,7 @@ export async function computeCampaign(q: CampaignQuery): Promise<CampaignResult>
   const resolvedMembers = q.members.filter(m => m.client_id);
   const unresolvedMembers = q.members.filter(m => !m.client_id && m.match_status === 'ambiguous').length;
   const hasStatus = q.members.some(m => m.lead_at);
-  const statusCounts: Record<LeadStatus, number> = { new: 0, existing: 0, noVisits: 0, notFound: 0 };
+  const statusCounts: Record<LeadStatus, number> = { new: 0, existing: 0, booked: 0, noVisits: 0, notFound: 0 };
   if (hasStatus) {
     for (const c of clients) if (c.status) statusCounts[c.status]++;
     statusCounts.notFound = q.members.length - resolvedMembers.length;
@@ -233,9 +265,10 @@ export async function computeCampaign(q: CampaignQuery): Promise<CampaignResult>
     salesByService: sum(c => c.salesByService),
     revenueEarned: sum(c => c.revenueEarned),
     visits: sum(c => c.visits),
+    procedures: sum(c => c.procedures),
     clientsWithVisits: withVisits.length,
     newClients: clients.filter(c => c.newInPeriod).length,
-    returned: clients.filter(c => c.visitDays >= 2).length,
+    returned: clients.filter(c => c.visits >= 2).length,
     withActivePackage: clients.filter(c => c.activePackages > 0).length,
     obligations: sum(c => c.obligations),
     moneyPerClient: withVisits.length ? round2(moneyPaid / withVisits.length) : 0,
@@ -248,6 +281,7 @@ export async function computeCampaign(q: CampaignQuery): Promise<CampaignResult>
     { label: 'Leads', count: leads },
     { label: 'Unique people', count: q.members.length },
     { label: 'Found in Mindbody', count: clients.length },
+    { label: 'Booked, not visited yet', count: clients.filter(c => (hasStatus ? c.status === 'booked' : c.visits === 0 && !!c.nextBooking)).length, branch: true },
     { label: 'Came for a visit', count: withVisits.length },
     { label: 'Paid', count: clients.filter(c => c.moneyPaid > 0).length },
     { label: 'Came 2+ times', count: totals.returned },
@@ -258,11 +292,12 @@ export async function computeCampaign(q: CampaignQuery): Promise<CampaignResult>
   if (allMoney) {
     const scopeVisits = visitsInScope.filter(v => v.client_id && inRange(v.start_datetime.slice(0, 10), overallRange.start, overallRange.end));
     const allClients = new Set(scopeVisits.map(v => v.client_id));
+    const allVisitDays = new Set(scopeVisits.map(v => `${v.client_id}|${v.start_datetime.slice(0, 10)}`));
     comparison = {
       range: overallRange,
       clientsWithVisits: allClients.size,
       moneyPerClient: allClients.size ? round2(allMoney.cashIn / allClients.size) : 0,
-      visitsPerClient: allClients.size ? round2(scopeVisits.length / allClients.size) : 0,
+      visitsPerClient: allClients.size ? round2(allVisitDays.size / allClients.size) : 0,
     };
   }
 
