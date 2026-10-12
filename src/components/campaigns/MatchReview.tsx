@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Check, AlertCircle, HelpCircle, UserX, SkipForward, Search, RotateCcw, Trash2, Phone, Mail, ChevronDown } from 'lucide-react';
+import { Check, AlertCircle, HelpCircle, UserX, SkipForward, Search, RotateCcw, Trash2, Phone, Mail, ChevronDown, X, FileSpreadsheet } from 'lucide-react';
+import { arrangeMembers, nextSort, type MemberFilter, type MemberSortKey, type MemberView } from '../../utils/memberView';
 import { rankCandidates, type CandidateMatchField, type ClientIndex, type MatchMethod, type MatchStatus } from '../../utils/campaignMatch';
 import type { CandidateStats } from '../../utils/campaignResults';
 import { formatEur } from '../../utils/ownerFormat';
@@ -55,18 +56,39 @@ interface MatchReviewProps {
   onRemove?: (key: string) => void;
   busyKey?: string | null;
   candidateStats?: CandidateStatsProp;
+  view?: MemberView;
+  onViewChange?: (view: MemberView) => void;
+  onExport?: (rows: ReviewRow[]) => void;
 }
 
-type Tab = 'attention' | 'matched' | 'all';
+type Tab = MemberFilter;
 
-export function MatchReview({ rows, index, onResolve, onRemove, busyKey, candidateStats }: MatchReviewProps) {
+const SORT_COLUMNS: { key: MemberSortKey; label: string; side: 'lead' | 'decision' }[] = [
+  { key: 'name', label: 'Lead', side: 'lead' },
+  { key: 'leadAt', label: 'Lead date', side: 'lead' },
+  { key: 'status', label: 'Status', side: 'decision' },
+  { key: 'client', label: 'Matched client', side: 'decision' },
+  { key: 'candidates', label: 'Possible clients', side: 'decision' },
+];
+
+const snapshot = (key: string, rows: ReviewRow[]) => ({ key, rows: new Map(rows.map(r => [r.key, r])) });
+
+export function MatchReview({ rows, index, onResolve, onRemove, busyKey, candidateStats, view, onViewChange, onExport }: MatchReviewProps) {
   const counts = matchCounts(rows);
   const attention = counts.ambiguous + counts.not_found;
-  const [tab, setTab] = useState<Tab>(attention > 0 ? 'attention' : 'all');
+  const [localTab, setLocalTab] = useState<Tab>(attention > 0 ? 'attention' : 'all');
+  const tab = view?.filter ?? localTab;
+  const setTab = (t: Tab) => (view && onViewChange ? onViewChange({ ...view, filter: t }) : setLocalTab(t));
   const [searching, setSearching] = useState<string | null>(null);
 
-  const visible = useMemo(() => rows.filter(r =>
-    tab === 'all' || (tab === 'matched' ? r.status === 'matched' : r.status === 'ambiguous' || r.status === 'not_found')), [rows, tab]);
+  const arrangeKey = view ? `${tab}|${view.query}|${view.sortKey}|${view.sortDir}` : '';
+  const [frozen, setFrozen] = useState(() => snapshot(arrangeKey, rows));
+  if (frozen.key !== arrangeKey) setFrozen(snapshot(arrangeKey, rows));
+
+  const visible = useMemo(() => view
+    ? arrangeMembers(rows, { ...view, filter: tab }, index, r => frozen.rows.get(r.key) ?? r)
+    : rows.filter(r => tab === 'all' || (tab === 'matched' ? r.status === 'matched' : r.status === 'ambiguous' || r.status === 'not_found')),
+  [rows, tab, view, index, frozen]);
 
   const matchedTotal = counts.mindbody_id + counts.email + counts.phone + counts.name + counts.manual;
   const summary = [
@@ -98,10 +120,53 @@ export function MatchReview({ rows, index, onResolve, onRemove, busyKey, candida
         ))}
       </div>
 
+      {view && onViewChange && (
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative flex-1 min-w-[240px] max-w-xl">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input value={view.query} onChange={e => onViewChange({ ...view, query: e.target.value })}
+              placeholder="Search name, phone, email, client ID or status"
+              className="w-full pl-9 pr-9 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500" />
+            {view.query && (
+              <button onClick={() => onViewChange({ ...view, query: '' })} aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          <span className="text-sm text-slate-600 tabular-nums">{visible.length} of {rows.length} members</span>
+          {onExport && (
+            <button onClick={() => onExport(visible)} disabled={visible.length === 0}
+              className="ml-auto px-3 py-2 text-sm font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 flex items-center gap-1.5 transition-colors">
+              <FileSpreadsheet className="w-4 h-4 text-emerald-600" />Export to Excel
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+        {view && onViewChange && (
+          <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-x-3 gap-y-1">
+            {(['lead', 'decision'] as const).map(side => (
+              <div key={side} className="flex flex-wrap gap-x-4 gap-y-1">
+                {SORT_COLUMNS.filter(c => c.side === side).map(c => {
+                  const active = view.sortKey === c.key;
+                  return (
+                    <button key={c.key} onClick={() => onViewChange({ ...view, ...nextSort(view, c.key) })}
+                      aria-sort={active ? (view.sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                      className={`text-xs font-semibold uppercase tracking-wide flex items-center gap-1 transition-colors ${active ? 'text-teal-700' : 'text-slate-500 hover:text-slate-800'}`}>
+                      {c.label}
+                      <span className={`text-[10px] w-2.5 ${active ? '' : 'opacity-0'}`}>{active && view.sortDir === 'desc' ? '\u25BC' : '\u25B2'}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        )}
         {visible.length === 0 ? (
           <div className="px-4 py-10 text-center text-sm text-slate-500">
-            {tab === 'attention' ? 'Every row has a decision. Nothing left to check.' : 'No rows here.'}
+            {view?.query ? 'Nobody matches this search.' : tab === 'attention' ? 'Every row has a decision. Nothing left to check.' : 'No rows here.'}
           </div>
         ) : (
           <div className="divide-y divide-slate-100">

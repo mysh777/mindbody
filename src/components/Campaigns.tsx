@@ -32,7 +32,8 @@ export function Campaigns({ active, onViewClient, urlParams, onParamsChange }: C
         {view === 'upload' && <UploadWizard index={index} onCancel={() => go({})} onSaved={id => go({ list: id })} />}
         {view === 'manual' && <ManualBuilder index={index} onCancel={() => go({})} onSaved={id => go({ list: id })} />}
         {view === 'list' && (
-          <ListDetail key={listId} listId={listId} index={index} onBack={() => go({})} onDeleted={() => go({})} onViewClient={onViewClient} />
+          <ListDetail key={listId} listId={listId} index={index} onBack={() => go({})} onDeleted={() => go({})} onViewClient={onViewClient}
+            urlParams={nav} onParamsChange={go} />
         )}
       </div>
     </SimplePage>

@@ -1,11 +1,34 @@
 import { exportMultiSheetExcel } from './exportExcel';
 import { STATUS_LABELS, type CampaignResult } from './campaignResults';
+import type { ClientIndex } from './campaignMatch';
+import { memberStatusLabel, type MemberRowLike } from './memberView';
 
 interface ExportContext {
   listName: string;
   periodLabel: string;
   locationLabel: string;
   campaignCost: number | null;
+}
+
+const safeFileName = (name: string) => name.replace(/[^\w\- ]+/g, '').trim() || 'campaign';
+
+export function exportMembers(rows: MemberRowLike[], index: ClientIndex, listName: string) {
+  const data = rows.map(r => {
+    const client = r.clientId ? index.clients.get(r.clientId) : undefined;
+    return {
+      Lead: r.name,
+      'Lead phone': r.phone,
+      'Lead email': r.email,
+      'Lead date': r.leadAt ? r.leadAt.slice(0, 16).replace('T', ' ') : '',
+      Status: memberStatusLabel(r),
+      'Client ID': r.clientId ?? '',
+      'Matched client': client?.name ?? '',
+      'Client phone': client?.phones.join(', ') ?? '',
+      'Client email': client?.email ?? '',
+      'Possible clients': r.candidateIds.length,
+    };
+  });
+  exportMultiSheetExcel([{ name: 'Members', data }], `${safeFileName(listName)} members`);
 }
 
 const ratio = (a: number, b: number) => (b ? Math.round((a / b) * 100) / 100 : '');
@@ -77,7 +100,7 @@ export function exportCampaign(result: CampaignResult, ctx: ExportContext) {
   }));
 
   const services = result.salesByTariff.map(s => ({ Service: s.tariff, Sales: s.qty, 'Amount, EUR': s.revenue }));
-  const safeName = ctx.listName.replace(/[^\w\- ]+/g, '').trim() || 'campaign';
+  const safeName = safeFileName(ctx.listName);
   exportMultiSheetExcel([
     { name: 'Totals', data: totals },
     { name: 'Clients', data: clients },

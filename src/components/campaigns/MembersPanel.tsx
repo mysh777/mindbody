@@ -3,6 +3,8 @@ import { Loader2, UserPlus } from 'lucide-react';
 import type { ClientIndex } from '../../utils/campaignMatch';
 import { addMembers, clientsToMembers, deleteMember, updateMember, type ListMember } from '../../utils/campaignLists';
 import { loadCandidateStats, type CandidateStats } from '../../utils/campaignResults';
+import { exportMembers } from '../../utils/campaignExport';
+import type { MemberView } from '../../utils/memberView';
 import { ClientPicker } from './ClientPicker';
 import { MatchReview, type ReviewRow } from './MatchReview';
 
@@ -11,9 +13,12 @@ interface MembersPanelProps {
   members: ListMember[];
   index: ClientIndex | null;
   onChange: (members: ListMember[]) => void;
+  listName: string;
+  view: MemberView;
+  onViewChange: (view: MemberView) => void;
 }
 
-export function MembersPanel({ listId, members, index, onChange }: MembersPanelProps) {
+export function MembersPanel({ listId, members, index, onChange, listName, view, onViewChange }: MembersPanelProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const memberClientIds = useMemo(() => new Set(members.map(m => m.client_id).filter((id): id is string => !!id)), [members]);
@@ -92,7 +97,8 @@ export function MembersPanel({ listId, members, index, onChange }: MembersPanelP
       </div>
       {error && <div className="bg-rose-50 border border-rose-200 text-rose-700 text-sm rounded-lg px-4 py-3">{error}</div>}
       {statsError && <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-4 py-3">Could not load visit and payment details for the possible clients.</div>}
-      <MatchReview rows={rows} index={index} onResolve={resolve} onRemove={remove} busyKey={busy} candidateStats={candidateKey && !statsError ? candidateStats ?? 'loading' : undefined} />
+      <MatchReview rows={rows} index={index} onResolve={resolve} onRemove={remove} busyKey={busy} candidateStats={candidateKey && !statsError ? candidateStats ?? 'loading' : undefined}
+        view={view} onViewChange={onViewChange} onExport={visible => exportMembers(visible, index, listName)} />
     </div>
   );
 }

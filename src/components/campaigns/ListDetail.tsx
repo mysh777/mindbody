@@ -7,6 +7,8 @@ import { ResultsPanel } from './ResultsPanel';
 import { MembersPanel } from './MembersPanel';
 import { inputClass, parseCost } from './SaveListForm';
 import { SOURCE_LABELS } from './ListsOverview';
+import { CopyLinkButton } from '../CopyLinkButton';
+import { memberViewParams, parseMemberView, type MemberView } from '../../utils/memberView';
 
 interface ListDetailProps {
   listId: string;
@@ -14,17 +16,24 @@ interface ListDetailProps {
   onBack: () => void;
   onDeleted: () => void;
   onViewClient?: (clientId: string) => void;
+  urlParams: Record<string, string>;
+  onParamsChange: (params: Record<string, string>) => void;
 }
 
 type Tab = 'results' | 'members';
 
-export function ListDetail({ listId, index, onBack, onDeleted, onViewClient }: ListDetailProps) {
+export function ListDetail({ listId, index, onBack, onDeleted, onViewClient, urlParams, onParamsChange }: ListDetailProps) {
   const [list, setList] = useState<ClientList | null>(null);
   const [members, setMembers] = useState<ListMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>('results');
+  const [tab, setTabState] = useState<Tab>(urlParams.tab === 'members' ? 'members' : 'results');
+  const [memberView, setMemberViewState] = useState<MemberView>(() => parseMemberView(urlParams));
   const [editing, setEditing] = useState(false);
+  const linkParams = { list: listId, ...(tab === 'members' ? { tab } : {}), ...memberViewParams(memberView) };
+  const publish = (t: Tab, v: MemberView) => onParamsChange({ list: listId, ...(t === 'members' ? { tab: t } : {}), ...memberViewParams(v) });
+  const setTab = (t: Tab) => { setTabState(t); publish(t, memberView); };
+  const setMemberView = (v: MemberView) => { setMemberViewState(v); publish(tab, v); };
 
   useEffect(() => {
     let cancelled = false;
@@ -80,6 +89,7 @@ export function ListDetail({ listId, index, onBack, onDeleted, onViewClient }: L
             </div>
           </div>
           <div className="flex gap-2">
+            <CopyLinkButton section="campaigns" params={linkParams} />
             <button onClick={() => setEditing(true)} className="px-3 py-2 text-sm font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1.5 transition-colors">
               <Pencil className="w-4 h-4" />Edit
             </button>
@@ -103,7 +113,8 @@ export function ListDetail({ listId, index, onBack, onDeleted, onViewClient }: L
 
       {tab === 'results'
         ? <ResultsPanel list={list} members={members} onViewClient={onViewClient} />
-        : <MembersPanel listId={list.id} members={members} index={index} onChange={setMembers} />}
+        : <MembersPanel listId={list.id} members={members} index={index} onChange={setMembers}
+            listName={list.name} view={memberView} onViewChange={setMemberView} />}
 
       {editing && <EditListDialog list={list} onClose={() => setEditing(false)} onSaved={l => { setList(l); setEditing(false); }} />}
     </div>
