@@ -19,6 +19,12 @@ function networkType(): string | null {
   return conn?.effectiveType ?? null;
 }
 
+// The app uses hash routing, so the flag may sit in either the query string or the hash.
+function debugEnabled(): boolean {
+  return new URLSearchParams(window.location.search).get('debug') === '1'
+    || /[?&]debug=1(&|$)/.test(window.location.hash);
+}
+
 export function PageLoadTimer({ page }: { page: MenuSection }) {
   const opened = useRef<Set<MenuSection>>(new Set());
   const [last, setLast] = useState<Measurement | null>(null);
@@ -67,7 +73,7 @@ export function PageLoadTimer({ page }: { page: MenuSection }) {
     };
   }, [page]);
 
-  if (!last) return null;
+  if (!last || !debugEnabled()) return null;
 
   const seconds = (last.ms / 1000).toFixed(1);
   return (
