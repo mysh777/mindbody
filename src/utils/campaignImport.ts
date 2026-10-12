@@ -1,4 +1,3 @@
-import * as XLSX from 'xlsx';
 import { normalizeText, phoneKey } from './campaignMatch';
 
 export type ImportField = 'leadDate' | 'fullName' | 'firstName' | 'lastName' | 'phone' | 'email' | 'mindbodyId' | 'ignore';
@@ -43,7 +42,7 @@ const HEADER_PATTERNS: [Exclude<ImportField, 'ignore'>, RegExp][] = [
 ];
 
 export async function readImportFile(file: File): Promise<ImportSheet[]> {
-  const buf = await file.arrayBuffer();
+  const [buf, XLSX] = await Promise.all([file.arrayBuffer(), import('xlsx')]);
   const wb = /\.csv$/i.test(file.name)
     ? XLSX.read(new TextDecoder('utf-8').decode(buf), { type: 'string', cellDates: true, raw: true })
     : XLSX.read(buf, { type: 'array', cellDates: true });
@@ -88,8 +87,9 @@ export function parseLeadDate(value: unknown): string | null {
     return isoLocal(value.getFullYear(), value.getMonth() + 1, value.getDate(), value.getHours(), value.getMinutes());
   }
   if (typeof value === 'number' && value > 20000 && value < 80000) {
-    const p = XLSX.SSF.parse_date_code(value);
-    return p ? isoLocal(p.y, p.m, p.d, p.H, p.M) : null;
+    // Excel serial day: days since 1899-12-30, fraction = time of day.
+    const d = new Date(Math.floor((value - 25569) * 86400 + 1e-6) * 1000);
+    return isoLocal(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes());
   }
   const s = String(value ?? '').trim();
   if (!s) return null;

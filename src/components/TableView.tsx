@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetchAllPages';
+import { loadClientNames } from '../lib/clientNames';
 import { Download, RefreshCw, Filter, ChevronDown } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 import { PagePurpose } from './PageHeader';
@@ -105,8 +106,8 @@ export function TableView({ tableName, displayName, onNavigate, selectedId, hide
       pricing_options: {},
     };
 
-    const [clients, staff, locations, sessionTypes, categories, pricing] = await Promise.all([
-      fetchAllRows<any>('clients', 'id, first_name, last_name'),
+    const [clientNames, staff, locations, sessionTypes, categories, pricing] = await Promise.all([
+      loadClientNames(),
       fetchAllRows<any>('staff', 'id, first_name, last_name'),
       fetchAllRows<any>('locations', 'id, name'),
       fetchAllRows<any>('session_types', 'id, name'),
@@ -114,9 +115,7 @@ export function TableView({ tableName, displayName, onNavigate, selectedId, hide
       fetchAllRows<any>('pricing_options', 'id, name'),
     ]);
 
-    clients.forEach((c: any) => {
-      cache.clients[c.id] = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id;
-    });
+    cache.clients = clientNames;
     staff.forEach((s: any) => {
       cache.staff[s.id] = `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.id;
     });

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetchAllPages';
+import { loadClientNames } from '../lib/clientNames';
 import { Download, RefreshCw, ChevronDown, ChevronRight, CreditCard, Package, Filter, Building2 } from 'lucide-react';
 import { exportToExcel } from '../utils/exportExcel';
 import { getFilterPresetDates as salesGetFilterPresetDates, getMonthsForTimeline as salesGetMonthsForTimeline } from '../utils/salesFilters';
@@ -141,15 +142,13 @@ export function SalesExpandableView({ onNavigate }: SalesExpandableViewProps) {
       locations: {},
     };
 
-    const [clients, staff, locations] = await Promise.all([
-      fetchAllRows<any>('clients', 'id, first_name, last_name'),
+    const [clientNames, staff, locations] = await Promise.all([
+      loadClientNames(),
       fetchAllRows<any>('staff', 'id, first_name, last_name'),
       fetchAllRows<any>('locations', 'id, name'),
     ]);
 
-    clients.forEach((c: any) => {
-      cache.clients[c.id] = `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id;
-    });
+    cache.clients = clientNames;
     staff.forEach((s: any) => {
       cache.staff[s.id] = `${s.first_name || ''} ${s.last_name || ''}`.trim() || s.id;
     });

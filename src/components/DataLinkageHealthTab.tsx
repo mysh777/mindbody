@@ -23,7 +23,6 @@ import {
   ResponsiveContainer,
   Legend,
 } from 'recharts';
-import * as XLSX from 'xlsx';
 import { downloadWorkbook } from '../utils/exportExcel';
 import { getSessionTypeMedianPrices } from '../utils/sessionTypeMedianPrice';
 import type { MedianEntry } from '../utils/sessionTypeMedianPrice';
@@ -283,7 +282,7 @@ export function DataLinkageHealthTab() {
     }
   }, [loadData, preset, customStart, customEnd]);
 
-  const handleExport = () => {
+  const handleExport = async () => {
     const summarySheet = [
       { Metric: 'Total Visits', Value: summary.total, Percent: '100%' },
       { Metric: 'Full Chain (visit -> service -> pricing)', Value: summary.fullChain, Percent: `${pct(summary.fullChain, summary.total)}%` },
@@ -314,6 +313,7 @@ export function DataLinkageHealthTab() {
       'Status': t.sampleSize === 0 ? 'No resolved data' : `Insufficient (need 10+, have ${t.sampleSize})`,
     }));
 
+    const XLSX = await import('xlsx');
     const wb = XLSX.utils.book_new();
     const ws1 = XLSX.utils.json_to_sheet(summarySheet);
     ws1['!cols'] = [{ wch: 45 }, { wch: 15 }, { wch: 15 }];
@@ -326,7 +326,7 @@ export function DataLinkageHealthTab() {
       ws3['!cols'] = [{ wch: 40 }, { wch: 18 }, { wch: 20 }, { wch: 35 }];
       XLSX.utils.book_append_sheet(wb, ws3, 'Insufficient Types');
     }
-    downloadWorkbook(wb, 'linkage_health');
+    await downloadWorkbook(wb, 'linkage_health');
   };
 
   const chartData = useMemo(() =>

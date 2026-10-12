@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Database, BarChart3, Calendar, DollarSign, FileText, Package,
   UserCog, HeartPulse, UserCircle, Flame, TrendingUp, UserCheck, Moon, Users, LayoutDashboard,
-  RefreshCw, History, ShieldCheck, AlertTriangle, FileJson, ChevronRight, Settings, ListChecks, Megaphone,
+  RefreshCw, History, ShieldCheck, AlertTriangle, FileJson, ChevronRight, Settings, ListChecks, Megaphone, X,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { PAGES, MENU_GROUPS, type MenuSection, type MenuGroup } from '../lib/pages';
@@ -11,6 +11,8 @@ interface SidebarProps {
   activeSection: MenuSection;
   onSectionChange: (section: MenuSection) => void;
   refreshTrigger?: number;
+  mobileOpen: boolean;
+  onMobileClose: () => void;
 }
 
 const ICONS: Record<MenuSection, typeof Database> = {
@@ -51,7 +53,7 @@ const SECTIONS = Object.keys(PAGES) as MenuSection[];
 const sectionsOf = (group: MenuGroup) => SECTIONS.filter(s => PAGES[s].group === group);
 const isAdminGroup = (s: MenuSection) => PAGES[s].group === 'admin';
 
-export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: SidebarProps) {
+export function Sidebar({ activeSection, onSectionChange, refreshTrigger, mobileOpen, onMobileClose }: SidebarProps) {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [adminOpen, setAdminOpen] = useState(() => isAdminGroup(activeSection));
 
@@ -70,8 +72,8 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
   }, []);
 
   useEffect(() => {
-    loadCounts();
-  }, [loadCounts, refreshTrigger]);
+    if (adminOpen) loadCounts();
+  }, [adminOpen, loadCounts, refreshTrigger]);
 
   const formatCount = (count: number) => {
     if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
@@ -123,10 +125,30 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
   );
 
   return (
-    <div className="w-64 bg-white border-r border-slate-200 h-screen flex flex-col flex-shrink-0">
-      <div className="bg-white border-b border-slate-200 p-6">
-        <h1 className="text-2xl font-bold text-slate-900">Mindbody</h1>
-        <p className="text-sm text-slate-600 mt-1">Analytics Dashboard</p>
+    <>
+      <div
+        onClick={onMobileClose}
+        aria-hidden="true"
+        className={`fixed inset-0 z-40 bg-slate-900/40 transition-opacity duration-200 md:hidden ${mobileOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+      />
+      <div
+        className={`fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-white border-r border-slate-200 h-screen flex flex-col flex-shrink-0 shadow-xl transition-transform duration-200 ease-out md:static md:z-auto md:w-64 md:max-w-none md:translate-x-0 md:shadow-none ${
+          mobileOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+      <div className="bg-white border-b border-slate-200 p-6 flex items-start justify-between gap-2">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Mindbody</h1>
+          <p className="text-sm text-slate-600 mt-1">Analytics Dashboard</p>
+        </div>
+        <button
+          type="button"
+          onClick={onMobileClose}
+          aria-label="Close menu"
+          className="md:hidden -mr-2 rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+        >
+          <X className="w-5 h-5" />
+        </button>
       </div>
 
       <nav className="flex-1 overflow-y-auto p-4 space-y-0.5">
@@ -146,6 +168,7 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger }: Side
           </div>
         )}
       </div>
-    </div>
+      </div>
+    </>
   );
 }

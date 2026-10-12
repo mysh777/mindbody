@@ -1,43 +1,47 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '../lib/supabase';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { Sidebar } from './Sidebar';
+import { PageLoadTimer } from './PageLoadTimer';
 import type { MenuSection } from '../lib/pages';
-import { ApiIntegration, type AdminTab } from './ApiIntegration';
-import { PivotTable } from './PivotTable';
-import { TableView } from './TableView';
-import { ReferenceTables } from './ReferenceTables';
-import { SalesExpandableView } from './SalesExpandableView';
-import { SalesReportPage } from './SalesReportPage';
-import { ServiceDetailsPage } from './ServiceDetailsPage';
-import { AppointmentsView } from './AppointmentsView';
-import { ClientServicesView } from './ClientServicesView';
-import { StaffPricelist } from './StaffPricelist';
-import { DataLinkageHealthTab } from './DataLinkageHealthTab';
-import { ClientCard } from './ClientCard';
-import { ExpiringPackages } from './ExpiringPackages';
-import { MarginByService } from './MarginByService';
-import { MarginByStaff } from './MarginByStaff';
-import { SleepingClients } from './SleepingClients';
-import { ClientSegments } from './ClientSegments';
-import { Campaigns } from './Campaigns';
-import { DataIssuesPage } from './DataIssuesPage';
-import { SimplePage } from './PageHeader';
+import { PAGES } from '../lib/pages';
+import type { AdminTab } from './ApiIntegration';
 import { ErrorBoundary } from './ErrorBoundary';
 import { useHashRouter } from '../hooks/useHashRouter';
 import type { ReconciliationResult } from '../hooks/useReconciliationData';
 import { runReconciliationCheck, useAutoReconciliationCheck } from '../hooks/useReconciliationData';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Loader2, Menu } from 'lucide-react';
 import type { ReactNode } from 'react';
 
-const ADMIN_TABS: AdminTab[] = ['sync', 'sync-history', 'reconciliation', 'api-logs', 'raw-api', 'staff-rates'];
+const ApiIntegration = lazy(() => import('./ApiIntegration').then(m => ({ default: m.ApiIntegration })));
+const PivotTable = lazy(() => import('./PivotTable').then(m => ({ default: m.PivotTable })));
+const TableView = lazy(() => import('./TableView').then(m => ({ default: m.TableView })));
+const ReferenceTables = lazy(() => import('./ReferenceTables').then(m => ({ default: m.ReferenceTables })));
+const SalesExpandableView = lazy(() => import('./SalesExpandableView').then(m => ({ default: m.SalesExpandableView })));
+const SalesReportPage = lazy(() => import('./SalesReportPage').then(m => ({ default: m.SalesReportPage })));
+const ServiceDetailsPage = lazy(() => import('./ServiceDetailsPage').then(m => ({ default: m.ServiceDetailsPage })));
+const AppointmentsView = lazy(() => import('./AppointmentsView').then(m => ({ default: m.AppointmentsView })));
+const ClientServicesView = lazy(() => import('./ClientServicesView').then(m => ({ default: m.ClientServicesView })));
+const StaffPricelist = lazy(() => import('./StaffPricelist').then(m => ({ default: m.StaffPricelist })));
+const DataLinkageHealthTab = lazy(() => import('./DataLinkageHealthTab').then(m => ({ default: m.DataLinkageHealthTab })));
+const ClientCard = lazy(() => import('./ClientCard').then(m => ({ default: m.ClientCard })));
+const ExpiringPackages = lazy(() => import('./ExpiringPackages').then(m => ({ default: m.ExpiringPackages })));
+const MarginByService = lazy(() => import('./MarginByService').then(m => ({ default: m.MarginByService })));
+const MarginByStaff = lazy(() => import('./MarginByStaff').then(m => ({ default: m.MarginByStaff })));
+const SleepingClients = lazy(() => import('./SleepingClients').then(m => ({ default: m.SleepingClients })));
+const ClientSegments = lazy(() => import('./ClientSegments').then(m => ({ default: m.ClientSegments })));
+const Campaigns = lazy(() => import('./Campaigns').then(m => ({ default: m.Campaigns })));
+const DataIssuesPage = lazy(() => import('./DataIssuesPage').then(m => ({ default: m.DataIssuesPage })));
+const SimplePage = lazy(() => import('./PageHeader').then(m => ({ default: m.SimplePage })));
 
-interface Stats {
-  clients: number;
-  appointments: number;
-  sales: number;
-  revenue: number;
-  lastSync: string | null;
+function PageLoading() {
+  return (
+    <div className="flex h-full min-h-[240px] items-center justify-center text-slate-500">
+      <Loader2 className="h-5 w-5 animate-spin" />
+      <span className="ml-2 text-sm">Loading page…</span>
+    </div>
+  );
 }
+
+const ADMIN_TABS: AdminTab[] = ['sync', 'sync-history', 'reconciliation', 'api-logs', 'raw-api', 'staff-rates'];
 
 const tableSectionMap: Record<string, MenuSection> = {
   'clients': 'client-card',
@@ -57,17 +61,10 @@ const tableSectionMap: Record<string, MenuSection> = {
 
 export function Dashboard() {
   const { section: activeSection, params: urlParams, navigate, setParams } = useHashRouter();
-  const [stats, setStats] = useState<Stats>({
-    clients: 0,
-    appointments: 0,
-    sales: 0,
-    revenue: 0,
-    lastSync: null,
-  });
-  const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [reconciliationResult, setReconciliationResult] = useState<ReconciliationResult | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useAutoReconciliationCheck(useCallback((r: ReconciliationResult) => setReconciliationResult(r), []));
 
@@ -98,44 +95,10 @@ export function Dashboard() {
     setParams(params);
   }, [activeSection, setParams]);
 
-  // ── Stats ──
-
-  const loadStats = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [clientsRes, appointmentsRes, salesRes, syncRes] = await Promise.all([
-        supabase.from('clients').select('*', { count: 'exact', head: true }),
-        supabase.from('appointments').select('*', { count: 'exact', head: true }),
-        supabase.from('sales').select('total'),
-        supabase.from('sync_logs').select('*').order('started_at', { ascending: false }).limit(1).maybeSingle(),
-      ]);
-
-      const salesData = salesRes.data || [];
-      const totalRevenue = salesData.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0);
-
-      setStats({
-        clients: clientsRes.count || 0,
-        appointments: appointmentsRes.count || 0,
-        sales: salesData.length,
-        revenue: totalRevenue,
-        lastSync: syncRes.data?.completed_at || null,
-      });
-    } catch (error) {
-      console.error('Error loading stats:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   const handleSyncComplete = useCallback(() => {
-    loadStats();
     setRefreshTrigger(prev => prev + 1);
     runReconciliationCheck().then(r => setReconciliationResult(r)).catch(() => {});
-  }, [loadStats]);
-
-  useEffect(() => {
-    loadStats();
-  }, [loadStats]);
+  }, []);
 
   useEffect(() => {
     setSelectedId(null);
@@ -154,6 +117,7 @@ export function Dashboard() {
   };
 
   const handleSectionChange = useCallback((section: MenuSection) => {
+    setMobileMenuOpen(false);
     navigate(section);
   }, [navigate]);
 
@@ -175,7 +139,7 @@ export function Dashboard() {
 
   const page = (id: MenuSection, node: ReactNode) => show(id) && (
     <div key={`${id}-${remounts[id] || 0}`} className={sc(id)} data-section-active={activeSection === id ? 'true' : undefined}>
-      <ErrorBoundary scope={id}>{node}</ErrorBoundary>
+      <ErrorBoundary scope={id}><Suspense fallback={<PageLoading />}>{node}</Suspense></ErrorBoundary>
     </div>
   );
 
@@ -185,7 +149,21 @@ export function Dashboard() {
         activeSection={activeSection}
         onSectionChange={handleSectionChange}
         refreshTrigger={refreshTrigger}
+        mobileOpen={mobileMenuOpen}
+        onMobileClose={() => setMobileMenuOpen(false)}
       />
+      <div className="flex-1 min-w-0 flex flex-col">
+      <header className="md:hidden flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-3">
+        <button
+          type="button"
+          onClick={() => setMobileMenuOpen(true)}
+          aria-label="Open menu"
+          className="-ml-2 rounded-lg p-2 text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-900"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+        <span className="truncate text-sm font-semibold text-slate-900">{PAGES[activeSection].label}</span>
+      </header>
       <div className="flex-1 relative overflow-hidden">
         {reconciliationResult && !reconciliationResult.allOk && (
           <div className="absolute top-0 left-0 right-0 z-50 flex items-center gap-2 px-4 py-2 bg-amber-50 border-b border-amber-200 text-amber-800 text-sm shadow-sm">
@@ -226,6 +204,8 @@ export function Dashboard() {
         {page('sale-items', <TableView tableName="sale_items" displayName="Sale Items" section="sale-items" onNavigate={handleNavigate} selectedId={selectedId} />)}
         {page('pivot-reports', <SimplePage section="pivot-reports"><PivotTable /></SimplePage>)}
       </div>
+      </div>
+      <PageLoadTimer page={activeSection} />
     </div>
   );
 }

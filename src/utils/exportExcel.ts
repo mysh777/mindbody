@@ -1,4 +1,6 @@
-import * as XLSX from 'xlsx';
+import type { WorkBook } from 'xlsx';
+
+const loadXlsx = () => import('xlsx');
 
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -30,7 +32,8 @@ function autoColWidths(data: any[]): { wch: number }[] {
   });
 }
 
-function buildBlob(workbook: XLSX.WorkBook): Blob {
+async function buildBlob(workbook: WorkBook): Promise<Blob> {
+  const XLSX = await loadXlsx();
   const buf = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
   return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
@@ -39,23 +42,24 @@ function stamp(base: string): string {
   return `${base}_${new Date().toISOString().split('T')[0]}.xlsx`;
 }
 
-export function downloadWorkbook(workbook: XLSX.WorkBook, filename: string) {
-  triggerDownload(buildBlob(workbook), stamp(filename));
+export async function downloadWorkbook(workbook: WorkBook, filename: string) {
+  triggerDownload(await buildBlob(workbook), stamp(filename));
 }
 
-export function exportToExcel(data: any[], filename: string) {
+export async function exportToExcel(data: any[], filename: string) {
   if (data.length === 0) {
     alert('No data to export');
     return;
   }
 
+  const XLSX = await loadXlsx();
   const worksheet = XLSX.utils.json_to_sheet(data);
   worksheet['!cols'] = autoColWidths(data);
 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Data');
 
-  downloadWorkbook(workbook, filename);
+  await downloadWorkbook(workbook, filename);
 }
 
 function csvCell(value: unknown): string {
@@ -78,7 +82,8 @@ interface SheetDef {
   data: any[];
 }
 
-export function exportMultiSheetExcel(sheets: SheetDef[], filename: string) {
+export async function exportMultiSheetExcel(sheets: SheetDef[], filename: string) {
+  const XLSX = await loadXlsx();
   const workbook = XLSX.utils.book_new();
 
   for (const sheet of sheets) {
@@ -95,5 +100,5 @@ export function exportMultiSheetExcel(sheets: SheetDef[], filename: string) {
     return;
   }
 
-  downloadWorkbook(workbook, filename);
+  await downloadWorkbook(workbook, filename);
 }
