@@ -40,7 +40,7 @@ const SETTINGS_COLUMNS: Record<keyof SegmentSettings, string> = {
 };
 
 const OUR_DATA_START = '2025-01-01';
-const SYSTEM_CLIENT_ID = '1';
+export const SYSTEM_CLIENT_ID = '1';
 
 export type SettingsSource = 'saved' | 'noTable' | 'noRow';
 
@@ -262,6 +262,17 @@ function visitDays(visits: PaidVisit[]): string[] {
   return [...new Set(visits.map(v => v.date))];
 }
 
+export type NewClientCheck = 'new' | 'mindbodyHistory' | 'noPaidVisit';
+
+// A client is new from their first paid visit ever, unless Mindbody shows visits before our data starts.
+export function newClientCheck(data: SegmentData, clientId: string): { check: NewClientCheck; firstVisit: PaidVisit | null } {
+  const firstVisit = data.visitsByClient.get(clientId)?.[0] ?? null;
+  if (!firstVisit) return { check: 'noPaidVisit', firstVisit: null };
+  const client = data.clients.get(clientId);
+  if (client?.mindbodyFirstVisit && client.mindbodyFirstVisit < OUR_DATA_START) return { check: 'mindbodyHistory', firstVisit };
+  return { check: 'new', firstVisit };
+}
+
 export function computeSegments(data: SegmentData, settings: SegmentSettings, endMonth: string, location: string): SegmentResult {
   const months = monthsEnding(endMonth, settings.periodMonths);
   const periodStart = `${months[0]}-01`;
@@ -285,11 +296,11 @@ export function computeSegments(data: SegmentData, settings: SegmentSettings, en
     const client = data.clients.get(clientId);
     if (!client) continue;
     const days = visitDays(visits);
-    const firstVisit = visits[0];
+    const { check, firstVisit } = newClientCheck(data, clientId);
 
-    const firstMonth = firstVisit.date.slice(0, 7);
-    if (monthSet.has(firstMonth) && atLocation(firstVisit)) {
-      if (client.mindbodyFirstVisit && client.mindbodyFirstVisit < OUR_DATA_START) {
+    const firstMonth = firstVisit!.date.slice(0, 7);
+    if (monthSet.has(firstMonth) && atLocation(firstVisit!)) {
+      if (check === 'mindbodyHistory') {
         excludedByMindbodyHistory++;
       } else {
         newIds.add(clientId);

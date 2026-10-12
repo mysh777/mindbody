@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Database, BarChart3, Calendar, DollarSign, FileText, Package,
   UserCog, HeartPulse, UserCircle, Flame, TrendingUp, UserCheck, Moon, Users, LayoutDashboard,
-  RefreshCw, History, ShieldCheck, AlertTriangle, FileJson, ChevronRight, Settings, ListChecks,
+  RefreshCw, History, ShieldCheck, AlertTriangle, FileJson, ChevronRight, Settings, ListChecks, Megaphone,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { PAGES, MENU_GROUPS, type MenuSection, type MenuGroup } from '../lib/pages';
@@ -19,6 +19,7 @@ const ICONS: Record<MenuSection, typeof Database> = {
   'expiring-packages': Flame,
   'sleeping-clients': Moon,
   'client-segments': Users,
+  'campaigns': Megaphone,
   'margin-by-service': TrendingUp,
   'margin-by-staff': UserCheck,
   'references': Database,

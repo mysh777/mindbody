@@ -16,6 +16,7 @@ interface ClientSegmentsProps {
   onViewClient?: (clientId: string) => void;
   urlParams?: Record<string, string>;
   onParamsChange?: (params: Record<string, string>) => void;
+  onOpenCampaignList?: (listId: string) => void;
 }
 
 const STAGES = {
@@ -43,7 +44,7 @@ function previousMonth(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-export function ClientSegments({ onViewClient, urlParams, onParamsChange }: ClientSegmentsProps) {
+export function ClientSegments({ onViewClient, urlParams, onParamsChange, onOpenCampaignList }: ClientSegmentsProps) {
   const [endMonth, setEndMonth] = useState(urlParams?.end && /^\d{4}-\d{2}$/.test(urlParams.end) ? urlParams.end : previousMonth());
   const [location, setLocation] = useState(urlParams?.loc || 'all');
   const [list, setList] = useState(urlParams?.list || '');
@@ -391,8 +392,10 @@ export function ClientSegments({ onViewClient, urlParams, onParamsChange }: Clie
                 entries={activeList.entries}
                 clients={data.clients}
                 exportName={list.replace(':', '_')}
+                listName={location === 'all' ? activeList.title : `${activeList.title} · ${locationLabel}`}
                 onClose={() => updateParams({ list: '' })}
                 onViewClient={onViewClient}
+                onOpenCampaignList={onOpenCampaignList}
               />
             )}
 

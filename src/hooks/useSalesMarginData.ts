@@ -715,12 +715,18 @@ export type MoneyBreakdown = MoneyReceived & { byType: Record<string, number> };
 
 async function summarizeSalesMoney(
   salesData: { id: string; total: number | null }[],
-): Promise<{ money: MoneyReceived; byType: Record<string, number>; itemsBySale: Record<string, string[]> }> {
+): Promise<{ money: MoneyReceived; byType: Record<string, number>; itemsBySale: Record<string, string[]>; bySale: Map<string, MoneyReceived> }> {
   const saleIds = salesData.map(s => s.id);
   const saleTotals = new Map(salesData.map(s => [s.id, Number(s.total) || 0]));
   const itemsBySale: Record<string, string[]> = {};
   const money: MoneyReceived = { cashIn: 0, cashInGiftCards: 0, cashInDeposits: 0, paidFromAccount: 0, paidByGiftCard: 0 };
   const byType: Record<string, number> = {};
+  const bySale = new Map<string, MoneyReceived>();
+  const saleMoney = (saleId: string) => {
+    let m = bySale.get(saleId);
+    if (!m) { m = { cashIn: 0, cashInGiftCards: 0, cashInDeposits: 0, paidFromAccount: 0, paidByGiftCard: 0 }; bySale.set(saleId, m); }
+    return m;
+  };
   for (const batch of chunkIds(saleIds)) {
     const payments = await fetchAllPages<{ sale_id: string; type: string | null; amount: number | null }>((from, to) => supabase
       .from('payments')
@@ -733,10 +739,11 @@ async function summarizeSalesMoney(
       const amt = Number(p.amount) || 0;
       const type = p.type || 'Unknown';
       byType[type] = (byType[type] || 0) + amt;
-      if (p.type === 'Account') money.paidFromAccount += amt;
-      else if (p.type === 'Prepaid Gift Card') money.paidByGiftCard += amt;
+      if (p.type === 'Account') { money.paidFromAccount += amt; saleMoney(p.sale_id).paidFromAccount += amt; }
+      else if (p.type === 'Prepaid Gift Card') { money.paidByGiftCard += amt; saleMoney(p.sale_id).paidByGiftCard += amt; }
       else if (!NON_CASH_PAYMENT_TYPES.includes(p.type || '')) {
         money.cashIn += amt;
+        saleMoney(p.sale_id).cashIn += amt;
         moneyBySale.set(p.sale_id, (moneyBySale.get(p.sale_id) || 0) + amt);
       }
     });
@@ -753,11 +760,22 @@ async function summarizeSalesMoney(
       if (saleTotal === 0) return;
       // Mixed-payment sales: attribute only the real-money share of the item
       const moneyShare = (Number(item.total_amount) || 0) * (moneyBySale.get(item.sale_id) || 0) / saleTotal;
-      if (isPaymentOnAccount(item.item_id, item.description) || isPaymentOnAccount(null, item.item_name)) money.cashInDeposits += moneyShare;
-      else if (isGiftCard(item.description) || isGiftCard(item.item_name)) money.cashInGiftCards += moneyShare;
+      if (isPaymentOnAccount(item.item_id, item.description) || isPaymentOnAccount(null, item.item_name)) {
+        money.cashInDeposits += moneyShare;
+        saleMoney(item.sale_id).cashInDeposits += moneyShare;
+      } else if (isGiftCard(item.description) || isGiftCard(item.item_name)) {
+        money.cashInGiftCards += moneyShare;
+        saleMoney(item.sale_id).cashInGiftCards += moneyShare;
+      }
     });
   }
-  return { money, byType, itemsBySale };
+  return { money, byType, itemsBySale, bySale };
+}
+
+// Money received per sale with the same rules as computeMoneyReceived, for any chosen set of sales.
+export async function computeMoneyReceivedBySale(salesData: { id: string; total: number | null }[]): Promise<Map<string, MoneyReceived>> {
+  if (salesData.length === 0) return new Map();
+  return (await summarizeSalesMoney(salesData)).bySale;
 }
 
 export async function computeMoneyReceived(dateRange: DateRange, locationId: string): Promise<MoneyReceived> {

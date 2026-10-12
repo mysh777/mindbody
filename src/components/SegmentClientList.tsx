@@ -2,6 +2,7 @@ import { ChevronRight, Download, FileSpreadsheet, Mail, MessageSquare, Star, X }
 import { formatApptDate } from '../utils/formatDateTime';
 import { exportToCsv, exportToExcel } from '../utils/exportExcel';
 import { buildMetaRows, type SegmentClient } from '../utils/clientSegments';
+import { SaveAsListButton } from './campaigns/SaveAsListButton';
 
 export interface ListEntry {
   clientId: string;
@@ -15,8 +16,10 @@ interface SegmentClientListProps {
   entries: ListEntry[];
   clients: Map<string, SegmentClient>;
   exportName: string;
+  listName: string;
   onClose: () => void;
   onViewClient?: (clientId: string) => void;
+  onOpenCampaignList?: (listId: string) => void;
 }
 
 // Meta Ads audience export is switched off; set to true to bring back the button, ad captions and consent column.
@@ -24,7 +27,7 @@ export const SHOW_META_EXPORT = false;
 
 const META_COLUMNS = ['email', 'phone', 'fn', 'ln', 'country'];
 
-export function SegmentClientList({ title, scenario, entries, clients, exportName, onClose, onViewClient }: SegmentClientListProps) {
+export function SegmentClientList({ title, scenario, entries, clients, exportName, listName, onClose, onViewClient, onOpenCampaignList }: SegmentClientListProps) {
   const metaRows = SHOW_META_EXPORT ? buildMetaRows(entries.map(e => e.clientId), clients) : [];
 
   const handleExportExcel = () => {
@@ -56,6 +59,7 @@ export function SegmentClientList({ title, scenario, entries, clients, exportNam
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <SaveAsListButton key={listName} clientIds={entries.map(e => e.clientId)} defaultName={listName} onOpenList={onOpenCampaignList} />
           <button
             onClick={handleExportExcel}
             disabled={entries.length === 0}

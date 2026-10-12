@@ -4,6 +4,7 @@ export type MenuSection =
   | 'expiring-packages'
   | 'sleeping-clients'
   | 'client-segments'
+  | 'campaigns'
   | 'margin-by-service'
   | 'margin-by-staff'
   | 'references'
@@ -40,6 +41,7 @@ export const PAGES: Record<MenuSection, PageInfo> = {
   'expiring-packages': { group: 'clients', label: 'Expiring Packages', purpose: 'Whose package is about to run out — who to remind about renewal.' },
   'sleeping-clients': { group: 'clients', label: 'Sleeping Clients', purpose: 'Clients who have not come for a long time — who is worth winning back.' },
   'client-segments': { group: 'clients', label: 'Client Segments', purpose: 'Regular, one-off and new clients — what the client base is made of.' },
+  'campaigns': { group: 'clients', label: 'Campaigns', purpose: 'Upload a list of clients (e.g. ad campaign leads) and see how much money and how many visits they brought.' },
 
   'margin-by-service': { group: 'finance', label: 'Margin by Service', purpose: 'What each service and pricing option brings in after staff pay.' },
   'margin-by-staff': { group: 'finance', label: 'Margin by Staff', purpose: 'How much revenue each staff member brings in and how much we pay them.' },

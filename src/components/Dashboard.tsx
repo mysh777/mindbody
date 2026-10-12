@@ -19,6 +19,7 @@ import { MarginByService } from './MarginByService';
 import { MarginByStaff } from './MarginByStaff';
 import { SleepingClients } from './SleepingClients';
 import { ClientSegments } from './ClientSegments';
+import { Campaigns } from './Campaigns';
 import { DataIssuesPage } from './DataIssuesPage';
 import { SimplePage } from './PageHeader';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -206,7 +207,8 @@ export function Dashboard() {
         {page('client-card', <ClientCard urlParams={urlParams} onParamsChange={handleParamsChange} />)}
         {page('expiring-packages', <ExpiringPackages onViewClient={handleViewClient} urlParams={urlParams} onParamsChange={handleParamsChange} />)}
         {page('sleeping-clients', <SleepingClients onViewClient={handleViewClient} urlParams={urlParams} onParamsChange={handleParamsChange} />)}
-        {page('client-segments', <ClientSegments onViewClient={handleViewClient} urlParams={urlParams} onParamsChange={handleParamsChange} />)}
+        {page('client-segments', <ClientSegments onViewClient={handleViewClient} urlParams={urlParams} onParamsChange={handleParamsChange} onOpenCampaignList={id => navigate('campaigns', { list: id })} />)}
+        {page('campaigns', <Campaigns active={activeSection === 'campaigns'} onViewClient={handleViewClient} urlParams={urlParams} onParamsChange={handleParamsChange} />)}
 
         {page('margin-by-service', <MarginByService urlParams={urlParams} onParamsChange={handleParamsChange} />)}
         {page('margin-by-staff', <MarginByStaff urlParams={urlParams} onParamsChange={handleParamsChange} />)}
