@@ -474,6 +474,48 @@ async function findProvisionalMonths(cache: SalesCache, periods: string[]): Prom
   return { months, errors };
 }
 
+// A mismatch is provisional only when our sales grew past the reference by no more than the month's unspent deposits.
+function withinUnspent(growth: number, unspent: number | undefined): boolean {
+  return unspent != null && growth > 0.005 && growth <= unspent + 0.005;
+}
+
+export function markProvisional(
+  checks: { references: RefCheck[]; cases: CaseCheck[]; baselineDrifts: BaselineDrift[]; storedTotals: StoredTotalsCheck[] },
+  months: ProvisionalMonth[],
+): void {
+  const unspent = new Map(months.map(m => [m.period, m.unspentDeposits]));
+  const { references, cases, baselineDrifts, storedTotals } = checks;
+
+  for (const r of references) {
+    r.provisional = !r.ok && !r.error && r.metric === 'sales_total' && r.diff != null && withinUnspent(r.diff, unspent.get(r.period));
+  }
+  // A count cannot be compared to euros, so it follows the same month's sales total.
+  for (const r of references) {
+    if (r.ok || r.error || r.metric !== 'sales_qty' || r.diff == null || r.diff <= 0) continue;
+    const total = references.find(t => t.metric === 'sales_total' && t.period === r.period && t.location === r.location);
+    r.provisional = !!total && (total.ok || total.provisional) && unspent.has(r.period);
+  }
+  for (const c of cases) {
+    const growth = c.actualValue != null && c.expectedValue != null ? c.actualValue - c.expectedValue : null;
+    c.provisional = !c.ok && !c.error && growth != null && withinUnspent(growth, unspent.get(c.period));
+  }
+  const driftsByPeriod = new Map<string, BaselineDrift[]>();
+  for (const d of baselineDrifts) {
+    d.provisional = false;
+    if (d.report !== 'sales_by_tariff') continue;
+    if (!driftsByPeriod.has(d.period)) driftsByPeriod.set(d.period, []);
+    driftsByPeriod.get(d.period)!.push(d);
+  }
+  for (const [period, drifts] of driftsByPeriod) {
+    const growths = drifts.map(d => d.currentValue - d.baselineValue);
+    const ok = growths.every(g => g >= -0.005) && withinUnspent(growths.reduce((a, b) => a + b, 0), unspent.get(period));
+    for (const d of drifts) d.provisional = ok;
+  }
+  for (const s of storedTotals) {
+    s.provisional = !s.ok && s.stored != null && DEPOSIT_SENSITIVE_STORED_METRICS.has(s.metric) && withinUnspent(s.recomputed - s.stored, unspent.get(s.period));
+  }
+}
+
 function pct(n: number, d: number) {
   return d === 0 ? 0 : Math.round((n / d) * 1000) / 10;
 }
@@ -661,11 +703,7 @@ export async function runReconciliationCheck(): Promise<ReconciliationResult> {
   ];
   const { months: provisionalMonths, errors: pvErrors } = await withTimeoutRetry(cache, () => findProvisionalMonths(cache, salesPeriods));
   allErrors.push(...pvErrors);
-  const provisionalSet = new Set(provisionalMonths.map(m => m.period));
-  for (const r of references) r.provisional = !r.ok && !r.error && DEPOSIT_SENSITIVE_REF_METRICS.has(r.metric) && provisionalSet.has(r.period);
-  for (const c of cases) c.provisional = !c.ok && !c.error && provisionalSet.has(c.period);
-  for (const d of baselineDrifts) d.provisional = d.report === 'sales_by_tariff' && provisionalSet.has(d.period);
-  for (const s of storedTotals) s.provisional = !s.ok && DEPOSIT_SENSITIVE_STORED_METRICS.has(s.metric) && provisionalSet.has(s.period);
+  markProvisional({ references, cases, baselineDrifts, storedTotals }, provisionalMonths);
   const provisionalMismatches =
     references.filter(r => r.provisional).length + cases.filter(c => c.provisional).length +
     baselineDrifts.filter(d => d.provisional).length + storedTotals.filter(s => s.provisional).length;

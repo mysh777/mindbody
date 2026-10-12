@@ -379,7 +379,7 @@ function ProvisionalMonthsPanel({ months }: { months: ProvisionalMonth[] }) {
         <Hourglass className="w-4 h-4 text-amber-600 shrink-0" /> Provisional months
       </div>
       <p className="text-xs text-amber-800 mt-1 pl-6">
-        Clients still hold unspent balance top-ups made in these months. Their sales by service keep growing as the balance is spent, so a mismatch here is not an error.
+        Clients still hold unspent balance top-ups made in these months. Their sales by service keep growing as the balance is spent, so a mismatch where our sales are higher than Mindbody by no more than this amount is shown in yellow. A larger mismatch, or one in the other direction, is a real error.
       </p>
       <div className="flex flex-wrap gap-2 mt-2 pl-6">
         {months.map(m => (
