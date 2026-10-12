@@ -23,10 +23,20 @@ export interface IndexedClient {
   name: string;
   email: string;
   phone: string;
+  phones: string[];
   phoneKeys: string[];
   fullNorm: string;
   reversedNorm: string;
   firstNorm: string;
+}
+
+export function contactMatch(c: IndexedClient | undefined, phone: string, email: string): { phone: boolean; email: boolean } {
+  const key = phoneKey(phone);
+  const mail = email.trim().toLowerCase();
+  return {
+    phone: !!c && !!key && c.phoneKeys.includes(key),
+    email: !!c && !!mail && c.email === mail,
+  };
 }
 
 export interface ClientIndex {
@@ -75,6 +85,7 @@ export async function loadClientIndex(excludedIds: string[]): Promise<ClientInde
       name: `${first} ${last}`.trim() || `Client ${r.id}`,
       email: (r.email || '').trim().toLowerCase(),
       phone: phones.find(p => p && p.trim()) || '',
+      phones: [...new Set(phones.map(p => (p || '').trim()).filter(Boolean))],
       phoneKeys: [...new Set(phones.map(phoneKey).filter((k): k is string => !!k))],
       fullNorm: normalizeText(`${first} ${last}`),
       reversedNorm: normalizeText(`${last} ${first}`),
