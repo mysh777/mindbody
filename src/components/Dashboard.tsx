@@ -192,7 +192,7 @@ export function Dashboard() {
             <AlertTriangle className="w-4 h-4 shrink-0" />
             <span className="font-medium">Reconciliation issues detected</span>
             <span className="text-amber-600">
-              — {reconciliationResult.references.filter(r => !r.ok).length + reconciliationResult.cases.filter(c => !c.ok).length + reconciliationResult.baselineDrifts.length + reconciliationResult.unknownPaymentTypes.length} check(s) failed
+              — {reconciliationResult.references.filter(r => !r.ok && !r.provisional).length + reconciliationResult.cases.filter(c => !c.ok && !c.provisional).length + reconciliationResult.baselineDrifts.filter(d => !d.provisional).length + reconciliationResult.unknownPaymentTypes.length} check(s) failed
             </span>
             <button
               onClick={() => navigate('reconciliation')}

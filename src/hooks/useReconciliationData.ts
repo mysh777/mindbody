@@ -18,6 +18,7 @@ export interface RefCheck {
   diff: number | null;
   ok: boolean;
   error: string | null;
+  provisional: boolean;
 }
 
 export interface BaselineDrift {
@@ -29,6 +30,12 @@ export interface BaselineDrift {
   baselineValue: number;
   currentQty: number;
   currentValue: number;
+  provisional: boolean;
+}
+
+export interface ProvisionalMonth {
+  period: string;
+  unspentDeposits: number;
 }
 
 export interface CaseCheck {
@@ -46,6 +53,7 @@ export interface CaseCheck {
   note: string | null;
   error: string | null;
   clientDetails: ClientTariffDetail[];
+  provisional: boolean;
 }
 
 export interface UnknownPaymentType {
@@ -72,6 +80,7 @@ export interface StoredTotalsCheck {
   stored: number | null;
   recomputed: number;
   ok: boolean;
+  provisional: boolean;
 }
 
 const STORED_TOTALS_METRICS: (keyof MonthMetrics)[] = ['salesByService', 'moneyReceived', 'revenueEarned', 'staffCost', 'visits', 'newClients'];
@@ -86,6 +95,8 @@ export interface ReconciliationResult {
   unknownPaymentTypes: UnknownPaymentType[];
   tariffQuality: TariffQualityCheck[];
   storedTotals: StoredTotalsCheck[];
+  provisionalMonths: ProvisionalMonth[];
+  provisionalMismatches: number;
   allOk: boolean;
   checkedAt: string;
   baselineExists: boolean;
@@ -199,6 +210,7 @@ async function evaluateReferences(refs: ReferenceRow[], cache: SalesCache): Prom
       diff,
       ok: checkError == null && diff != null && Math.abs(diff) < 0.01,
       error: checkError,
+      provisional: false,
     });
   }
   return { checks, errors };
@@ -231,6 +243,7 @@ async function checkBaseline(cache: SalesCache, periods: string[]): Promise<{ dr
         drifts.push({
           period: b.period, report: b.report, location: b.location, key: b.key,
           baselineQty: b.qty ?? 0, baselineValue: bVal, currentQty: curQty, currentValue: curVal,
+          provisional: false,
         });
       }
     } else if (b.report === 'staff_cost') {
@@ -242,6 +255,7 @@ async function checkBaseline(cache: SalesCache, periods: string[]): Promise<{ dr
           drifts.push({
             period: b.period, report: b.report, location: b.location, key: b.key,
             baselineQty: b.qty ?? 0, baselineValue: bVal, currentQty: 0, currentValue: actual,
+            provisional: false,
           });
         }
       } catch (err: any) {
@@ -256,6 +270,7 @@ async function checkBaseline(cache: SalesCache, periods: string[]): Promise<{ dr
           drifts.push({
             period: b.period, report: b.report, location: b.location, key: b.key,
             baselineQty: 0, baselineValue: bVal, currentQty: 0, currentValue: curVal,
+            provisional: false,
           });
         }
       } catch (err: any) {
@@ -273,6 +288,7 @@ async function checkBaseline(cache: SalesCache, periods: string[]): Promise<{ dr
           drifts.push({
             period: b.period, report: b.report, location: b.location, key: b.key,
             baselineQty: b.qty ?? 0, baselineValue: bVal, currentQty: curQty, currentValue: curVal,
+            provisional: false,
           });
         }
       } catch (err: any) {
@@ -345,6 +361,7 @@ async function checkCases(cache: SalesCache): Promise<{ checks: CaseCheck[]; err
       note: c.note,
       error: checkError,
       clientDetails,
+      provisional: false,
     });
   }
   return { checks, errors };
@@ -431,6 +448,7 @@ async function checkStoredTotals(periods: string[]): Promise<{ checks: StoredTot
           period: row.month, location: row.location, metric,
           stored: value, recomputed,
           ok: value !== null && Math.abs(value - recomputed) < 0.01,
+          provisional: false,
         });
       }
     }
@@ -438,6 +456,22 @@ async function checkStoredTotals(periods: string[]): Promise<{ checks: StoredTot
   } catch (err: any) {
     return { checks: [], errors: [`Stored Overview totals check failed: ${err?.message || err}`] };
   }
+}
+
+const DEPOSIT_SENSITIVE_REF_METRICS = new Set(['sales_total', 'sales_qty']);
+const DEPOSIT_SENSITIVE_STORED_METRICS = new Set<string>(['salesByService']);
+
+// Sales by service credits a deposit's month only as the balance is spent, so a month with unspent deposits keeps changing.
+async function findProvisionalMonths(cache: SalesCache, periods: string[]): Promise<{ months: ProvisionalMonth[]; errors: string[] }> {
+  const months: ProvisionalMonth[] = [];
+  const errors: string[] = [];
+  for (const period of [...new Set(periods)].sort()) {
+    const entry = await getSalesForPeriod(cache, period, 'all');
+    if (!entry.ok) { errors.push(entry.error); continue; }
+    const unspent = Math.round(entry.result.unallocatedAmount * 100) / 100;
+    if (unspent >= 0.01) months.push({ period, unspentDeposits: unspent });
+  }
+  return { months, errors };
 }
 
 function pct(n: number, d: number) {
@@ -619,22 +653,39 @@ export async function runReconciliationCheck(): Promise<ReconciliationResult> {
   const { checks: storedTotals, errors: stErrors } = await withTimeoutRetry(cache, () => checkStoredTotals(refPeriods));
   allErrors.push(...stErrors);
 
+  const salesPeriods = [
+    ...references.filter(r => DEPOSIT_SENSITIVE_REF_METRICS.has(r.metric)).map(r => r.period),
+    ...cases.map(c => c.period),
+    ...baselineDrifts.filter(d => d.report === 'sales_by_tariff').map(d => d.period),
+    ...storedTotals.filter(s => !s.ok && DEPOSIT_SENSITIVE_STORED_METRICS.has(s.metric)).map(s => s.period),
+  ];
+  const { months: provisionalMonths, errors: pvErrors } = await withTimeoutRetry(cache, () => findProvisionalMonths(cache, salesPeriods));
+  allErrors.push(...pvErrors);
+  const provisionalSet = new Set(provisionalMonths.map(m => m.period));
+  for (const r of references) r.provisional = !r.ok && !r.error && DEPOSIT_SENSITIVE_REF_METRICS.has(r.metric) && provisionalSet.has(r.period);
+  for (const c of cases) c.provisional = !c.ok && !c.error && provisionalSet.has(c.period);
+  for (const d of baselineDrifts) d.provisional = d.report === 'sales_by_tariff' && provisionalSet.has(d.period);
+  for (const s of storedTotals) s.provisional = !s.ok && DEPOSIT_SENSITIVE_STORED_METRICS.has(s.metric) && provisionalSet.has(s.period);
+  const provisionalMismatches =
+    references.filter(r => r.provisional).length + cases.filter(c => c.provisional).length +
+    baselineDrifts.filter(d => d.provisional).length + storedTotals.filter(s => s.provisional).length;
+
   const hasErrors = allErrors.length > 0;
   const allOk =
     !hasErrors &&
-    references.every(r => r.ok) &&
-    baselineDrifts.length === 0 &&
-    cases.every(c => c.ok) &&
+    references.every(r => r.ok || r.provisional) &&
+    baselineDrifts.every(d => d.provisional) &&
+    cases.every(c => c.ok || c.provisional) &&
     unknownPaymentTypes.length === 0 &&
     tariffQuality.every(t => t.ok) &&
-    storedTotals.every(s => s.ok);
+    storedTotals.every(s => s.ok || s.provisional);
 
   // An incomplete run says nothing about the data, so the last real verdict is kept.
   if (!hasErrors) await persistCheckStatus(allOk);
 
   return {
     references, baselineDrifts, cases, unknownPaymentTypes, tariffQuality, storedTotals,
-    allOk, checkedAt: new Date().toISOString(), baselineExists,
+    provisionalMonths, provisionalMismatches, allOk, checkedAt: new Date().toISOString(), baselineExists,
     errors: [...new Set(allErrors)],
   };
 }

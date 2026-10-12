@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, Fragment } from 'react';
 import {
   useReconciliationStatus,
   saveReconciliationBaseline,
@@ -8,6 +8,7 @@ import {
   type UnknownPaymentType,
   type TariffQualityCheck,
   type StoredTotalsCheck,
+  type ProvisionalMonth,
   TARIFF_QUALITY_THRESHOLD_PCT,
   type ReconciliationResult,
 } from '../hooks/useReconciliationData';
@@ -25,6 +26,7 @@ import {
   ChevronDown,
   ChevronRight,
   Info,
+  Hourglass,
 } from 'lucide-react';
 
 const fmt = (n: number) =>
@@ -33,7 +35,40 @@ const fmt = (n: number) =>
 const fmtNum = (n: number) =>
   new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 
-function StatusBadge({ ok, label, error }: { ok: boolean; label?: string; error?: string | null }) {
+const PROVISIONAL_NOTE = 'deposits from this month are still being spent — re-export Mindbody to confirm';
+
+type UnspentByPeriod = Map<string, number>;
+
+function PeriodCell({ period, unspent, className }: { period: string; unspent: UnspentByPeriod; className: string }) {
+  const amount = unspent.get(period);
+  return (
+    <td className={className}>
+      <div className="font-mono text-slate-700">{period}</div>
+      {amount != null && (
+        <div className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-medium text-amber-700" title={`Unspent deposits made in ${period}: ${fmt(amount)}`}>
+          <Hourglass className="w-3 h-3" /> Provisional · {fmt(amount)}
+        </div>
+      )}
+    </td>
+  );
+}
+
+function ProvisionalNoteRow({ colSpan }: { colSpan: number }) {
+  return (
+    <tr className="border-b border-amber-100 bg-amber-50/60">
+      <td colSpan={colSpan} className="px-4 py-1.5 text-xs text-amber-800">
+        <Hourglass className="w-3 h-3 inline mr-1 -mt-0.5" />Mismatch is provisional: {PROVISIONAL_NOTE}.
+      </td>
+    </tr>
+  );
+}
+
+function StatusBadge({ ok, label, error, provisional }: { ok: boolean; label?: string; error?: string | null; provisional?: boolean }) {
+  if (provisional) return (
+    <span title={PROVISIONAL_NOTE} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
+      <Hourglass className="w-3 h-3" /> Provisional
+    </span>
+  );
   if (error) return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
       <AlertTriangle className="w-3 h-3" /> Error
@@ -50,8 +85,8 @@ function StatusBadge({ ok, label, error }: { ok: boolean; label?: string; error?
   );
 }
 
-function SectionHeader({ title, count, failCount, expanded, onToggle, extra }: {
-  title: string; count: number; failCount: number;
+function SectionHeader({ title, count, failCount, provisionalCount = 0, expanded, onToggle, extra }: {
+  title: string; count: number; failCount: number; provisionalCount?: number;
   expanded: boolean; onToggle: () => void; extra?: React.ReactNode;
 }) {
   return (
@@ -64,16 +99,19 @@ function SectionHeader({ title, count, failCount, expanded, onToggle, extra }: {
       </div>
       <div className="flex items-center gap-2">
         {extra}
+        {provisionalCount > 0 && (
+          <span className="text-xs font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">{provisionalCount} provisional</span>
+        )}
         {count > 0 && (failCount > 0
           ? <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-0.5 rounded-full border border-red-200">{failCount} failed</span>
-          : <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">All pass</span>
+          : provisionalCount === 0 && <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">All pass</span>
         )}
       </div>
     </button>
   );
 }
 
-function ReferencesTable({ checks }: { checks: RefCheck[] }) {
+function ReferencesTable({ checks, unspent }: { checks: RefCheck[]; unspent: UnspentByPeriod }) {
   if (checks.length === 0) return <p className="text-sm text-slate-500 px-4 py-2">No reference values configured.</p>;
   const metricLabels: Record<string, string> = { sales_total: 'Sales total', sales_qty: 'Sales qty', staff_cost: 'Staff cost', money_received: 'Money received' };
   return (
@@ -92,18 +130,21 @@ function ReferencesTable({ checks }: { checks: RefCheck[] }) {
         </thead>
         <tbody>
           {checks.map((c, i) => (
-            <tr key={i} className={`border-b border-slate-100 ${c.error ? 'bg-amber-50/50' : !c.ok ? 'bg-red-50/50' : ''}`}>
-              <td className="px-4 py-2 font-mono text-slate-700">{c.period}</td>
+            <Fragment key={i}>
+            <tr className={`border-b border-slate-100 ${c.error || c.provisional ? 'bg-amber-50/50' : !c.ok ? 'bg-red-50/50' : ''}`}>
+              <PeriodCell period={c.period} unspent={unspent} className="px-4 py-2" />
               <td className="px-4 py-2 text-slate-700">{metricLabels[c.metric] || c.metric}</td>
               <td className="px-4 py-2 text-slate-600">{c.location === 'all' ? 'All' : `#${c.location}`}</td>
               <td className="px-4 py-2 text-right font-mono text-slate-700">{fmtNum(c.expected)}</td>
               <td className="px-4 py-2 text-right font-mono text-slate-700">{c.error ? <span className="text-amber-600 text-xs">Error</span> : c.actual != null ? fmtNum(c.actual) : '--'}</td>
-              <td className={`px-4 py-2 text-right font-mono ${c.diff && Math.abs(c.diff) > 0.01 ? 'text-red-600 font-semibold' : 'text-slate-500'}`}>
+              <td className={`px-4 py-2 text-right font-mono ${c.diff && Math.abs(c.diff) > 0.01 ? (c.provisional ? 'text-amber-700 font-semibold' : 'text-red-600 font-semibold') : 'text-slate-500'}`}>
                 {c.error ? '--' : c.diff != null ? (c.diff >= 0 ? '+' : '') + fmtNum(c.diff) : '--'}
               </td>
-              <td className="px-4 py-2 text-center"><StatusBadge ok={c.ok} error={c.error} /></td>
+              <td className="px-4 py-2 text-center"><StatusBadge ok={c.ok} error={c.error} provisional={c.provisional} /></td>
               {c.error && <td colSpan={7} className="px-4 py-1 text-xs text-amber-700 bg-amber-50">{c.error}</td>}
             </tr>
+            {c.provisional && <ProvisionalNoteRow colSpan={7} />}
+            </Fragment>
           ))}
         </tbody>
       </table>
@@ -111,7 +152,7 @@ function ReferencesTable({ checks }: { checks: RefCheck[] }) {
   );
 }
 
-function BaselineDriftsTable({ drifts }: { drifts: BaselineDrift[] }) {
+function BaselineDriftsTable({ drifts, unspent }: { drifts: BaselineDrift[]; unspent: UnspentByPeriod }) {
   if (drifts.length === 0) return <p className="text-sm text-slate-500 px-4 py-2">No baseline drifts detected.</p>;
   return (
     <div className="overflow-x-auto">
@@ -123,17 +164,22 @@ function BaselineDriftsTable({ drifts }: { drifts: BaselineDrift[] }) {
             <th className="text-left px-4 py-2 font-medium text-slate-600">Key</th>
             <th className="text-right px-4 py-2 font-medium text-slate-600">Baseline</th>
             <th className="text-right px-4 py-2 font-medium text-slate-600">Current</th>
+            <th className="text-center px-4 py-2 font-medium text-slate-600">Status</th>
           </tr>
         </thead>
         <tbody>
           {drifts.map((d, i) => (
-            <tr key={i} className="border-b border-slate-100 bg-amber-50/50">
-              <td className="px-4 py-2 font-mono text-slate-700">{d.period}</td>
+            <Fragment key={i}>
+            <tr className={`border-b border-slate-100 ${d.provisional ? 'bg-amber-50/50' : 'bg-red-50/50'}`}>
+              <PeriodCell period={d.period} unspent={unspent} className="px-4 py-2" />
               <td className="px-4 py-2 text-slate-600">{d.report}</td>
               <td className="px-4 py-2 text-slate-700 max-w-[300px] truncate">{d.key}</td>
               <td className="px-4 py-2 text-right font-mono text-slate-600">{fmt(d.baselineValue)}{d.baselineQty ? ` (x${d.baselineQty})` : ''}</td>
-              <td className="px-4 py-2 text-right font-mono text-amber-700 font-semibold">{fmt(d.currentValue)}{d.currentQty ? ` (x${d.currentQty})` : ''}</td>
+              <td className={`px-4 py-2 text-right font-mono font-semibold ${d.provisional ? 'text-amber-700' : 'text-red-600'}`}>{fmt(d.currentValue)}{d.currentQty ? ` (x${d.currentQty})` : ''}</td>
+              <td className="px-4 py-2 text-center"><StatusBadge ok={false} label="Drift" provisional={d.provisional} /></td>
             </tr>
+            {d.provisional && <ProvisionalNoteRow colSpan={6} />}
+            </Fragment>
           ))}
         </tbody>
       </table>
@@ -141,7 +187,7 @@ function BaselineDriftsTable({ drifts }: { drifts: BaselineDrift[] }) {
   );
 }
 
-function CasesTable({ cases }: { cases: CaseCheck[] }) {
+function CasesTable({ cases, unspent }: { cases: CaseCheck[]; unspent: UnspentByPeriod }) {
   const [expandedCase, setExpandedCase] = useState<number | null>(null);
   if (cases.length === 0) return <p className="text-sm text-slate-500 px-4 py-2">No test cases configured.</p>;
   return (
@@ -160,9 +206,9 @@ function CasesTable({ cases }: { cases: CaseCheck[] }) {
         </thead>
         <tbody>
           {cases.map((c) => (
-            <>
-              <tr key={c.caseNumber}
-                className={`border-b border-slate-100 ${c.error ? 'bg-amber-50/50' : !c.ok ? 'bg-red-50/50' : ''} ${c.clientDetails.length > 0 ? 'cursor-pointer hover:bg-slate-50' : ''}`}
+            <Fragment key={c.caseNumber}>
+              <tr
+                className={`border-b border-slate-100 ${c.error || c.provisional ? 'bg-amber-50/50' : !c.ok ? 'bg-red-50/50' : ''} ${c.clientDetails.length > 0 ? 'cursor-pointer hover:bg-slate-50' : ''}`}
                 onClick={() => c.clientDetails.length > 0 && setExpandedCase(expandedCase === c.caseNumber ? null : c.caseNumber)}>
                 <td className="px-3 py-2 text-center text-slate-500 font-mono">
                   {c.clientDetails.length > 0 && (
@@ -176,16 +222,17 @@ function CasesTable({ cases }: { cases: CaseCheck[] }) {
                   <div className="truncate">{c.description}</div>
                   {c.note && <div className="text-xs text-slate-400 truncate mt-0.5">{c.note}</div>}
                 </td>
-                <td className="px-3 py-2 font-mono text-slate-600">{c.period}</td>
+                <PeriodCell period={c.period} unspent={unspent} className="px-3 py-2" />
                 <td className="px-3 py-2 text-right font-mono text-slate-600">{c.expectedValue != null ? fmtNum(c.expectedValue) : '--'}{c.tolerance != null ? ` \u00b1${fmtNum(c.tolerance)}` : ''}</td>
                 <td className="px-3 py-2 text-right font-mono text-slate-700">{c.error ? <span className="text-amber-600 text-xs">Error</span> : c.actualValue != null ? fmtNum(c.actualValue) : '--'}</td>
                 <td className="px-3 py-2 text-right font-mono text-slate-600">
                   {c.expectedQty != null ? c.expectedQty : '--'} / {c.actualQty != null ? c.actualQty : '--'}
                 </td>
-                <td className="px-3 py-2 text-center"><StatusBadge ok={c.ok} error={c.error} /></td>
+                <td className="px-3 py-2 text-center"><StatusBadge ok={c.ok} error={c.error} provisional={c.provisional} /></td>
               </tr>
+              {c.provisional && <ProvisionalNoteRow colSpan={7} />}
               {expandedCase === c.caseNumber && c.clientDetails.length > 0 && (
-                <tr key={`${c.caseNumber}-detail`}>
+                <tr>
                   <td colSpan={7} className="px-6 py-2 bg-slate-50">
                     <div className="text-xs text-slate-600 mb-1 font-medium">Client rows for {c.clientId}:</div>
                     <table className="w-full text-xs">
@@ -211,7 +258,7 @@ function CasesTable({ cases }: { cases: CaseCheck[] }) {
                   </td>
                 </tr>
               )}
-            </>
+            </Fragment>
           ))}
         </tbody>
       </table>
@@ -287,7 +334,7 @@ function TariffQualityTable({ checks }: { checks: TariffQualityCheck[] }) {
 
 const LOCATION_LABELS: Record<string, string> = { all: 'All', '1': 'Center', '3': 'Alfa' };
 
-function StoredTotalsTable({ checks }: { checks: StoredTotalsCheck[] }) {
+function StoredTotalsTable({ checks, unspent }: { checks: StoredTotalsCheck[]; unspent: UnspentByPeriod }) {
   if (checks.length === 0) return <p className="text-sm text-slate-400 px-4 py-3">No reference months to check.</p>;
   return (
     <div className="overflow-x-auto">
@@ -307,17 +354,41 @@ function StoredTotalsTable({ checks }: { checks: StoredTotalsCheck[] }) {
         </thead>
         <tbody>
           {checks.map(c => (
-            <tr key={`${c.period}|${c.location}|${c.metric}`} className={`border-b border-slate-100 ${!c.ok ? 'bg-red-50/50' : ''}`}>
-              <td className="px-4 py-2 font-mono text-slate-700">{c.period}</td>
+            <Fragment key={`${c.period}|${c.location}|${c.metric}`}>
+            <tr className={`border-b border-slate-100 ${c.provisional ? 'bg-amber-50/50' : !c.ok ? 'bg-red-50/50' : ''}`}>
+              <PeriodCell period={c.period} unspent={unspent} className="px-4 py-2" />
               <td className="px-4 py-2 text-slate-700">{LOCATION_LABELS[c.location] || c.location}</td>
               <td className="px-4 py-2 text-slate-700">{c.metric}</td>
               <td className="px-4 py-2 text-right font-mono text-slate-700">{c.stored === null ? 'not saved' : c.stored.toFixed(2)}</td>
               <td className="px-4 py-2 text-right font-mono text-slate-700">{c.recomputed.toFixed(2)}</td>
-              <td className="px-4 py-2 text-center"><StatusBadge ok={c.ok} error={null} /></td>
+              <td className="px-4 py-2 text-center"><StatusBadge ok={c.ok} error={null} provisional={c.provisional} /></td>
             </tr>
+            {c.provisional && <ProvisionalNoteRow colSpan={6} />}
+            </Fragment>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function ProvisionalMonthsPanel({ months }: { months: ProvisionalMonth[] }) {
+  return (
+    <div className="px-4 py-3 bg-amber-50/70 border border-amber-200 rounded-lg">
+      <div className="flex items-center gap-2 text-sm font-medium text-amber-900">
+        <Hourglass className="w-4 h-4 text-amber-600 shrink-0" /> Provisional months
+      </div>
+      <p className="text-xs text-amber-800 mt-1 pl-6">
+        Clients still hold unspent balance top-ups made in these months. Their sales by service keep growing as the balance is spent, so a mismatch here is not an error.
+      </p>
+      <div className="flex flex-wrap gap-2 mt-2 pl-6">
+        {months.map(m => (
+          <span key={m.period} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-amber-200 text-xs">
+            <span className="font-mono text-slate-700">{m.period}</span>
+            <span className="text-amber-700 font-medium">{fmt(m.unspentDeposits)} unspent</span>
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -404,7 +475,7 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
   }, [check, onResultChange]);
 
   const handleSaveBaseline = useCallback(async () => {
-    if (!result || !result.references.every(r => r.ok)) return;
+    if (!result || !result.allOk) return;
     setSavingBaseline(true);
     setBaselineMsg(null);
     try {
@@ -418,10 +489,12 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
     }
   }, [result, handleCheck]);
 
-  const refFails = result ? result.references.filter(r => !r.ok).length : 0;
-  const caseFails = result ? result.cases.filter(c => !c.ok).length : 0;
+  const refFails = result ? result.references.filter(r => !r.ok && !r.provisional).length : 0;
+  const caseFails = result ? result.cases.filter(c => !c.ok && !c.provisional).length : 0;
+  const driftFails = result ? result.baselineDrifts.filter(d => !d.provisional).length : 0;
   const tariffFails = result ? result.tariffQuality.filter(t => !t.ok) : [];
-  const storedFails = result ? result.storedTotals.filter(s => !s.ok).length : 0;
+  const storedFails = result ? result.storedTotals.filter(s => !s.ok && !s.provisional).length : 0;
+  const unspent: UnspentByPeriod = new Map((result?.provisionalMonths ?? []).map(m => [m.period, m.unspentDeposits]));
 
   return (
     <div className="space-y-6">
@@ -482,7 +555,14 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
 
       {result && (
         <>
-          {result.allOk ? (
+          {result.allOk && result.provisionalMismatches > 0 ? (
+            <div className="flex items-center gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-lg">
+              <Hourglass className="w-5 h-5 text-amber-600 shrink-0" />
+              <span className="text-sm font-medium text-amber-800">
+                No confirmed issues. {result.provisionalMismatches} mismatch(es) in provisional months: {PROVISIONAL_NOTE}.
+              </span>
+            </div>
+          ) : result.allOk ? (
             <div className="flex items-center gap-3 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-lg">
               <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
               <span className="text-sm font-medium text-emerald-800">
@@ -500,10 +580,13 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
             <div className="flex items-center gap-3 px-4 py-3 bg-red-50 border border-red-200 rounded-lg">
               <AlertTriangle className="w-5 h-5 text-red-600 shrink-0" />
               <span className="text-sm font-medium text-red-800">
-                {refFails + caseFails + result.baselineDrifts.length + result.unknownPaymentTypes.length + tariffFails.length + storedFails} issue(s) detected.
+                {refFails + caseFails + driftFails + result.unknownPaymentTypes.length + tariffFails.length + storedFails} issue(s) detected.
+                {result.provisionalMismatches > 0 && ` Plus ${result.provisionalMismatches} provisional mismatch(es), shown in yellow.`}
               </span>
             </div>
           )}
+
+          {result.provisionalMonths.length > 0 && <ProvisionalMonthsPanel months={result.provisionalMonths} />}
 
           {tariffFails.some(t => !t.error) && (
             <div className="flex items-start gap-3 px-4 py-3 bg-amber-50 border border-amber-300 rounded-lg">
@@ -528,10 +611,10 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
 
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
             <SectionHeader title="Mindbody Reference Values" count={result.references.length}
-              failCount={refFails} expanded={expanded.references} onToggle={() => toggle('references')} />
+              failCount={refFails} provisionalCount={result.references.filter(r => r.provisional).length} expanded={expanded.references} onToggle={() => toggle('references')} />
             {expanded.references && (
               <div className="border-t border-slate-100">
-                <ReferencesTable checks={result.references} />
+                <ReferencesTable checks={result.references} unspent={unspent} />
                 <div className="px-4 py-2 border-t border-slate-100">
                   <button onClick={() => setShowAddRef(!showAddRef)}
                     className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1">
@@ -545,7 +628,7 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
 
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
             <SectionHeader title="Baseline Drifts" count={result.baselineDrifts.length}
-              failCount={result.baselineDrifts.length} expanded={expanded.baseline}
+              failCount={driftFails} provisionalCount={result.baselineDrifts.length - driftFails} expanded={expanded.baseline}
               onToggle={() => toggle('baseline')}
               extra={!result.baselineExists ? (
                 <span className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
@@ -556,17 +639,18 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
               <div className="border-t border-slate-100">
                 {!result.baselineExists
                   ? <p className="text-sm text-amber-600 px-4 py-3">No baseline snapshot has been saved yet. Run checks and click "Save as Baseline" when all references pass.</p>
-                  : <BaselineDriftsTable drifts={result.baselineDrifts} />}
+                  : <BaselineDriftsTable drifts={result.baselineDrifts} unspent={unspent} />}
               </div>
             )}
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
             <SectionHeader title="Test Cases" count={result.cases.length} failCount={caseFails}
+              provisionalCount={result.cases.filter(c => c.provisional).length}
               expanded={expanded.cases} onToggle={() => toggle('cases')} />
             {expanded.cases && (
               <div className="border-t border-slate-100">
-                <CasesTable cases={result.cases} />
+                <CasesTable cases={result.cases} unspent={unspent} />
               </div>
             )}
           </div>
@@ -595,11 +679,11 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
 
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
             <SectionHeader title="Saved Overview Totals = Recalculation" count={result.storedTotals.length}
-              failCount={storedFails} expanded={expanded.stored}
+              failCount={storedFails} provisionalCount={result.storedTotals.filter(s => s.provisional).length} expanded={expanded.stored}
               onToggle={() => toggle('stored')} />
             {expanded.stored && (
               <div className="border-t border-slate-100">
-                <StoredTotalsTable checks={result.storedTotals} />
+                <StoredTotalsTable checks={result.storedTotals} unspent={unspent} />
               </div>
             )}
           </div>
