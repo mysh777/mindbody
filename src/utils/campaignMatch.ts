@@ -30,13 +30,24 @@ export interface IndexedClient {
   firstNorm: string;
 }
 
-export function contactMatch(c: IndexedClient | undefined, phone: string, email: string): { phone: boolean; email: boolean } {
+export type CandidateMatchField = 'both' | 'phone' | 'email' | 'name';
+
+const FIELD_RANK: Record<CandidateMatchField, number> = { both: 0, phone: 1, email: 2, name: 3 };
+
+export function rankCandidates(ids: string[], index: ClientIndex, phone: string, email: string) {
   const key = phoneKey(phone);
   const mail = email.trim().toLowerCase();
-  return {
-    phone: !!c && !!key && c.phoneKeys.includes(key),
-    email: !!c && !!mail && c.email === mail,
-  };
+  const candidates = ids.map((id, i) => {
+    const c = index.clients.get(id);
+    const byPhone = !!c && !!key && c.phoneKeys.includes(key);
+    const byEmail = !!c && !!mail && c.email === mail;
+    const field: CandidateMatchField = byPhone && byEmail ? 'both' : byPhone ? 'phone' : byEmail ? 'email' : 'name';
+    return { id, i, field };
+  }).sort((a, b) => FIELD_RANK[a.field] - FIELD_RANK[b.field] || a.i - b.i);
+  const phoneIds = candidates.filter(c => c.field === 'phone' || c.field === 'both').map(c => c.id);
+  const emailIds = candidates.filter(c => c.field === 'email' || c.field === 'both').map(c => c.id);
+  const sharedContacts = phoneIds.some(p => emailIds.some(e => e !== p));
+  return { candidates, sharedContacts };
 }
 
 export interface ClientIndex {

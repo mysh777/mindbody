@@ -19,7 +19,7 @@ export function MembersPanel({ listId, members, index, onChange }: MembersPanelP
   const memberClientIds = useMemo(() => new Set(members.map(m => m.client_id).filter((id): id is string => !!id)), [members]);
   const [candidateStats, setCandidateStats] = useState<Map<string, CandidateStats> | null>(null);
   const [statsError, setStatsError] = useState(false);
-  const candidateKey = useMemo(() => [...new Set(members.filter(m => m.match_status === 'ambiguous').flatMap(m => m.candidate_ids))].sort().join(','), [members]);
+  const candidateKey = useMemo(() => [...new Set(members.filter(m => m.match_status === 'ambiguous' || m.candidate_ids.length > 1).flatMap(m => m.candidate_ids))].sort().join(','), [members]);
 
   useEffect(() => {
     if (!candidateKey) return;

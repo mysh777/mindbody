@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Check, AlertCircle, HelpCircle, UserX, SkipForward, Search, RotateCcw, Trash2, Phone, Mail } from 'lucide-react';
-import { contactMatch, type ClientIndex, type MatchMethod, type MatchStatus } from '../../utils/campaignMatch';
+import { Check, AlertCircle, HelpCircle, UserX, SkipForward, Search, RotateCcw, Trash2, Phone, Mail, ChevronDown } from 'lucide-react';
+import { rankCandidates, type CandidateMatchField, type ClientIndex, type MatchMethod, type MatchStatus } from '../../utils/campaignMatch';
 import type { CandidateStats } from '../../utils/campaignResults';
 import { formatEur } from '../../utils/ownerFormat';
 import { ClientLabel, ClientPicker } from './ClientPicker';
@@ -143,10 +143,11 @@ interface RowDecisionProps {
 }
 
 function RowDecision({ row, index, searching, onSearch, onResolve, candidateStats }: RowDecisionProps) {
+  const [showCandidates, setShowCandidates] = useState(false);
   if (searching) return <ClientPicker index={index} autoFocus onPick={c => onResolve(c.id)} onClose={() => onSearch(false)} />;
 
   if (row.status === 'matched' && row.clientId) {
-    return (
+    const matched = (
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-2 min-w-0">
           <Check className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
@@ -156,11 +157,20 @@ function RowDecision({ row, index, searching, onSearch, onResolve, candidateStat
           </div>
         </div>
         <div className="flex gap-1 shrink-0">
+          {row.candidateIds.length > 1 && (
+            <SmallButton onClick={() => setShowCandidates(s => !s)} icon={ChevronDown}>{`${showCandidates ? 'Hide' : 'Show'} ${row.candidateIds.length} candidates`}</SmallButton>
+          )}
           <SmallButton onClick={() => onSearch(true)} icon={Search}>Change</SmallButton>
           <SmallButton onClick={() => onResolve(null)} icon={SkipForward}>Skip</SmallButton>
         </div>
       </div>
     );
+    return showCandidates ? (
+      <div className="space-y-2">
+        {matched}
+        <CandidateList row={row} index={index} onResolve={onResolve} candidateStats={candidateStats} />
+      </div>
+    ) : matched;
   }
 
   if (row.status === 'skipped') {
@@ -181,33 +191,7 @@ function RowDecision({ row, index, searching, onSearch, onResolve, candidateStat
           </span>
         ) : <span className="text-rose-700 flex items-center gap-1"><UserX className="w-3.5 h-3.5" />Not found</span>}
       </div>
-      {row.candidateIds.length > 0 && (
-        <>
-          <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-700 flex flex-wrap gap-x-4 gap-y-1">
-            <span className="font-medium text-slate-500">From the lead:</span>
-            <ContactLine icon={Phone} value={row.phone} />
-            <ContactLine icon={Mail} value={row.email} />
-          </div>
-          <div className="grid sm:grid-cols-2 2xl:grid-cols-3 gap-1.5 max-h-80 overflow-auto pr-1">
-            {sortCandidates(row, index).map(({ id, hit }) => {
-              const c = index.clients.get(id);
-              const strong = hit.phone || hit.email;
-              return (
-                <button key={id} onClick={() => onResolve(id)}
-                  className={`text-left px-2.5 py-1.5 border rounded-lg transition-colors min-w-0 ${strong ? 'border-emerald-300 bg-emerald-50/60 hover:bg-emerald-50' : 'border-slate-200 hover:border-teal-400 hover:bg-teal-50'}`}>
-                  <div className="text-xs font-medium text-slate-800 flex items-center justify-between gap-2">
-                    <span className="truncate">{c?.name || `Client ${id}`}</span>
-                    {strong && <span className="shrink-0 text-[10px] font-semibold text-emerald-700 uppercase tracking-wide">Same {[hit.phone && 'phone', hit.email && 'email'].filter(Boolean).join(' + ')}</span>}
-                  </div>
-                  <ContactLine icon={Phone} value={c?.phones.join(', ') ?? ''} highlight={hit.phone} small />
-                  <ContactLine icon={Mail} value={c?.email ?? ''} highlight={hit.email} small />
-                  {candidateStats && <CandidateFacts stats={candidateStats === 'loading' ? 'loading' : candidateStats.get(id)} />}
-                </button>
-              );
-            })}
-          </div>
-        </>
-      )}
+      {row.candidateIds.length > 0 && <CandidateList row={row} index={index} onResolve={onResolve} candidateStats={candidateStats} />}
       <div className="flex gap-1">
         <SmallButton onClick={() => onSearch(true)} icon={Search}>Search a client</SmallButton>
         <SmallButton onClick={() => onResolve(null)} icon={SkipForward}>Skip</SmallButton>
@@ -216,10 +200,57 @@ function RowDecision({ row, index, searching, onSearch, onResolve, candidateStat
   );
 }
 
-function sortCandidates(row: ReviewRow, index: ClientIndex) {
-  const scored = row.candidateIds.map((id, i) => ({ id, i, hit: contactMatch(index.clients.get(id), row.phone, row.email) }));
-  const score = (h: { phone: boolean; email: boolean }) => Number(h.phone) + Number(h.email);
-  return scored.sort((a, b) => score(b.hit) - score(a.hit) || a.i - b.i);
+interface CandidateListProps {
+  row: ReviewRow;
+  index: ClientIndex;
+  onResolve: (clientId: string | null) => void;
+  candidateStats?: CandidateStatsProp;
+}
+
+const MATCH_LABELS: Record<CandidateMatchField, string> = {
+  both: 'matched by phone and email',
+  phone: 'matched by phone',
+  email: 'matched by email',
+  name: 'matched by name only',
+};
+
+function CandidateList({ row, index, onResolve, candidateStats }: CandidateListProps) {
+  const { candidates, sharedContacts } = rankCandidates(row.candidateIds, index, row.phone, row.email);
+  return (
+    <>
+      <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-700 flex flex-wrap gap-x-4 gap-y-1">
+        <span className="font-medium text-slate-500">From the lead:</span>
+        <ContactLine icon={Phone} value={row.phone} />
+        <ContactLine icon={Mail} value={row.email} />
+      </div>
+      {sharedContacts && (
+        <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 flex items-center gap-1.5">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          One candidate has the lead's phone and another has the lead's email: different people may share contact details, check.
+        </div>
+      )}
+      <div className="grid sm:grid-cols-2 2xl:grid-cols-3 gap-1.5 max-h-80 overflow-auto pr-1">
+        {candidates.map(({ id, field }) => {
+          const c = index.clients.get(id);
+          const strong = field !== 'name';
+          const chosen = row.status === 'matched' && row.clientId === id;
+          return (
+            <button key={id} onClick={() => onResolve(id)}
+              className={`text-left px-2.5 py-1.5 border rounded-lg transition-colors min-w-0 ${chosen ? 'ring-2 ring-teal-500 ' : ''}${strong ? 'border-emerald-300 bg-emerald-50/60 hover:bg-emerald-50' : 'border-slate-200 hover:border-teal-400 hover:bg-teal-50'}`}>
+              <div className="text-xs font-medium text-slate-800 flex items-center justify-between gap-2">
+                <span className="truncate">{c?.name || `Client ${id}`}</span>
+                {chosen && <span className="shrink-0 text-[10px] font-semibold text-teal-700 uppercase tracking-wide">Chosen</span>}
+              </div>
+              <div className={`text-[11px] font-medium mt-0.5 ${strong ? 'text-emerald-700' : 'text-slate-500'}`}>{MATCH_LABELS[field]}</div>
+              <ContactLine icon={Phone} value={c?.phones.join(', ') ?? ''} highlight={field === 'phone' || field === 'both'} small />
+              <ContactLine icon={Mail} value={c?.email ?? ''} highlight={field === 'email' || field === 'both'} small />
+              {candidateStats && <CandidateFacts stats={candidateStats === 'loading' ? 'loading' : candidateStats.get(id)} />}
+            </button>
+          );
+        })}
+      </div>
+    </>
+  );
 }
 
 function ContactLine({ icon: Icon, value, highlight, small }: { icon: typeof Phone; value: string; highlight?: boolean; small?: boolean }) {
