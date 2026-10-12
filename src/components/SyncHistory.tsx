@@ -3,6 +3,7 @@ import { fetchAllRows } from '../lib/fetchAllPages';
 import { errorMessage } from '../utils/errorMessage';
 import { PagePurpose } from './PageHeader';
 import { LoadErrorBanner } from './LoadErrorBanner';
+import { MindbodyUsagePanel } from './MindbodyUsagePanel';
 import { SyncRunRow, STATUS_COLORS, StatusBadge, formatDate, formatTime, runStatusLabel } from './SyncRunRow';
 import { groupSyncRuns, friendlyType, runTitle, RUN_KIND_LABELS } from '../utils/syncRuns';
 import type { RunKind, RunStep, SyncRunGroup } from '../utils/syncRuns';
@@ -27,7 +28,7 @@ type SortDir = 'asc' | 'desc';
 const PAGE_SIZE = 25;
 
 const STATUS_OPTIONS = ['completed', 'warning', 'partial', 'error', 'failed', 'timeout', 'started'] as const;
-const RUN_KIND_OPTIONS: RunKind[] = ['nightly', 'quick', 'full', 'manual', 'time_grouped'];
+const RUN_KIND_OPTIONS: RunKind[] = ['nightly', 'weekly', 'monthly', 'quick', 'full', 'manual', 'time_grouped'];
 const STATUS_RANK: Record<SyncRunGroup['status'], number> = { error: 0, warning: 1, running: 2, completed: 3 };
 
 export function SyncHistory() {
@@ -201,6 +202,8 @@ export function SyncHistory() {
 
       <div className="p-6 space-y-5">
         {loadError && <LoadErrorBanner title="Could not load sync history" message={loadError} onRetry={loadAll} />}
+
+        <MindbodyUsagePanel />
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {[

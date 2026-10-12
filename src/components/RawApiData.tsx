@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { FileJson, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react';
+import { PrivateLogNotice } from './ApiLogs';
 
 interface RawData {
   id: string;
@@ -18,6 +19,7 @@ export function RawApiData() {
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [locked, setLocked] = useState(false);
 
   useEffect(() => {
     loadRawData();
@@ -31,6 +33,7 @@ export function RawApiData() {
         .select('*')
         .order('created_at', { ascending: false });
 
+      setLocked(!!error);
       if (error) throw error;
       setData(rawData || []);
     } catch (error) {
@@ -75,6 +78,8 @@ export function RawApiData() {
   const filteredData = selectedType
     ? data.filter(d => d.endpoint_type === selectedType)
     : data;
+
+  if (locked) return <PrivateLogNotice title="Raw API Responses" />;
 
   if (loading) {
     return (

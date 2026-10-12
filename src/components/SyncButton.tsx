@@ -1,4 +1,6 @@
 import { useState, useRef } from 'react';
+import { SyncCostConfirm } from './SyncCostConfirm';
+import { estimateCalls } from '../utils/mindbodyUsage';
 import { RefreshCw, Users, Calendar, DollarSign, MapPin, UserCog, Package, Database, Grid3x3, Tag, ShoppingCart, Link2, FileText, ChevronDown, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 
 interface SyncButtonProps {
@@ -34,14 +36,20 @@ const QUICK_SYNC_STEPS: QuickSyncStep[] = [
   { label: 'Pricing Options (1/3)', payload: { syncType: 'pricing_options', pageOffset: 0, pageLimit: 100 } },
   { label: 'Pricing Options (2/3)', payload: { syncType: 'pricing_options', pageOffset: 100, pageLimit: 100 } },
   { label: 'Pricing Options (3/3)', payload: { syncType: 'pricing_options', pageOffset: 200, pageLimit: 100 } },
-  { label: 'Price-Service Links', payload: { syncType: 'build_pricing_links' } },
-  { label: 'Clients', payload: { syncType: 'clients' } },
-  { label: 'Appointments', payload: { syncType: 'appointments', month: new Date().getMonth() + 1 } },
-  { label: 'Sales', payload: { syncType: 'sales', month: new Date().getMonth() + 1 } },
-  { label: 'Client Services', payload: { syncType: 'client_services', month: new Date().getMonth() + 1 } },
+  { label: 'Price-Service Links (new)', payload: { syncType: 'build_pricing_links', scope: 'new' } },
+  { label: 'Clients (changed)', payload: { syncType: 'clients', scope: 'changed' } },
+  { label: 'Appointments (-7 / +30 days)', payload: { syncType: 'appointments', scope: 'recent' } },
+  { label: 'Sales (last 7 days)', payload: { syncType: 'sales', scope: 'recent' } },
+  { label: 'Client Services (changed)', payload: { syncType: 'client_services', scope: 'changed' } },
   { label: 'Retail Products', payload: { syncType: 'retail_products' } },
   { label: 'Staff Schedule', payload: { syncType: 'staff_schedule' } },
 ];
+
+const QUICK_SYNC_CALLS = QUICK_SYNC_STEPS.reduce(
+  (sum, s) => sum + estimateCalls(String(s.payload.syncType), undefined, s.payload.scope as string | undefined),
+  0,
+);
+const CONFIRM_FROM_CALLS = 20;
 
 const currentYear = new Date().getFullYear();
 const currentMonth = new Date().getMonth() + 1;
@@ -108,6 +116,19 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
   const [quickRunning, setQuickRunning] = useState(false);
   const [quickSummary, setQuickSummary] = useState<string | null>(null);
   const abortRef = useRef(false);
+  const [pendingSync, setPendingSync] = useState<{ title: string; calls: number; start: () => void } | null>(null);
+
+  const requestSync = (syncType: SyncType, year?: number, month?: number) => {
+    const calls = syncType === 'quick' ? QUICK_SYNC_CALLS : estimateCalls(syncType, month);
+    const start = () => handleSync(syncType, year, month);
+    if (calls < CONFIRM_FROM_CALLS) {
+      start();
+      return;
+    }
+    const period = year ? ` ${year}${month ? `-${String(month).padStart(2, '0')}` : ' (whole year)'}` : '';
+    const name = syncType === 'quick' ? 'Quick Sync' : syncType === 'all' ? 'Full Sync' : `${syncType.replace(/_/g, ' ')}${period}`;
+    setPendingSync({ title: `Start ${name}?`, calls, start });
+  };
 
   const handleYearChange = (syncType: string, year: number) => {
     setSelectedYears(prev => ({ ...prev, [syncType]: year }));
@@ -276,7 +297,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
       <div className="flex flex-col gap-3">
         <div className="flex gap-3">
           <button
-            onClick={() => handleSync('quick')}
+            onClick={() => requestSync('quick')}
             disabled={quickRunning}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium shadow-sm transition-all duration-200 ${
               quickRunning
@@ -289,7 +310,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
           </button>
 
           <button
-            onClick={() => handleSync('all')}
+            onClick={() => requestSync('all')}
             disabled={syncStatus['all'] === 'syncing' || quickRunning}
             className={getButtonClass('all', 'slate')}
           >
@@ -387,7 +408,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
               </div>
               <p className="text-xs text-gray-500">{description}</p>
               <button
-                onClick={() => handleSync(type, selectedYears[type], selectedMonths[type])}
+                onClick={() => requestSync(type, selectedYears[type], selectedMonths[type])}
                 disabled={syncStatus[type] === 'syncing' || quickRunning}
                 className={`${getButtonClass(type, color)} w-full justify-center`}
               >
@@ -407,7 +428,7 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
           {syncButtons.map(({ type, label, icon: Icon, color }) => (
             <button
               key={type}
-              onClick={() => handleSync(type)}
+              onClick={() => requestSync(type)}
               disabled={syncStatus[type] === 'syncing' || quickRunning}
               className={getButtonClass(type, color)}
             >
@@ -417,6 +438,15 @@ export function SyncButton({ onSyncComplete }: SyncButtonProps) {
           ))}
         </div>
       </div>
+
+      {pendingSync && (
+        <SyncCostConfirm
+          title={pendingSync.title}
+          estimatedCalls={pendingSync.calls}
+          onCancel={() => setPendingSync(null)}
+          onConfirm={() => { const { start } = pendingSync; setPendingSync(null); start(); }}
+        />
+      )}
 
       {error && (
         <div className="text-sm text-red-600 bg-red-50 px-4 py-2 rounded-lg border border-red-200">

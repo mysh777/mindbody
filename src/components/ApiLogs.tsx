@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { RefreshCw, ChevronDown, ChevronUp, Clock, AlertCircle, CheckCircle } from 'lucide-react';
+import { RefreshCw, ChevronDown, ChevronUp, Clock, AlertCircle, CheckCircle, Lock } from 'lucide-react';
 
 interface ApiLog {
   id: string;
@@ -18,6 +18,7 @@ export function ApiLogs() {
   const [logs, setLogs] = useState<ApiLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
+  const [locked, setLocked] = useState(false);
 
   const fetchLogs = async () => {
     setLoading(true);
@@ -27,6 +28,7 @@ export function ApiLogs() {
       .order('created_at', { ascending: false })
       .limit(50);
 
+    setLocked(!!error);
     if (!error && data) {
       setLogs(data);
     }
@@ -38,6 +40,8 @@ export function ApiLogs() {
     const interval = setInterval(fetchLogs, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  if (locked) return <PrivateLogNotice title="API Request Logs" />;
 
   const toggleExpand = (logId: string) => {
     setExpandedLog(expandedLog === logId ? null : logId);
@@ -159,6 +163,24 @@ export function ApiLogs() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+export function PrivateLogNotice({ title }: { title: string }) {
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+      <h2 className="text-xl font-bold text-slate-900">{title}</h2>
+      <div className="text-center py-12">
+        <div className="bg-slate-100 rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4">
+          <Lock className="w-8 h-8 text-slate-500" />
+        </div>
+        <p className="text-slate-700 font-medium">These logs are private</p>
+        <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto">
+          They can contain customer and account details, so only the server can read them.
+          Mindbody usage per day and month is shown in Sync History.
+        </p>
+      </div>
     </div>
   );
 }

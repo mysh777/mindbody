@@ -1,6 +1,6 @@
 import type { SyncLog } from '../types/mindbody';
 
-export type RunKind = 'nightly' | 'quick' | 'full' | 'manual' | 'maintenance' | 'time_grouped';
+export type RunKind = 'nightly' | 'weekly' | 'monthly' | 'quick' | 'full' | 'manual' | 'maintenance' | 'time_grouped';
 export type RunStatus = 'running' | 'error' | 'warning' | 'completed';
 export type StepOutcome = 'ok' | 'warn' | 'err' | 'running';
 
@@ -26,6 +26,8 @@ export interface SyncRunGroup {
 
 export const RUN_KIND_LABELS: Record<RunKind, string> = {
   nightly: 'Nightly sync',
+  weekly: 'Weekly refresh',
+  monthly: 'Monthly full check',
   quick: 'Quick Sync',
   full: 'Full sync / backfill',
   manual: 'Manual step',
@@ -96,8 +98,9 @@ function finalizeRun(key: string, kind: RunKind, legacy: boolean, logs: SyncLog[
   const nightlyInProgress = kind === 'nightly' && !legacy
     && !steps.some(s => s.log.sync_type === NIGHTLY_LAST_STEP)
     && now - lastStart < NIGHTLY_IDLE_MS;
+  const scheduledInProgress = (kind === 'weekly' || kind === 'monthly') && now - lastStart < NIGHTLY_IDLE_MS;
 
-  const status: RunStatus = counts.running > 0 || nightlyInProgress ? 'running'
+  const status: RunStatus = counts.running > 0 || nightlyInProgress || scheduledInProgress ? 'running'
     : counts.err > 0 ? 'error'
     : counts.warn > 0 ? 'warning'
     : 'completed';
@@ -108,7 +111,7 @@ function finalizeRun(key: string, kind: RunKind, legacy: boolean, logs: SyncLog[
   };
 }
 
-const KNOWN_KINDS = new Set<RunKind>(['nightly', 'quick', 'full', 'manual', 'maintenance']);
+const KNOWN_KINDS = new Set<RunKind>(['nightly', 'weekly', 'monthly', 'quick', 'full', 'manual', 'maintenance']);
 
 /*
  * Rows with run_id are grouped by it. Older rows (no run_id) are grouped by rule:

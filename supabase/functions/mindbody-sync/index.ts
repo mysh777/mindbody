@@ -34,6 +34,10 @@ class CallRecorder {
     if (error) console.error("Failed to record Mindbody calls:", error.message);
   }
 
+  forgetSharedToken() {
+    this.pending.push(this.supabase.from("mindbody_token_cache").delete().eq("id", 1).then(() => {}));
+  }
+
   async flush() {
     this.pending.push(this.write());
     await Promise.allSettled(this.pending.splice(0));
@@ -73,12 +77,15 @@ async function mbFetch(config: MindbodyConfig, url: string, init: RequestInit = 
   try {
     const response = await fetch(url, init);
     config.calls?.record({ ...meta, http_status: response.status, duration_ms: Date.now() - started });
+    if (response.status === 401) config.calls?.forgetSharedToken();
     return response;
   } catch (error) {
     config.calls?.record({ ...meta, http_status: 0, duration_ms: Date.now() - started, error: error instanceof Error ? error.message : String(error) });
     throw error;
   }
 }
+
+const TOKEN_REUSE_MS = 23 * 60 * 60 * 1000;
 
 async function getUserToken(supabase: any, config: MindbodyConfig): Promise<string | null> {
   const staffUsername = Deno.env.get("MINDBODY_STAFF_USERNAME");
@@ -88,6 +95,16 @@ async function getUserToken(supabase: any, config: MindbodyConfig): Promise<stri
     console.warn("⚠️ Staff credentials not configured");
     console.warn("Protected endpoints (appointments, sales) will be SKIPPED");
     return null;
+  }
+
+  const { data: cached } = await supabase
+    .from("mindbody_token_cache")
+    .select("token, issued_at")
+    .eq("id", 1)
+    .maybeSingle();
+  if (cached?.token && Date.now() - new Date(cached.issued_at).getTime() < TOKEN_REUSE_MS) {
+    console.log("✅ Reusing shared user token");
+    return cached.token;
   }
 
   const url = `${MINDBODY_BASE_URL}/usertoken/issue`;
@@ -143,6 +160,7 @@ async function getUserToken(supabase: any, config: MindbodyConfig): Promise<stri
     const token = responseBody.AccessToken || responseBody.Token;
     if (token) {
       console.log("✅ User token obtained successfully");
+      await supabase.from("mindbody_token_cache").upsert({ id: 1, token, issued_at: new Date().toISOString() });
     }
 
     return token;
@@ -887,7 +905,28 @@ async function removeStaleLinksSafely(
 
 type SyncRun = { runId: string; runType: string };
 
-const RUN_TYPES = new Set(["nightly", "quick", "full", "manual", "maintenance"]);
+const RUN_TYPES = new Set(["nightly", "weekly", "monthly", "quick", "full", "manual", "maintenance"]);
+
+// Start of the last completed run of a step minus one hour of overlap, capped to maxDays back.
+async function lastCompletedSince(supabase: any, syncType: string, maxDays: number): Promise<string> {
+  const floor = Date.now() - maxDays * 86_400_000;
+  const { data } = await supabase
+    .from("sync_logs")
+    .select("started_at")
+    .eq("sync_type", syncType)
+    .eq("status", "completed")
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const last = data?.started_at ? new Date(data.started_at).getTime() - 3_600_000 : floor;
+  return new Date(Math.max(last, floor)).toISOString();
+}
+
+function currentQuarterWindow(): DateWindow {
+  const now = new Date();
+  const qStart = new Date(Date.UTC(now.getUTCFullYear(), Math.floor(now.getUTCMonth() / 3) * 3, 1));
+  return { start: qStart.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };
+}
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function resolveRun(runId: unknown, runType: unknown): SyncRun {
@@ -1137,16 +1176,130 @@ async function syncPricingOptions(supabase: any, config: MindbodyConfig, userTok
   return totalSynced;
 }
 
-async function syncAppointments(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number) {
+type DateWindow = { start: string; end: string };
+
+function windowFromToday(daysBack: number, daysAhead: number): DateWindow {
+  const day = 86_400_000;
+  const now = Date.now();
+  return {
+    start: new Date(now - daysBack * day).toISOString().split('T')[0],
+    end: new Date(now + daysAhead * day).toISOString().split('T')[0],
+  };
+}
+
+function mapAppointment(appt: any, fallbackStaffId: string | null, syncedAt: string) {
+  const sessionTypeId = appt.SessionTypeId || appt.SessionType?.Id || null;
+  const clientId = appt.ClientId || appt.Client?.Id || null;
+  const staffId = appt.StaffId || appt.Staff?.Id || fallbackStaffId;
+  const locationId = appt.LocationId || appt.Location?.Id || null;
+  const clientServiceId = appt.ClientServiceId || null;
+  return {
+    id: String(appt.Id),
+    mindbody_id: String(appt.Id),
+    client_id: clientId ? String(clientId) : null,
+    staff_id: staffId ? String(staffId) : null,
+    location_id: locationId ? String(locationId) : null,
+    session_type_id: sessionTypeId ? String(sessionTypeId) : null,
+    client_service_id: clientServiceId ? String(clientServiceId) : null,
+    start_datetime: appt.StartDateTime,
+    end_datetime: appt.EndDateTime,
+    duration_minutes: appt.Duration,
+    status: appt.Status,
+    notes: appt.Notes,
+    first_appointment: appt.FirstAppointment || false,
+    raw_data: appt,
+    synced_at: syncedAt,
+    last_seen_at: syncedAt,
+    stale: false,
+  };
+}
+
+// staffId null = one request stream for every staff member.
+async function fetchAppointmentPages(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, startDateStr: string, endDateStr: string, staffId: string | null, logFirstPage: boolean) {
+  const limit = 200;
+  let offset = 0;
+  let count = 0;
+  const staffSeen = new Set<string>();
+
+  while (true) {
+    const staffParam = staffId ? `staffIds=${staffId}&` : '';
+    const url = `${MINDBODY_BASE_URL}/appointment/staffappointments?${staffParam}startDate=${startDateStr}&endDate=${endDateStr}&limit=${limit}&offset=${offset}`;
+    const startTime = Date.now();
+    const response = await mbFetch(config, url, { headers: getUserHeaders(config, userToken) });
+    const durationMs = Date.now() - startTime;
+    const responseText = await response.text();
+
+    let data;
+    let error = null;
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      error = `Failed to parse response: ${e.message}`;
+      data = {};
+    }
+
+    if (logFirstPage && offset === 0) {
+      await logApiCall(supabase, url, "GET", { staffId: staffId ?? 'all', startDateStr, endDateStr }, response.status, data, error, durationMs);
+    }
+
+    if (!response.ok) {
+      console.error(`[APPOINTMENTS] Failed for staff ${staffId ?? 'all'}: ${response.status}`);
+      return { ok: false, count, staffSeen };
+    }
+
+    const appointments = data.Appointments || [];
+    await saveRawData(supabase, 'appointments', data, appointments.length, data.PaginationResponse, Math.floor(offset / limit) + 1);
+    if (appointments.length === 0) break;
+
+    const syncedAt = new Date().toISOString();
+    const rows = appointments.map((appt: any) => mapAppointment(appt, staffId, syncedAt));
+    rows.forEach((r: any) => r.staff_id && staffSeen.add(r.staff_id));
+
+    await ensureSessionTypesExist(supabase, report, rows.map((a: any) => a.session_type_id));
+    await safeUpsert(supabase, report, "appointments", rows, "mindbody_id");
+
+    count += appointments.length;
+    offset += limit;
+    const totalResults = data.PaginationResponse?.TotalResults;
+    if (appointments.length < limit || (totalResults != null && offset >= totalResults)) break;
+  }
+
+  return { ok: true, count, staffSeen };
+}
+
+// Staff that already have visits stored in the window; an all-staff answer must cover every one of them.
+async function staffWithStoredAppointments(supabase: any, startDateStr: string, endDateStr: string) {
+  const endExclusive = new Date(`${endDateStr}T00:00:00Z`);
+  endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+  const ids = new Set<string>();
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from("appointments")
+      .select("staff_id")
+      .gte("start_datetime", startDateStr)
+      .lt("start_datetime", endExclusive.toISOString().split('T')[0])
+      .eq("stale", false)
+      .range(from, from + 999);
+    if (error) throw new Error(`Stored appointments check failed: ${error.message}`);
+    (data || []).forEach((r: any) => r.staff_id && ids.add(String(r.staff_id)));
+    if (!data || data.length < 1000) break;
+  }
+  return ids;
+}
+
+async function syncAppointments(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number, window?: DateWindow) {
   const targetYear = year || new Date().getFullYear();
   const hasMonthFilter = month && month > 0;
-  const periodLabel = hasMonthFilter ? `${targetYear}-${String(month).padStart(2, '0')}` : String(targetYear);
+  const periodLabel = window ? `${window.start}..${window.end}` : hasMonthFilter ? `${targetYear}-${String(month).padStart(2, '0')}` : String(targetYear);
   console.log(`=== APPOINTMENTS SYNC START for period ${periodLabel} ===`);
 
   let startDate: Date;
   let endDate: Date;
 
-  if (hasMonthFilter) {
+  if (window) {
+    startDate = new Date(`${window.start}T00:00:00Z`);
+    endDate = new Date(`${window.end}T00:00:00Z`);
+  } else if (hasMonthFilter) {
     startDate = new Date(targetYear, month! - 1, 1);
     endDate = new Date(targetYear, month!, 0);
   } else {
@@ -1172,89 +1325,26 @@ async function syncAppointments(supabase: any, config: MindbodyConfig, userToken
 
   console.log(`[APPOINTMENTS] Fetching for ${allStaff.length} staff from ${startDateStr} to ${endDateStr}`);
 
-  for (const staff of allStaff) {
-    let offset = 0;
-    const limit = 200;
-    let staffTotal = 0;
-
-    while (true) {
-      const url = `${MINDBODY_BASE_URL}/appointment/staffappointments?staffIds=${staff.mindbody_id}&startDate=${startDateStr}&endDate=${endDateStr}&limit=${limit}&offset=${offset}`;
-      const startTime = Date.now();
-
-      const response = await mbFetch(config, url, {
-        headers: getUserHeaders(config, userToken),
-      });
-
-      const durationMs = Date.now() - startTime;
-      const responseText = await response.text();
-
-      let data;
-      let error = null;
-      try {
-        data = JSON.parse(responseText);
-      } catch (e) {
-        error = `Failed to parse response: ${e.message}`;
-        data = {};
-      }
-
-      if (staffTotal === 0 && totalSynced === 0) {
-        await logApiCall(supabase, url, "GET", { staffId: staff.mindbody_id, year: targetYear }, response.status, data, error, durationMs);
-      }
-
-      if (!response.ok) {
-        console.error(`[APPOINTMENTS] Failed for staff ${staff.mindbody_id}: ${response.status}`);
-        fetchComplete = false;
-        break;
-      }
-
-      const appointments = data.Appointments || [];
-
-      const pageNum = Math.floor(offset / limit) + 1;
-      await saveRawData(supabase, 'appointments', data, appointments.length, data.PaginationResponse, pageNum);
-
-      if (appointments.length === 0) break;
-
-      const syncedAt = new Date().toISOString();
-      const appointmentsData = appointments.map((appt: any) => {
-        const sessionTypeId = appt.SessionTypeId || appt.SessionType?.Id || null;
-        const clientId = appt.ClientId || appt.Client?.Id || null;
-        const staffId = appt.StaffId || appt.Staff?.Id || staff.mindbody_id;
-        const locationId = appt.LocationId || appt.Location?.Id || null;
-        const clientServiceId = appt.ClientServiceId || null;
-
-        return {
-          id: String(appt.Id),
-          mindbody_id: String(appt.Id),
-          client_id: clientId ? String(clientId) : null,
-          staff_id: staffId ? String(staffId) : null,
-          location_id: locationId ? String(locationId) : null,
-          session_type_id: sessionTypeId ? String(sessionTypeId) : null,
-          client_service_id: clientServiceId ? String(clientServiceId) : null,
-          start_datetime: appt.StartDateTime,
-          end_datetime: appt.EndDateTime,
-          duration_minutes: appt.Duration,
-          status: appt.Status,
-          notes: appt.Notes,
-          first_appointment: appt.FirstAppointment || false,
-          raw_data: appt,
-          synced_at: syncedAt,
-          last_seen_at: syncedAt,
-          stale: false,
-        };
-      });
-
-      await ensureSessionTypesExist(supabase, report, appointmentsData.map((a: any) => a.session_type_id));
-      await safeUpsert(supabase, report, "appointments", appointmentsData, "mindbody_id");
-
-      staffTotal += appointments.length;
-      totalSynced += appointments.length;
-      offset += limit;
-
-      if (appointments.length < limit) break;
+  let coveredByOneStream = false;
+  if (window) {
+    const expected = await staffWithStoredAppointments(supabase, startDateStr, endDateStr);
+    const all = await fetchAppointmentPages(supabase, config, userToken, report, startDateStr, endDateStr, null, true);
+    const missing = [...expected].filter((id) => !all.staffSeen.has(id));
+    if (all.ok && missing.length === 0) {
+      coveredByOneStream = true;
+      totalSynced = all.count;
+      console.log(`[APPOINTMENTS] All-staff request covered ${all.staffSeen.size} staff, ${all.count} visits`);
+    } else {
+      console.warn(`[APPOINTMENTS] All-staff request incomplete (ok=${all.ok}, missing staff ${missing.join(',')}); falling back to per-staff`);
     }
+  }
 
-    if (staffTotal > 0) {
-      console.log(`[APPOINTMENTS] Staff ${staff.mindbody_id}: ${staffTotal} appointments`);
+  if (!coveredByOneStream) {
+    totalSynced = 0;
+    for (const [i, staff] of allStaff.entries()) {
+      const res = await fetchAppointmentPages(supabase, config, userToken, report, startDateStr, endDateStr, String(staff.mindbody_id), i === 0);
+      if (!res.ok) fetchComplete = false;
+      totalSynced += res.count;
     }
   }
 
@@ -1446,9 +1536,10 @@ async function syncAppointmentsDirect(supabase: any, config: MindbodyConfig, use
   return totalSynced;
 }
 
-async function syncClients(supabase: any, config: MindbodyConfig, report: SaveReport, userToken?: string) {
+async function syncClients(supabase: any, config: MindbodyConfig, report: SaveReport, userToken?: string, modifiedSince?: string) {
   console.log('=== CLIENTS SYNC START ===');
-  console.log('Strategy: Full pagination with batch upsert');
+  console.log(modifiedSince ? `Strategy: only clients modified since ${modifiedSince}` : 'Strategy: Full pagination with batch upsert');
+  const modifiedParam = modifiedSince ? `&lastModifiedDate=${encodeURIComponent(modifiedSince)}` : '';
 
   let offset = 0;
   const limit = 200;
@@ -1457,7 +1548,7 @@ async function syncClients(supabase: any, config: MindbodyConfig, report: SaveRe
   let pageNumber = 1;
 
   while (true) {
-    const url = `${MINDBODY_BASE_URL}/client/clients?limit=${limit}&offset=${offset}&searchText=`;
+    const url = `${MINDBODY_BASE_URL}/client/clients?limit=${limit}&offset=${offset}&searchText=${modifiedParam}`;
     const startTime = Date.now();
 
     console.log(`[CLIENTS] Page ${pageNumber} | Offset: ${offset} | Limit: ${limit}`);
@@ -1550,11 +1641,11 @@ async function syncClients(supabase: any, config: MindbodyConfig, report: SaveRe
   return totalSynced;
 }
 
-async function syncSales(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number, monthFrom?: number, monthTo?: number) {
+async function syncSales(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number, monthFrom?: number, monthTo?: number, window?: DateWindow) {
   const targetYear = year || new Date().getFullYear();
   const hasMonthFilter = month && month > 0;
   const hasRangeFilter = monthFrom && monthTo;
-  const periodLabel = hasRangeFilter
+  const periodLabel = window ? `${window.start}..${window.end}` : hasRangeFilter
     ? `${targetYear} months ${monthFrom}-${monthTo}`
     : hasMonthFilter ? `${targetYear}-${String(month).padStart(2, '0')}` : String(targetYear);
   console.log(`=== SALES SYNC START for period ${periodLabel} ===`);
@@ -1562,7 +1653,10 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
   let startDate: Date;
   let endDate: Date;
 
-  if (hasRangeFilter) {
+  if (window) {
+    startDate = new Date(`${window.start}T00:00:00Z`);
+    endDate = new Date(`${window.end}T23:59:59Z`);
+  } else if (hasRangeFilter) {
     startDate = new Date(targetYear, monthFrom! - 1, 1);
     endDate = monthTo === 12
       ? new Date(targetYear, 11, 31, 23, 59, 59)
@@ -1748,14 +1842,36 @@ async function syncSales(supabase: any, config: MindbodyConfig, userToken: strin
   return totalSynced;
 }
 
-async function syncClientServices(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number) {
+// Clients whose packages may have moved: a visit took place, a booking was stored, or a sale was made since `since`.
+async function clientsChangedSince(supabase: any, since: string) {
+  const now = new Date().toISOString();
+  const ids = new Set<string>();
+  const queries = [
+    supabase.from("appointments").select("client_id").gte("start_datetime", since).lt("start_datetime", now).not("client_id", "is", null),
+    supabase.from("appointments").select("client_id").gte("created_at", since).not("client_id", "is", null),
+    supabase.from("sales").select("client_id").gte("sale_datetime", since).not("client_id", "is", null),
+    supabase.from("sales").select("client_id").gte("created_at", since).not("client_id", "is", null),
+  ];
+  for (const q of queries) {
+    const { data, error } = await q.limit(5000);
+    if (error) throw new Error(`Changed clients lookup failed: ${error.message}`);
+    (data || []).forEach((r: any) => ids.add(String(r.client_id)));
+  }
+  return [...ids];
+}
+
+async function syncClientServices(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number, changedSince?: string) {
   const hasMonthFilter = year && month;
-  const periodLabel = hasMonthFilter ? `${year}-${String(month).padStart(2, '0')}` : (year ? String(year) : 'ALL');
+  const periodLabel = changedSince ? `changed since ${changedSince}` : hasMonthFilter ? `${year}-${String(month).padStart(2, '0')}` : (year ? String(year) : 'ALL');
   console.log(`=== CLIENT SERVICES SYNC START (OPTIMIZED) - Period: ${periodLabel} ===`);
 
   let allClients: any[] = [];
 
-  if (hasMonthFilter) {
+  if (changedSince) {
+    allClients = (await clientsChangedSince(supabase, changedSince)).map(id => ({ mindbody_id: id }));
+    console.log(`[CLIENT_SERVICES] ${allClients.length} clients changed since ${changedSince}`);
+    if (allClients.length === 0) return 0;
+  } else if (hasMonthFilter) {
     const startDate = new Date(year!, month! - 1, 1);
     const endDate = new Date(year!, month!, 0, 23, 59, 59);
     const startDateStr = startDate.toISOString();
@@ -2187,15 +2303,25 @@ async function syncPackages(supabase: any, config: MindbodyConfig, userToken: st
   return totalSynced;
 }
 
-async function buildPricingSessionTypeLinks(supabase: any, config: MindbodyConfig, userToken: string) {
-  console.log('Building accurate pricing_option ↔ session_type links via API');
+// onlyNew: link services added in the last 8 days that have no links yet; existing links are kept.
+async function buildPricingSessionTypeLinks(supabase: any, config: MindbodyConfig, userToken: string, onlyNew = false) {
+  console.log(`Building pricing_option ↔ session_type links via API (${onlyNew ? 'new services only' : 'full rebuild'})`);
 
-  const { data: sessionTypes } = await supabase
+  const { data: allSessionTypes } = await supabase
     .from("session_types")
-    .select("id, mindbody_id, name")
+    .select("id, mindbody_id, name, created_at")
     .order("id");
 
-  if (!sessionTypes || sessionTypes.length === 0) {
+  let sessionTypes = allSessionTypes || [];
+  if (onlyNew) {
+    const { data: linked, error } = await supabase.from("pricing_option_session_types").select("session_type_id").limit(10000);
+    if (error) throw new Error(`Existing links lookup failed: ${error.message}`);
+    const linkedIds = new Set((linked || []).map((l: any) => l.session_type_id));
+    const cutoff = Date.now() - 8 * 86_400_000;
+    sessionTypes = sessionTypes.filter((st: any) => !linkedIds.has(st.id) && new Date(st.created_at).getTime() >= cutoff);
+    console.log(`${sessionTypes.length} new services without links`);
+    if (sessionTypes.length === 0) return 0;
+  } else if (sessionTypes.length === 0) {
     console.warn('No session types found. Run session types sync first.');
     return 0;
   }
@@ -2205,8 +2331,10 @@ async function buildPricingSessionTypeLinks(supabase: any, config: MindbodyConfi
   let totalLinksCreated = 0;
   let processedCount = 0;
 
-  await supabase.from("pricing_option_session_types").delete().neq("pricing_option_id", "00000000-0000-0000-0000-000000000000");
-  console.log('Cleared existing pricing_option_session_types links');
+  if (!onlyNew) {
+    await supabase.from("pricing_option_session_types").delete().neq("pricing_option_id", "00000000-0000-0000-0000-000000000000");
+    console.log('Cleared existing pricing_option_session_types links');
+  }
 
   for (const sessionType of sessionTypes) {
     processedCount++;
@@ -2421,7 +2549,7 @@ Deno.serve(async (req: Request) => {
 
   let recorder: CallRecorder | undefined;
   try {
-    const { syncType = "quick", year, month, monthFrom, monthTo, staffId: requestStaffId, pageOffset, pageLimit, staffOffset, staffLimit, runId: requestRunId, runType: requestRunType } = await req.json().catch(() => ({}));
+    const { syncType = "quick", year, month, monthFrom, monthTo, staffId: requestStaffId, pageOffset, pageLimit, staffOffset, staffLimit, runId: requestRunId, runType: requestRunType, scope } = await req.json().catch(() => ({}));
     const run = resolveRun(requestRunId, requestRunType);
     const targetYear = year ? parseInt(year) : undefined;
     const targetMonth = month ? parseInt(month) : undefined;
@@ -2626,7 +2754,8 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "clients" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Clients ---');
-          results.clients = await syncClients(supabase, config, saveReport, userToken);
+          const modifiedSince = scope === 'changed' ? await lastCompletedSince(supabase, 'clients', 8) : undefined;
+          results.clients = await syncClients(supabase, config, saveReport, userToken, modifiedSince);
           console.log(`✅ Clients synced: ${results.clients}`);
         } catch (e) {
           console.error('❌ Clients sync failed:', e);
@@ -2638,7 +2767,8 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "appointments" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Appointments ---');
-          results.appointments = await syncAppointments(supabase, config, userToken, saveReport, targetYear, targetMonth);
+          const apptWindow = scope === 'recent' ? windowFromToday(7, 30) : scope === 'weekly' ? windowFromToday(90, 30) : undefined;
+          results.appointments = await syncAppointments(supabase, config, userToken, saveReport, targetYear, targetMonth, apptWindow);
           console.log(`✅ Appointments synced: ${results.appointments}`);
         } catch (e) {
           console.error('❌ Appointments sync failed:', e);
@@ -2660,7 +2790,8 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "sales" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Sales ---');
-          results.sales = await syncSales(supabase, config, userToken, saveReport, targetYear, targetMonth, targetMonthFrom, targetMonthTo);
+          const salesWindow = scope === 'recent' ? windowFromToday(7, 0) : scope === 'quarter' ? currentQuarterWindow() : undefined;
+          results.sales = await syncSales(supabase, config, userToken, saveReport, targetYear, targetMonth, targetMonthFrom, targetMonthTo, salesWindow);
           console.log(`✅ Sales synced: ${results.sales}`);
         } catch (e) {
           console.error('❌ Sales sync failed:', e);
@@ -2672,7 +2803,8 @@ Deno.serve(async (req: Request) => {
       if (userToken && (shouldSyncAll || syncType === "client_services" || isQuickMode)) {
         try {
           console.log('\n--- Syncing Client Services (Ownership/Entitlements) ---');
-          results.client_services = await syncClientServices(supabase, config, userToken, saveReport, targetYear, targetMonth);
+          const changedSince = scope === 'changed' ? await lastCompletedSince(supabase, 'client_services', 7) : undefined;
+          results.client_services = await syncClientServices(supabase, config, userToken, saveReport, targetYear, targetMonth, changedSince);
           console.log(`✅ Client services synced: ${results.client_services}`);
         } catch (e) {
           console.error('❌ Client services sync failed:', e);
@@ -2733,7 +2865,7 @@ Deno.serve(async (req: Request) => {
       if (userToken && syncType === "build_pricing_links") {
         try {
           console.log('\n--- Building Pricing ↔ Session Type Links ---');
-          results.pricing_links = await buildPricingSessionTypeLinks(supabase, config, userToken);
+          results.pricing_links = await buildPricingSessionTypeLinks(supabase, config, userToken, scope === 'new');
           console.log(`✅ Pricing links built: ${results.pricing_links}`);
         } catch (e) {
           console.error('❌ Pricing links building failed:', e);

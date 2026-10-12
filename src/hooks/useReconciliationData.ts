@@ -765,14 +765,15 @@ export function useAutoReconciliationCheck(onResult: (r: ReconciliationResult) =
         const hoursSinceCheck = (now - lastCheck) / (1000 * 60 * 60);
 
         const { data: lastSync } = await supabase
-          .from('api_logs')
-          .select('ended_at')
-          .eq('status', 'success')
-          .order('ended_at', { ascending: false })
+          .from('sync_logs')
+          .select('completed_at')
+          .eq('status', 'completed')
+          .not('completed_at', 'is', null)
+          .order('completed_at', { ascending: false })
           .limit(1)
           .maybeSingle();
 
-        const lastSyncTime = lastSync?.ended_at ? new Date(lastSync.ended_at).getTime() : 0;
+        const lastSyncTime = lastSync?.completed_at ? new Date(lastSync.completed_at).getTime() : 0;
         const needsCheck = hoursSinceCheck >= 24 || lastSyncTime > lastCheck;
 
         if (!needsCheck) return;
