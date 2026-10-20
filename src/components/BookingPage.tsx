@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetchAllPages';
 import { loadClientNames } from '../lib/clientNames';
 import { computeMoneyReceived, type MoneyReceived } from '../hooks/useSalesMarginData';
 import { loadUsage } from '../utils/mindbodyUsage';
-import { CalendarDays, Clock, Users, DollarSign, Calendar, Scissors, RefreshCw, ChevronLeft, ChevronRight, Phone, AlertCircle, Wallet, Package, X, MapPin } from 'lucide-react';
+import { CalendarDays, Clock, Users, DollarSign, Calendar, Scissors, RefreshCw, ChevronLeft, ChevronRight, Phone, AlertCircle, Wallet, Package, X, MapPin, Printer } from 'lucide-react';
+import { handlePrint } from '../utils/printReport';
 
 // ─── Types ───
 
@@ -164,6 +165,7 @@ function CalendarView({ data }: CalendarProps) {
   const [budgetBlocked, setBudgetBlocked] = useState(false);
   const [scheduleItems, setScheduleItems] = useState<ScheduleItem[]>([]);
   const [clientServices, setClientServices] = useState<ClientServiceRow[]>([]);
+  const printRef = useRef<HTMLDivElement>(null);
 
   const REFRESH_COOLDOWN_MS = 15 * 60 * 1000;
 
@@ -309,9 +311,12 @@ function CalendarView({ data }: CalendarProps) {
   }, [visibleAppts]);
 
   const clientName = (id: string | null) => id ? (clientNames[id] || '…') : '—';
+  const locationLabel = locationId === 'all' ? 'All locations' : (data.locationMap.get(locationId)?.name || '');
+
+  const onPrint = () => handlePrint(printRef);
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full" ref={printRef}>
       <div className="flex-1 overflow-auto p-4">
         {/* Toolbar */}
         <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -332,10 +337,18 @@ function CalendarView({ data }: CalendarProps) {
           <button
             onClick={handleRefreshToday}
             disabled={refreshing || refreshBlocked || budgetBlocked}
-            className="ml-auto flex items-center gap-1.5 rounded-lg bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-lg bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
             {refreshing ? 'Refreshing…' : budgetBlocked ? 'API budget limit' : refreshBlocked ? 'Wait 15 min' : 'Refresh today'}
+          </button>
+          <button
+            onClick={onPrint}
+            disabled={loading || columns.length === 0}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-50"
+          >
+            <Printer className="h-4 w-4" />
+            Print / PDF
           </button>
         </div>
         {lastRefresh && <div className="mb-2 text-xs text-slate-500">Data as of {lastRefresh}</div>}
@@ -390,6 +403,51 @@ function CalendarView({ data }: CalendarProps) {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Print-only layout */}
+      <div className="print-report hidden">
+        <h1>Appointment Book — {fmtDate(date)}</h1>
+        <div className="pr-sub">{locationLabel} · {dayCounters.total} appointments · {dayCounters.bookedHours} booked hours{lastRefresh ? ` · Data as of ${lastRefresh}` : ''}</div>
+        <table>
+          <thead>
+            <tr>
+              <th style={{ width: 60 }}>Time</th>
+              {columns.map(s => (
+                <th key={s.id}>{s.first_name} {s.last_name}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: hours[1] - hours[0] }, (_, i) => hours[0] + i).map(h => (
+              <tr key={h}>
+                <td style={{ fontWeight: 600, textAlign: 'center' }}>{String(h).padStart(2, '0')}:00</td>
+                {columns.map(s => {
+                  const staffAppts = visibleAppts.filter(a => a.staff_id === s.id && apptHour(a.start_datetime) === h);
+                  const staffSched = (scheduleByStaff.get(s.id) || []).filter(sc => apptHour(sc.start_datetime) <= h && apptHour(sc.end_datetime) > h);
+                  const isOff = staffSched.some(sc => sc.kind === 'unavailable');
+                  if (isOff && staffAppts.length === 0) return <td key={s.id} style={{ background: '#f5f5f5', color: '#999' }}>Off</td>;
+                  if (staffAppts.length === 0) return <td key={s.id}></td>;
+                  return (
+                    <td key={s.id}>
+                      {staffAppts.map(a => (
+                        <div key={a.id} style={{ marginBottom: 2 }}>
+                          <strong>{apptTime(a.start_datetime)}</strong>{' '}
+                          {data.sessionTypeMap.get(a.session_type_id)?.name?.split(' ').slice(0, 3).join(' ') || '—'}
+                          <br />
+                          <span style={{ color: '#666' }}>{clientName(a.client_id)}</span>
+                          {a.status && a.status !== 'Booked' && (
+                            <span style={{ color: '#999', fontSize: 9 }}> · {a.status}</span>
+                          )}
+                        </div>
+                      ))}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
       {/* 2.2 Appointment details side panel */}
