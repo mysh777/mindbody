@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Database, BarChart3, Calendar, DollarSign, FileText, Package,
   UserCog, HeartPulse, UserCircle, Flame, TrendingUp, UserCheck, Moon, Users, LayoutDashboard,
-  RefreshCw, History, ShieldCheck, AlertTriangle, FileJson, ChevronRight, Settings, ListChecks, Megaphone, X,
+  RefreshCw, History, ShieldCheck, AlertTriangle, FileJson, ChevronRight, Settings, ListChecks, Megaphone, X, CalendarDays,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { PAGES, MENU_GROUPS, type MenuSection, type MenuGroup } from '../lib/pages';
@@ -17,6 +17,7 @@ interface SidebarProps {
 
 const ICONS: Record<MenuSection, typeof Database> = {
   'overview': LayoutDashboard,
+  'booking': CalendarDays,
   'client-card': UserCircle,
   'expiring-packages': Flame,
   'sleeping-clients': Moon,

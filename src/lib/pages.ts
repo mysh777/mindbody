@@ -1,5 +1,6 @@
 export type MenuSection =
   | 'overview'
+  | 'booking'
   | 'client-card'
   | 'expiring-packages'
   | 'sleeping-clients'
@@ -24,7 +25,7 @@ export type MenuSection =
   | 'raw-api'
   | 'staff-rates';
 
-export type MenuGroup = 'overview' | 'clients' | 'finance' | 'reference' | 'admin';
+export type MenuGroup = 'overview' | 'booking' | 'clients' | 'finance' | 'reference' | 'admin';
 
 export interface PageInfo {
   label: string;
@@ -36,6 +37,8 @@ export const DEFAULT_SECTION: MenuSection = 'overview';
 
 export const PAGES: Record<MenuSection, PageInfo> = {
   'overview': { group: 'overview', label: 'Overview', purpose: 'Key studio figures for the month: sales, money, margin, visits and clients.' },
+
+  'booking': { group: 'booking', label: 'Booking', purpose: 'View-only replica of the Mindbody appointment book: calendar, appointment details, daily sales, staff schedules, services and prices.' },
 
   'client-card': { group: 'clients', label: 'Client Card', purpose: 'Everything about one client: purchases, visits, package balances and account balance. Above it, the list of all clients with unused visits.' },
   'expiring-packages': { group: 'clients', label: 'Expiring Packages', purpose: 'Whose package is about to run out — who to remind about renewal.' },
@@ -67,6 +70,7 @@ export const PAGES: Record<MenuSection, PageInfo> = {
 
 export const MENU_GROUPS: { id: MenuGroup; label: string }[] = [
   { id: 'overview', label: '' },
+  { id: 'booking', label: 'Booking' },
   { id: 'clients', label: 'Clients' },
   { id: 'finance', label: 'Finance' },
   { id: 'reference', label: 'Reference' },

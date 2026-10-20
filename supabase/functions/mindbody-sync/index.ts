@@ -380,6 +380,46 @@ async function syncSites(supabase: any, config: MindbodyConfig) {
   return sites.length;
 }
 
+async function syncResources(supabase: any, config: MindbodyConfig) {
+  console.log('Syncing resources (rooms / devices)');
+  let offset = 0;
+  const limit = 200;
+  let totalSynced = 0;
+
+  while (true) {
+    const url = `${MINDBODY_BASE_URL}/site/resources?limit=${limit}&offset=${offset}`;
+    const startTime = Date.now();
+    const response = await mbFetch(config, url, { headers: getSourceHeaders(config) });
+    const durationMs = Date.now() - startTime;
+    const responseText = await response.text();
+    let data: any, error: string | null = null;
+    try { data = JSON.parse(responseText); } catch (e) { error = `Failed to parse: ${(e as Error).message}`; data = {}; }
+    await logApiCall(supabase, url, "GET", null, response.status, data, error, durationMs);
+    if (!response.ok) { console.error(`Failed to fetch resources: ${response.status}`); break; }
+    const resources = data.Resources || [];
+    await saveRawData(supabase, 'resources', data, resources.length, data.PaginationResponse);
+    if (resources.length === 0) break;
+    for (const r of resources) {
+      const row = {
+        id: String(r.Id),
+        mindbody_id: String(r.Id),
+        name: r.Name || null,
+        location_id: r.Location?.Id != null ? String(r.Location.Id) : null,
+        resource_type: r.Type || null,
+        active: r.Active !== false,
+        raw_data: r,
+        synced_at: new Date().toISOString(),
+      };
+      await supabase.from("resources").upsert(row, { onConflict: "id" });
+    }
+    totalSynced += resources.length;
+    offset += limit;
+    if (resources.length < limit) break;
+  }
+  console.log(`Resources synced: ${totalSynced}`);
+  return totalSynced;
+}
+
 async function syncLocations(supabase: any, config: MindbodyConfig) {
   console.log('Syncing locations');
   const url = `${MINDBODY_BASE_URL}/site/locations`;
@@ -2663,6 +2703,18 @@ Deno.serve(async (req: Request) => {
         }
       }
 
+      if (shouldSyncAll || syncType === "resources" || isQuickMode) {
+        try {
+          console.log('\n--- Syncing Resources ---');
+          results.resources = await syncResources(supabase, config);
+          console.log(`✅ Resources synced: ${results.resources}`);
+        } catch (e) {
+          console.error('❌ Resources sync failed:', e);
+          fail('resources', e);
+          results.resources = 0;
+        }
+      }
+
       if (shouldSyncAll || syncType === "locations" || isQuickMode) {
         try {
           console.log('\n--- Syncing Locations ---');
@@ -2773,6 +2825,19 @@ Deno.serve(async (req: Request) => {
         } catch (e) {
           console.error('❌ Appointments sync failed:', e);
           fail('appointments', e);
+          results.appointments = 0;
+        }
+      }
+
+      if (userToken && syncType === "refresh-today") {
+        try {
+          console.log('\n--- Refresh Today: appointments for today+tomorrow ---');
+          const w = windowFromToday(0, 1);
+          results.appointments = await syncAppointments(supabase, config, userToken, saveReport, undefined, undefined, w);
+          console.log(`✅ Refresh-today appointments: ${results.appointments}`);
+        } catch (e) {
+          console.error('❌ Refresh-today failed:', e);
+          fail('refresh-today', e);
           results.appointments = 0;
         }
       }

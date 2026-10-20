@@ -81,12 +81,14 @@ const STEP_CALLS: Record<string, number> = {
   retail_products: 1,
   clients: 33,
   staff_schedule: 8,
+  resources: 1,
 };
 
 export function estimateCalls(syncType: string, month?: number, scope?: string): number {
   const wholeYear = !(month && month > 0);
   switch (syncType) {
     case 'appointments': return scope ? 3 : wholeYear ? 70 : 33;
+    case 'refresh-today': return 2;
     case 'sales': return scope ? 2 : wholeYear ? 20 : 3;
     case 'client_services': return scope ? 30 : wholeYear ? 880 : 200;
     case 'clients': return scope ? 2 : STEP_CALLS.clients;

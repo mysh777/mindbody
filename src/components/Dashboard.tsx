@@ -29,6 +29,7 @@ const MarginByStaff = lazy(() => import('./MarginByStaff').then(m => ({ default:
 const SleepingClients = lazy(() => import('./SleepingClients').then(m => ({ default: m.SleepingClients })));
 const ClientSegments = lazy(() => import('./ClientSegments').then(m => ({ default: m.ClientSegments })));
 const Campaigns = lazy(() => import('./Campaigns').then(m => ({ default: m.Campaigns })));
+const BookingPage = lazy(() => import('./BookingPage').then(m => ({ default: m.BookingPage })));
 const DataIssuesPage = lazy(() => import('./DataIssuesPage').then(m => ({ default: m.DataIssuesPage })));
 const SimplePage = lazy(() => import('./PageHeader').then(m => ({ default: m.SimplePage })));
 
@@ -181,6 +182,8 @@ export function Dashboard() {
           </div>
         )}
         {page('overview', <SalesReportPage onOpenReport={handleOpenReport} urlParams={urlParams} onParamsChange={handleParamsChange} />)}
+
+        {page('booking', <BookingPage />)}
 
         {page('client-card', <ClientCard urlParams={urlParams} onParamsChange={handleParamsChange} />)}
         {page('expiring-packages', <ExpiringPackages onViewClient={handleViewClient} urlParams={urlParams} onParamsChange={handleParamsChange} />)}
