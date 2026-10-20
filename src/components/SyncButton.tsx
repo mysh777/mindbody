@@ -72,14 +72,11 @@ const months = [
 
 async function callEdgeFunction(payload: Record<string, unknown>): Promise<{ ok: boolean; data?: any; error?: string }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const headers = await getAuthHeaders();
 
   const response = await fetch(`${supabaseUrl}/functions/v1/mindbody-sync`, {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${supabaseAnonKey}`,
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify(payload),
   });
 

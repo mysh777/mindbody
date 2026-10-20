@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { getAuthHeaders } from '../lib/authHeaders';
 import { Key, Copy, CheckCircle } from 'lucide-react';
 
 export function ActivationCode() {
@@ -20,10 +21,7 @@ export function ActivationCode() {
       const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-activation-code`;
       const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers: await getAuthHeaders(),
       });
 
       const data = await response.json();

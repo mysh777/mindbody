@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import { getAuthHeaders } from '../lib/authHeaders';
 import { fetchAllPages } from '../lib/fetchAllPages';
 import { computeMarginVisitsByMonth, computeMoneyReceivedByMonth, summarizeVisits } from '../hooks/useSalesMarginData';
 import { computeSalesByDateData } from '../hooks/useSalesByDateData';
@@ -183,7 +184,7 @@ export async function loadObligationSnapshots(): Promise<ObligationSnapshot[]> {
 export async function requestOverviewRecompute(body: Record<string, unknown>): Promise<void> {
   const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/overview-totals`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(body),
   });
   const json = await res.json().catch(() => null);

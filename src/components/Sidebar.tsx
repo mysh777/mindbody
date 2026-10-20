@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { PAGES, MENU_GROUPS, type MenuSection, type MenuGroup } from '../lib/pages';
+import { UserMenu } from './UserMenu';
 
 interface SidebarProps {
   activeSection: MenuSection;
@@ -168,6 +169,9 @@ export function Sidebar({ activeSection, onSectionChange, refreshTrigger, mobile
             {sectionsOf('admin').map(id => renderItem(id, true))}
           </div>
         )}
+        <div className="mt-3 pt-3 border-t border-slate-100">
+          <UserMenu />
+        </div>
       </div>
       </div>
     </>

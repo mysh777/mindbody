@@ -10,6 +10,7 @@ import type { ReconciliationResult } from '../hooks/useReconciliationData';
 import { runReconciliationCheck, useAutoReconciliationCheck } from '../hooks/useReconciliationData';
 import { AlertTriangle, Loader2, Menu } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { UserMenu } from './UserMenu';
 
 const ApiIntegration = lazy(() => import('./ApiIntegration').then(m => ({ default: m.ApiIntegration })));
 const PivotTable = lazy(() => import('./PivotTable').then(m => ({ default: m.PivotTable })));
@@ -164,6 +165,7 @@ export function Dashboard() {
           <Menu className="w-5 h-5" />
         </button>
         <span className="truncate text-sm font-semibold text-slate-900">{PAGES[activeSection].label}</span>
+        <div className="ml-auto"><UserMenu /></div>
       </header>
       <div className="flex-1 relative overflow-hidden">
         {reconciliationResult && !reconciliationResult.allOk && (
