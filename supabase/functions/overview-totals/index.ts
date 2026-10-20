@@ -7,8 +7,8 @@ let cachedCronSecret: string | null = null;
 
 async function getCronSecret(): Promise<string> {
   if (cachedCronSecret !== null) return cachedCronSecret;
-  const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-  const { data } = await supabase.from("_cron_secret").select("secret").eq("id", 1).maybeSingle();
+  const client = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+  const { data } = await client.from("_cron_secret").select("secret").eq("id", 1).maybeSingle();
   cachedCronSecret = data?.secret ?? "";
   return cachedCronSecret;
 }
@@ -20,7 +20,12 @@ async function isAuthorized(req: Request): Promise<boolean> {
     if (secret && cronHeader === secret) return true;
   }
   const auth = req.headers.get("Authorization");
-  if (auth && auth.startsWith("Bearer ")) return true;
+  if (auth && auth.startsWith("Bearer ")) {
+    const token = auth.slice(7);
+    const client = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!);
+    const { data } = await client.auth.getUser(token);
+    if (data.user) return true;
+  }
   return false;
 }
 
