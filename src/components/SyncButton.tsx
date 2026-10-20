@@ -72,26 +72,44 @@ const months = [
 
 async function callEdgeFunction(payload: Record<string, unknown>): Promise<{ ok: boolean; data?: any; error?: string }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  const headers = await getAuthHeaders();
-
-  const response = await fetch(`${supabaseUrl}/functions/v1/mindbody-sync`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload),
-  });
-
-  const text = await response.text();
-  let data: any;
+  let headers: Record<string, string>;
   try {
-    data = JSON.parse(text);
-  } catch {
-    data = { raw: text };
+    headers = await getAuthHeaders();
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Not signed in' };
   }
 
-  if (!response.ok || data?.error) {
-    return { ok: false, error: data?.error || data?.message || `HTTP ${response.status}` };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120000);
+
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/mindbody-sync`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    const text = await response.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { raw: text };
+    }
+
+    if (!response.ok || data?.error) {
+      return { ok: false, error: data?.error || data?.message || `HTTP ${response.status}` };
+    }
+    return { ok: true, data };
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      return { ok: false, error: 'Request timed out (120s)' };
+    }
+    return { ok: false, error: err instanceof Error ? err.message : 'Network error' };
+  } finally {
+    clearTimeout(timeout);
   }
-  return { ok: true, data };
 }
 
 export function SyncButton({ onSyncComplete }: SyncButtonProps) {
