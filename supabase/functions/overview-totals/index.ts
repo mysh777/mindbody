@@ -3,6 +3,27 @@ import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 // Built from src/jobs/overviewTotalsJob.ts (npm run build:overview-job) so the job uses the same calculations as the reports.
 import { runOverviewTotals } from "./job.bundle.js";
 
+let cachedCronSecret: string | null = null;
+
+async function getCronSecret(): Promise<string> {
+  if (cachedCronSecret !== null) return cachedCronSecret;
+  const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+  const { data } = await supabase.from("_cron_secret").select("secret").eq("id", 1).maybeSingle();
+  cachedCronSecret = data?.secret ?? "";
+  return cachedCronSecret;
+}
+
+async function isAuthorized(req: Request): Promise<boolean> {
+  const cronHeader = req.headers.get("X-Cron-Secret");
+  if (cronHeader) {
+    const secret = await getCronSecret();
+    if (secret && cronHeader === secret) return true;
+  }
+  const auth = req.headers.get("Authorization");
+  if (auth && auth.startsWith("Bearer ")) return true;
+  return false;
+}
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
@@ -52,6 +73,10 @@ async function runLogged(opts: Parameters<typeof runOverviewTotals>[0], runId: u
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 200, headers: corsHeaders });
+
+  if (!await isAuthorized(req)) {
+    return json({ success: false, error: "Unauthorized" }, 401);
+  }
 
   try {
     const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};

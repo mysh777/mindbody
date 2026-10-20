@@ -1,8 +1,8 @@
 [functions.mindbody-sync]
-verify_jwt = false
+verify_jwt = true
 
 [functions.get-activation-code]
 verify_jwt = true
 
 [functions.overview-totals]
-verify_jwt = false
+verify_jwt = true

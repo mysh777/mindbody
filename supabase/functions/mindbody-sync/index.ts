@@ -1,5 +1,26 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 
+let cachedCronSecret: string | null = null;
+
+async function getCronSecret(): Promise<string> {
+  if (cachedCronSecret !== null) return cachedCronSecret;
+  const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+  const { data } = await supabase.from("_cron_secret").select("secret").eq("id", 1).maybeSingle();
+  cachedCronSecret = data?.secret ?? "";
+  return cachedCronSecret;
+}
+
+async function isAuthorized(req: Request): Promise<boolean> {
+  const cronHeader = req.headers.get("X-Cron-Secret");
+  if (cronHeader) {
+    const secret = await getCronSecret();
+    if (secret && cronHeader === secret) return true;
+  }
+  const auth = req.headers.get("Authorization");
+  if (auth && auth.startsWith("Bearer ")) return true;
+  return false;
+}
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
@@ -2593,6 +2614,13 @@ Deno.serve(async (req: Request) => {
     return new Response(null, {
       status: 200,
       headers: corsHeaders,
+    });
+  }
+
+  if (!await isAuthorized(req)) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
