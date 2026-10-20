@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
 import { fetchAllRows } from '../lib/fetchAllPages';
 import { loadClientNames } from '../lib/clientNames';
+import { computeMoneyReceived, type MoneyReceived } from '../hooks/useSalesMarginData';
+import { loadUsage } from '../utils/mindbodyUsage';
 import { CalendarDays, Clock, Users, DollarSign, Calendar, Scissors, RefreshCw, ChevronLeft, ChevronRight, Phone, AlertCircle, Wallet, Package, X, MapPin } from 'lucide-react';
 
 // ─── Types ───
@@ -159,8 +161,37 @@ function CalendarView({ ref }: CalendarProps) {
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshBlocked, setRefreshBlocked] = useState(false);
+  const [budgetBlocked, setBudgetBlocked] = useState(false);
   const [scheduleItems, setScheduleItems] = useState<ScheduleItem[]>([]);
   const [clientServices, setClientServices] = useState<ClientServiceRow[]>([]);
+
+  const REFRESH_COOLDOWN_MS = 15 * 60 * 1000;
+
+  // Shared cooldown — read from database so all users see the same lock
+  const checkCooldown = useCallback(async () => {
+    const { data } = await supabase
+      .from('booking_refresh_state')
+      .select('last_refresh_at')
+      .eq('id', 1)
+      .maybeSingle();
+    if (data?.last_refresh_at) {
+      const ts = new Date(data.last_refresh_at).getTime();
+      const elapsed = Date.now() - ts;
+      setRefreshBlocked(elapsed < REFRESH_COOLDOWN_MS);
+      setLastRefresh(new Date(ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
+    }
+  }, []);
+
+  useEffect(() => {
+    checkCooldown();
+    const interval = setInterval(checkCooldown, 30 * 1000);
+    return () => clearInterval(interval);
+  }, [checkCooldown]);
+
+  // Check API call budget — disable refresh if projected cycle calls > 4500
+  useEffect(() => {
+    loadUsage().then(u => setBudgetBlocked(u.projected > 4500)).catch(() => {});
+  }, []);
 
   const loadAppts = useCallback(async () => {
     setLoading(true);
@@ -207,37 +238,26 @@ function CalendarView({ ref }: CalendarProps) {
     }
   }, [selectedAppt]);
 
-  // Refresh today button
+  // Refresh today button — writes timestamp to shared DB row
   const handleRefreshToday = useCallback(async () => {
     setRefreshing(true);
     try {
-      const { data, error } = await supabase.functions.invoke('mindbody-sync', {
+      await supabase
+        .from('booking_refresh_state')
+        .upsert({ id: 1, last_refresh_at: new Date().toISOString(), updated_by: 'booking-ui' });
+      const { error } = await supabase.functions.invoke('mindbody-sync', {
         body: JSON.stringify({ syncType: 'refresh-today', scope: 'recent' }),
       });
       if (error) throw error;
       setLastRefresh(new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
+      setRefreshBlocked(true);
       await loadAppts();
     } catch (e) {
       console.error('Refresh failed:', e);
     } finally {
       setRefreshing(false);
-      // Check 15-min limit
-      const last = localStorage.getItem('booking-refresh-ts');
-      if (last) {
-        const elapsed = Date.now() - parseInt(last);
-        if (elapsed < 15 * 60 * 1000) setRefreshBlocked(true);
-      }
-      localStorage.setItem('booking-refresh-ts', String(Date.now()));
     }
   }, [loadAppts]);
-
-  useEffect(() => {
-    const last = localStorage.getItem('booking-refresh-ts');
-    if (last) {
-      const elapsed = Date.now() - parseInt(last);
-      setRefreshBlocked(elapsed < 15 * 60 * 1000);
-    }
-  }, []);
 
   const visibleAppts = useMemo(() =>
     appts.filter(a => showCancelled || (a.status !== 'Cancelled' && !a.stale)),
@@ -311,11 +331,11 @@ function CalendarView({ ref }: CalendarProps) {
           </label>
           <button
             onClick={handleRefreshToday}
-            disabled={refreshing || refreshBlocked}
+            disabled={refreshing || refreshBlocked || budgetBlocked}
             className="ml-auto flex items-center gap-1.5 rounded-lg bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
-            {refreshing ? 'Refreshing…' : refreshBlocked ? 'Wait 15 min' : 'Refresh today'}
+            {refreshing ? 'Refreshing…' : budgetBlocked ? 'API budget limit' : refreshBlocked ? 'Wait 15 min' : 'Refresh today'}
           </button>
         </div>
         {lastRefresh && <div className="mb-2 text-xs text-slate-500">Data as of {lastRefresh}</div>}
@@ -477,36 +497,28 @@ function DailySalesView({ ref }: { ref: ReturnType<typeof useReferenceData> }) {
   const [loading, setLoading] = useState(true);
   const [selectedSale, setSelectedSale] = useState<any | null>(null);
   const [clientNames, setClientNames] = useState<Record<string, string>>({});
+  const [money, setMoney] = useState<MoneyReceived | null>(null);
 
   useEffect(() => { loadClientNames().then(setClientNames).catch(() => {}); }, []);
 
   const loadSales = useCallback(async () => {
     setLoading(true);
-    const dayStart = date + 'T00:00:00Z';
-    const dayEnd = date + 'T23:59:59Z';
+    const dayStart = date + 'T00:00:00';
+    const dayEnd = date + 'T23:59:59';
     let q = supabase.from('sales').select('*').gte('sale_datetime', dayStart).lte('sale_datetime', dayEnd).order('sale_datetime');
     if (locationId !== 'all') q = q.eq('location_id', locationId);
     const { data, error } = await q;
     if (error) console.error(error);
     setSales(data || []);
+    // Use the same shared function as Overview so totals can never diverge
+    const m = await computeMoneyReceived({ start: dayStart.slice(0, 10), end: dayEnd.slice(0, 10) }, locationId);
+    setMoney(m);
     setLoading(false);
   }, [date, locationId]);
 
   useEffect(() => { loadSales(); }, [loadSales]);
 
-  const paymentTotals = useMemo(() => {
-    const totals: Record<string, number> = {};
-    for (const s of sales) {
-      const payments = s.raw_data?.Payments || [];
-      for (const p of payments) {
-        const type = p.Type || 'Unknown';
-        totals[type] = (totals[type] || 0) + Number(p.Amount || 0);
-      }
-    }
-    return totals;
-  }, [sales]);
-
-  const grandTotal = useMemo(() => Object.values(paymentTotals).reduce((s, v) => s + v, 0), [paymentTotals]);
+  const grandTotal = money ? money.cashIn + money.cashInGiftCards + money.cashInDeposits : 0;
 
   const clientName = (id: string | null) => id ? (clientNames[id] || '…') : '—';
 
@@ -524,16 +536,22 @@ function DailySalesView({ ref }: { ref: ReturnType<typeof useReferenceData> }) {
         </select>
       </div>
 
-      {/* Payment method totals */}
+      {/* Money received breakdown — same function as Overview */}
       <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4">
-        <h3 className="mb-2 text-sm font-semibold text-slate-900">Totals by payment method</h3>
+        <h3 className="mb-2 text-sm font-semibold text-slate-900">Money received</h3>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {Object.entries(paymentTotals).map(([type, amount]) => (
-            <div key={type} className="rounded-lg bg-slate-50 px-3 py-2">
-              <div className="text-xs text-slate-500">{type}</div>
-              <div className="text-sm font-semibold text-slate-900">{amount.toFixed(2)} EUR</div>
-            </div>
-          ))}
+          <div className="rounded-lg bg-slate-50 px-3 py-2">
+            <div className="text-xs text-slate-500">Cash / Card</div>
+            <div className="text-sm font-semibold text-slate-900">{(money?.cashIn ?? 0).toFixed(2)} EUR</div>
+          </div>
+          <div className="rounded-lg bg-slate-50 px-3 py-2">
+            <div className="text-xs text-slate-500">Gift cards sold</div>
+            <div className="text-sm font-semibold text-slate-900">{(money?.cashInGiftCards ?? 0).toFixed(2)} EUR</div>
+          </div>
+          <div className="rounded-lg bg-slate-50 px-3 py-2">
+            <div className="text-xs text-slate-500">Deposits</div>
+            <div className="text-sm font-semibold text-slate-900">{(money?.cashInDeposits ?? 0).toFixed(2)} EUR</div>
+          </div>
           <div className="rounded-lg bg-blue-50 px-3 py-2">
             <div className="text-xs text-blue-600">Total (Money received)</div>
             <div className="text-sm font-bold text-blue-900">{grandTotal.toFixed(2)} EUR</div>

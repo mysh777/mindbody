@@ -166,6 +166,9 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
   const [expandedServiceId, setExpandedServiceId] = useState<string | null>(null);
   const [showExpiredPackages, setShowExpiredPackages] = useState(false);
   const [pendingAutoGenerate, setPendingAutoGenerate] = useState(false);
+  const [upcomingAppts, setUpcomingAppts] = useState<{ id: string; start_datetime: string; status: string; session_type_name: string; staff_name: string }[]>([]);
+  const [clientNotes, setClientNotes] = useState<string | null>(null);
+  const [accountBalance, setAccountBalance] = useState<number | null>(null);
 
   // Print ref
   const printRef = useRef<HTMLDivElement>(null);
@@ -238,7 +241,7 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
     try {
       const clientId = selectedClient.id;
 
-      const [svcData, salesData, apptData] = await Promise.all([
+      const [svcData, salesData, apptData, clientRaw] = await Promise.all([
         fetchAllPages<any>((from, to) => supabase
           .from('client_services')
           .select(`id, mindbody_id, name, count, remaining, active_date, expiration_date, program_name, pricing_option_id, ${PACKAGE_STATUS_COLUMNS}`)
@@ -261,7 +264,35 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
           .order('start_datetime', { ascending: false })
           .order('id')
           .range(from, to)),
+        supabase.from('clients').select('raw_data').eq('id', clientId).maybeSingle(),
       ]);
+
+      // Client notes and account balance from raw_data
+      const raw = clientRaw.data?.raw_data as any;
+      setClientNotes(raw?.Notes || raw?.notes || null);
+      setAccountBalance(raw?.AccountBalance != null ? Number(raw.AccountBalance) : null);
+
+      // Upcoming appointments (Booked/Confirmed, in the future)
+      const nowISO = new Date().toISOString();
+      const upcoming = apptData
+        .filter(a => a.start_datetime >= nowISO && a.status !== 'Cancelled')
+        .sort((a, b) => a.start_datetime.localeCompare(b.start_datetime))
+        .slice(0, 5);
+      const stIdsForUpcoming = [...new Set(upcoming.map(a => a.session_type_id).filter(Boolean))] as string[];
+      const staffIdsForUpcoming = [...new Set(upcoming.map(a => a.staff_id).filter(Boolean))] as string[];
+      const [upcomingSt, upcomingStaff] = await Promise.all([
+        stIdsForUpcoming.length > 0 ? fetchByIds<{ id: string; name: string }>('session_types', 'id', stIdsForUpcoming, 'id, name') : Promise.resolve([]),
+        staffIdsForUpcoming.length > 0 ? fetchByIds<{ id: string; first_name: string; last_name: string }>('staff', 'id', staffIdsForUpcoming, 'id, first_name, last_name') : Promise.resolve([]),
+      ]);
+      const upcomingStMap = new Map(upcomingSt.map(s => [s.id, s.name]));
+      const upcomingStaffMap = new Map(upcomingStaff.map(s => [s.id, `${s.first_name} ${s.last_name}`]));
+      setUpcomingAppts(upcoming.map(a => ({
+        id: a.id,
+        start_datetime: a.start_datetime,
+        status: a.status || '',
+        session_type_name: a.session_type_id ? upcomingStMap.get(a.session_type_id) || '—' : '—',
+        staff_name: a.staff_id ? upcomingStaffMap.get(a.staff_id) || '—' : '—',
+      })));
 
       const poIds = svcData.map((s: any) => s.pricing_option_id).filter(Boolean);
       const staffIds = [...new Set(apptData.map(a => a.staff_id).filter(Boolean))] as string[];
@@ -785,6 +816,49 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
                     {selectedClient.email && <span>{selectedClient.email}</span>}
                     {selectedClient.mobile_phone && <span>{selectedClient.mobile_phone}</span>}
                   </div>
+                </div>
+              </div>
+
+              {/* Upcoming appointments, notes, account balance */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-5">
+                {/* Upcoming appointments */}
+                <div className="rounded-lg border border-slate-200 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Upcoming appointments</div>
+                  {upcomingAppts.length === 0 ? (
+                    <div className="text-sm text-slate-400">No upcoming bookings</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {upcomingAppts.map(a => (
+                        <div key={a.id} className="text-sm">
+                          <span className="font-medium text-slate-900">{formatDate(a.start_datetime)} {formatTime(a.start_datetime)}</span>
+                          <span className="text-slate-500"> — {a.session_type_name}</span>
+                          <div className="text-xs text-slate-400">{a.staff_name} · {a.status}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Client notes */}
+                <div className="rounded-lg border border-slate-200 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Notes</div>
+                  {clientNotes ? (
+                    <div className="text-sm text-slate-700 whitespace-pre-wrap">{clientNotes}</div>
+                  ) : (
+                    <div className="text-sm text-slate-400">No notes</div>
+                  )}
+                </div>
+
+                {/* Account balance */}
+                <div className="rounded-lg border border-slate-200 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Account balance</div>
+                  {accountBalance != null && accountBalance !== 0 ? (
+                    <div className={`text-lg font-bold ${accountBalance > 0 ? 'text-red-700' : 'text-emerald-700'}`}>
+                      {accountBalance > 0 ? 'Owes' : 'Credit'} {formatCurrency(Math.abs(accountBalance))}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-slate-400">No outstanding balance</div>
+                  )}
                 </div>
               </div>
 
