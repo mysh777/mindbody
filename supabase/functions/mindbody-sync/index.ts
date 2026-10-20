@@ -1415,10 +1415,19 @@ async function markStaleAppointments(supabase: any, startDateStr: string, endDat
 
 // Working time per staff; default window is previous, current and next month.
 // Mindbody reuses one Id for every occurrence of a recurring block, so the key includes the start.
-async function syncStaffSchedule(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number) {
+async function syncStaffSchedule(supabase: any, config: MindbodyConfig, userToken: string, report: SaveReport, year?: number, month?: number, scheduleWindow?: DateWindow) {
   const now = new Date();
-  const start = year && month ? new Date(Date.UTC(year, month - 1, 1)) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
-  const end = year && month ? new Date(Date.UTC(year, month, 0)) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 2, 0));
+  let start: Date, end: Date;
+  if (scheduleWindow) {
+    start = new Date(`${scheduleWindow.start}T00:00:00Z`);
+    end = new Date(`${scheduleWindow.end}T00:00:00Z`);
+  } else if (year && month) {
+    start = new Date(Date.UTC(year, month - 1, 1));
+    end = new Date(Date.UTC(year, month, 0));
+  } else {
+    start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+    end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 2, 0));
+  }
   const startStr = start.toISOString().split('T')[0];
   const endStr = end.toISOString().split('T')[0];
   console.log(`=== STAFF SCHEDULE SYNC ${startStr}..${endStr} ===`);
@@ -2831,10 +2840,13 @@ Deno.serve(async (req: Request) => {
 
       if (userToken && syncType === "refresh-today") {
         try {
-          console.log('\n--- Refresh Today: appointments for today+tomorrow ---');
+          console.log('\n--- Refresh Today: appointments + staff schedule for today+tomorrow ---');
           const w = windowFromToday(0, 1);
           results.appointments = await syncAppointments(supabase, config, userToken, saveReport, undefined, undefined, w);
           console.log(`✅ Refresh-today appointments: ${results.appointments}`);
+          // Staff schedule for today+tomorrow: one all-staff batch covers 2 days in a single request
+          results.staff_schedule = await syncStaffSchedule(supabase, config, userToken, saveReport, undefined, undefined, w);
+          console.log(`✅ Refresh-today staff schedule: ${results.staff_schedule}`);
         } catch (e) {
           console.error('❌ Refresh-today failed:', e);
           fail('refresh-today', e);
@@ -2844,7 +2856,8 @@ Deno.serve(async (req: Request) => {
 
       if (userToken && (shouldSyncAll || syncType === "staff_schedule")) {
         try {
-          results.staff_schedule = await syncStaffSchedule(supabase, config, userToken, saveReport, targetYear, targetMonth);
+          const schedWindow = scope === 'nightly' ? windowFromToday(0, 7) : scope === 'weekly' ? windowFromToday(0, 28) : undefined;
+          results.staff_schedule = await syncStaffSchedule(supabase, config, userToken, saveReport, targetYear, targetMonth, schedWindow);
         } catch (e) {
           console.error('❌ Staff schedule sync failed:', e);
           fail('staff_schedule', e);
