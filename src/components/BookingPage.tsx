@@ -101,7 +101,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 export function BookingPage() {
   const [tab, setTab] = useState<BookingTab>('calendar');
-  const ref = useReferenceData();
+  const data = useReferenceData();
 
   const tabs: { id: BookingTab; label: string; icon: typeof CalendarDays }[] = [
     { id: 'calendar', label: 'Appointment Book', icon: CalendarDays },
@@ -136,10 +136,10 @@ export function BookingPage() {
         </div>
       </div>
       <div className="flex-1 overflow-auto">
-        {tab === 'calendar' && <CalendarView ref={ref} />}
-        {tab === 'sales' && <DailySalesView ref={ref} />}
-        {tab === 'staff-schedule' && <StaffScheduleView ref={ref} />}
-        {tab === 'services' && <ServicesView ref={ref} />}
+        {tab === 'calendar' && <CalendarView data={data} />}
+        {tab === 'sales' && <DailySalesView data={data} />}
+        {tab === 'staff-schedule' && <StaffScheduleView data={data} />}
+        {tab === 'services' && <ServicesView data={data} />}
       </div>
     </div>
   );
@@ -147,9 +147,9 @@ export function BookingPage() {
 
 // ─── 2.1 Appointment Book ───
 
-interface CalendarProps { ref: ReturnType<typeof useReferenceData>; }
+interface CalendarProps { data: ReturnType<typeof useReferenceData>; }
 
-function CalendarView({ ref }: CalendarProps) {
+function CalendarView({ data }: CalendarProps) {
   const [date, setDate] = useState(todayStr());
   const [locationId, setLocationId] = useState<string>('all');
   const [showCancelled, setShowCancelled] = useState(false);
@@ -267,9 +267,9 @@ function CalendarView({ ref }: CalendarProps) {
   // Build columns: staff + resources grouped
   const columns = useMemo(() => {
     const staffWithAppts = new Set(visibleAppts.map(a => a.staff_id).filter(Boolean) as string[]);
-    const cols = ref.staffByLocation.filter(s => staffWithAppts.has(s.id) || locationId === 'all');
+    const cols = data.staffByLocation.filter(s => staffWithAppts.has(s.id) || locationId === 'all');
     return cols;
-  }, [visibleAppts, ref.staffByLocation, locationId]);
+  }, [visibleAppts, data.staffByLocation, locationId]);
 
   // Group schedule by staff
   const scheduleByStaff = useMemo(() => {
@@ -323,7 +323,7 @@ function CalendarView({ ref }: CalendarProps) {
           </div>
           <select value={locationId} onChange={e => setLocationId(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm">
             <option value="all">All locations</option>
-            {ref.locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+            {data.locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
           </select>
           <label className="flex items-center gap-1.5 text-sm text-slate-600">
             <input type="checkbox" checked={showCancelled} onChange={e => setShowCancelled(e.target.checked)} className="rounded" />
@@ -378,7 +378,7 @@ function CalendarView({ ref }: CalendarProps) {
                             onClick={() => setSelectedAppt(a)}
                             className={`mb-1 block w-full rounded border-l-2 px-1.5 py-1 text-left text-xs transition-shadow hover:shadow-sm ${STATUS_COLORS[a.status] || 'bg-slate-50 border-slate-200 text-slate-700'}`}
                           >
-                            <div className="font-medium">{apptTime(a.start_datetime)} {ref.sessionTypeMap.get(a.session_type_id)?.name?.split(' ').slice(0, 3).join(' ') || '—'}</div>
+                            <div className="font-medium">{apptTime(a.start_datetime)} {data.sessionTypeMap.get(a.session_type_id)?.name?.split(' ').slice(0, 3).join(' ') || '—'}</div>
                             <div className="truncate text-slate-600">{clientName(a.client_id)}</div>
                           </button>
                         ))}
@@ -396,7 +396,7 @@ function CalendarView({ ref }: CalendarProps) {
       {selectedAppt && (
         <ApptDetailsPanel
           appt={selectedAppt}
-          ref={ref}
+          data={data}
           clientNames={clientNames}
           clientDetails={clientDetails}
           clientServices={clientServices}
@@ -409,17 +409,17 @@ function CalendarView({ ref }: CalendarProps) {
 
 // ─── 2.2 Appointment Details Panel ───
 
-function ApptDetailsPanel({ appt, ref, clientNames, clientDetails, clientServices, onClose }: {
+function ApptDetailsPanel({ appt, data, clientNames, clientDetails, clientServices, onClose }: {
   appt: Appt;
-  ref: ReturnType<typeof useReferenceData>;
+  data: ReturnType<typeof useReferenceData>;
   clientNames: Record<string, string>;
   clientDetails: Map<string, ClientRow>;
   clientServices: ClientServiceRow[];
   onClose: () => void;
 }) {
-  const staff = appt.staff_id ? ref.staffMap.get(appt.staff_id) : null;
-  const loc = appt.location_id ? ref.locationMap.get(appt.location_id) : null;
-  const st = appt.session_type_id ? ref.sessionTypeMap.get(appt.session_type_id) : null;
+  const staff = appt.staff_id ? data.staffMap.get(appt.staff_id) : null;
+  const loc = appt.location_id ? data.locationMap.get(appt.location_id) : null;
+  const st = appt.session_type_id ? data.sessionTypeMap.get(appt.session_type_id) : null;
   const clientName = appt.client_id ? (clientNames[appt.client_id] || '…') : '—';
   const client = appt.client_id ? clientDetails.get(appt.client_id) : null;
   const balance = client?.raw_data?.AccountBalance;
@@ -490,7 +490,7 @@ function ApptDetailsPanel({ appt, ref, clientNames, clientDetails, clientService
 
 // ─── 2.4 Daily Sales ───
 
-function DailySalesView({ ref }: { ref: ReturnType<typeof useReferenceData> }) {
+function DailySalesView({ data }: { data: ReturnType<typeof useReferenceData> }) {
   const [date, setDate] = useState(todayStr());
   const [locationId, setLocationId] = useState('all');
   const [sales, setSales] = useState<any[]>([]);
@@ -507,9 +507,9 @@ function DailySalesView({ ref }: { ref: ReturnType<typeof useReferenceData> }) {
     const dayEnd = date + 'T23:59:59';
     let q = supabase.from('sales').select('*').gte('sale_datetime', dayStart).lte('sale_datetime', dayEnd).order('sale_datetime');
     if (locationId !== 'all') q = q.eq('location_id', locationId);
-    const { data, error } = await q;
+    const { data: salesRows, error } = await q;
     if (error) console.error(error);
-    setSales(data || []);
+    setSales(salesRows || []);
     // Use the same shared function as Overview so totals can never diverge
     const m = await computeMoneyReceived({ start: dayStart.slice(0, 10), end: dayEnd.slice(0, 10) }, locationId);
     setMoney(m);
@@ -532,7 +532,7 @@ function DailySalesView({ ref }: { ref: ReturnType<typeof useReferenceData> }) {
         </div>
         <select value={locationId} onChange={e => setLocationId(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm">
           <option value="all">All locations</option>
-          {ref.locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+          {data.locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
         </select>
       </div>
 
@@ -634,7 +634,7 @@ function DailySalesView({ ref }: { ref: ReturnType<typeof useReferenceData> }) {
 
 // ─── 2.5 Staff Schedules ───
 
-function StaffScheduleView({ ref }: { ref: ReturnType<typeof useReferenceData> }) {
+function StaffScheduleView({ data }: { data: ReturnType<typeof useReferenceData> }) {
   const [weekStart, setWeekStart] = useState(() => {
     const d = new Date();
     d.setUTCDate(d.getUTCDate() - d.getUTCDay());
@@ -695,7 +695,7 @@ function StaffScheduleView({ ref }: { ref: ReturnType<typeof useReferenceData> }
         <div className="py-12 text-center text-slate-500">Loading…</div>
       ) : (
         <div className="space-y-3">
-          {ref.staffByLocation.map(s => {
+          {data.staffByLocation.map(s => {
             const sched = staffSchedules.get(s.id) || [];
             const sAppts = staffAppts.get(s.id) || [];
             const availMinutes = sched.filter(sc => sc.kind === 'available').reduce((sum, sc) => sum + (new Date(sc.end_datetime).getTime() - new Date(sc.start_datetime).getTime()) / 60000, 0);
@@ -737,7 +737,7 @@ function StaffScheduleView({ ref }: { ref: ReturnType<typeof useReferenceData> }
 
 // ─── 2.6 Services & Prices ───
 
-function ServicesView({ ref }: { ref: ReturnType<typeof useReferenceData> }) {
+function ServicesView({ data }: { data: ReturnType<typeof useReferenceData> }) {
   const [pricingOptions, setPricingOptions] = useState<any[]>([]);
   const [staffSessionTypes, setStaffSessionTypes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -751,7 +751,7 @@ function ServicesView({ ref }: { ref: ReturnType<typeof useReferenceData> }) {
 
   const byCategory = useMemo(() => {
     const m = new Map<string, { st: SessionTypeRow; options: any[] }[]>();
-    for (const st of ref.sessionTypes) {
+    for (const st of data.sessionTypes) {
       if (!st.name) continue;
       const cat = st.raw_data?.Category || 'Other';
       const options = pricingOptions.filter(po => po.program_id === st.program_id || po.name?.includes(st.name?.split(' ')[0] || '___'));
@@ -760,11 +760,11 @@ function ServicesView({ ref }: { ref: ReturnType<typeof useReferenceData> }) {
       m.set(cat, arr);
     }
     return m;
-  }, [ref.sessionTypes, pricingOptions]);
+  }, [data.sessionTypes, pricingOptions]);
 
   const staffForSessionType = (stId: string) => {
     const staffIds = staffSessionTypes.filter(sst => sst.session_type_id === stId).map(sst => sst.staff_id);
-    return staffIds.map(id => ref.staffMap.get(id)).filter(Boolean);
+    return staffIds.map(id => data.staffMap.get(id)).filter(Boolean);
   };
 
   if (loading) return <div className="py-12 text-center text-slate-500">Loading…</div>;
