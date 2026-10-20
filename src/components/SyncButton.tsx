@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import { SyncCostConfirm } from './SyncCostConfirm';
 import { estimateCalls } from '../utils/mindbodyUsage';
+import { getAuthHeaders } from '../lib/authHeaders';
 import { RefreshCw, Users, Calendar, DollarSign, MapPin, UserCog, Package, Database, Grid3x3, Tag, ShoppingCart, Link2, FileText, ChevronDown, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 
 interface SyncButtonProps {
