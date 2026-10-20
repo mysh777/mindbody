@@ -6,6 +6,7 @@ import { computeMoneyReceived, type MoneyReceived } from '../hooks/useSalesMargi
 import { loadUsage } from '../utils/mindbodyUsage';
 import { CalendarDays, Clock, Users, DollarSign, Calendar, Scissors, RefreshCw, ChevronLeft, ChevronRight, Phone, AlertCircle, Wallet, Package, X, MapPin, Printer } from 'lucide-react';
 import { handlePrint } from '../utils/printReport';
+import { formatApptTime, formatApptDate } from '../utils/formatDateTime';
 
 // ─── Types ───
 
@@ -41,6 +42,7 @@ function useReferenceData() {
   const [locations, setLocations] = useState<LocationRow[]>([]);
   const [sessionTypes, setSessionTypes] = useState<SessionTypeRow[]>([]);
   const [resources, setResources] = useState<ResourceRow[]>([]);
+  const [excludedNames, setExcludedNames] = useState<string[]>(['Admin', 'Test', 'Sauna Test']);
 
   useEffect(() => {
     Promise.all([
@@ -49,32 +51,41 @@ function useReferenceData() {
       fetchAllRows<SessionTypeRow>('session_types', 'id, name, default_duration_minutes, raw_data'),
       fetchAllRows<ResourceRow>('resources', 'id, name, location_id, resource_type'),
     ]).then(([s, l, st, r]) => { setStaff(s); setLocations(l); setSessionTypes(st); setResources(r); });
+    supabase.from('booking_settings').select('excluded_staff_names').eq('id', 1).maybeSingle()
+      .then(({ data }) => { if (data?.excluded_staff_names) setExcludedNames(data.excluded_staff_names); });
   }, []);
 
   const staffMap = useMemo(() => new Map(staff.map(s => [s.id, s])), [staff]);
   const locationMap = useMemo(() => new Map(locations.map(l => [l.id, l])), [locations]);
   const sessionTypeMap = useMemo(() => new Map(sessionTypes.map(st => [st.id, st])), [sessionTypes]);
   const resourceMap = useMemo(() => new Map(resources.map(r => [r.id, r])), [resources]);
-  const staffByLocation = useMemo(() => {
-    // Group Aquabike / device staff separately
-    const real = staff.filter(s => Number(s.mindbody_id) > 0 && !s.first_name.startsWith('Aquabike'));
-    return real;
-  }, [staff]);
 
-  return { staff, locations, sessionTypes, resources, staffMap, locationMap, sessionTypeMap, resourceMap, staffByLocation };
+  const isExcluded = useCallback((s: StaffRow) => {
+    const full = `${s.first_name} ${s.last_name}`.toLowerCase();
+    return excludedNames.some(n => full.includes(n.toLowerCase()));
+  }, [excludedNames]);
+
+  const staffByLocation = useMemo(() => staff.filter(s => !isExcluded(s)), [staff, isExcluded]);
+
+  return { staff, locations, sessionTypes, resources, staffMap, locationMap, sessionTypeMap, resourceMap, staffByLocation, isExcluded, excludedNames };
 }
 
-// ─── Time helpers (no timezone shift; Mindbody returns UTC, display as-is) ───
+// ─── Time helpers (UTC — no timezone shift; DB stores studio-local time tagged as UTC) ───
 
 function apptTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toTimeString().slice(0, 5);
+  return formatApptTime(iso);
 }
 function apptHour(iso: string): number {
-  return new Date(iso).getHours();
+  const d = new Date(iso);
+  return d.getUTCHours();
+}
+function apptMinute(iso: string): number {
+  const d = new Date(iso);
+  return d.getUTCMinutes();
 }
 function toLocalDate(iso: string): string {
-  return new Date(iso).toISOString().slice(0, 10);
+  const d = new Date(iso);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 }
 function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
@@ -91,10 +102,11 @@ function fmtDate(dateStr: string): string {
 
 const STATUS_COLORS: Record<string, string> = {
   'Booked': 'bg-blue-100 border-blue-400 text-blue-900',
-  'Confirmed': 'bg-blue-100 border-blue-400 text-blue-900',
+  'Confirmed': 'bg-emerald-100 border-emerald-400 text-emerald-900',
   'Arrived': 'bg-green-100 border-green-400 text-green-900',
   'Completed': 'bg-green-100 border-green-400 text-green-900',
-  'NoShow': 'bg-red-100 border-red-400 text-red-900',
+  'NoShow': 'bg-rose-100 border-rose-400 text-rose-900',
+  'No-Show': 'bg-rose-100 border-rose-400 text-rose-900',
   'Cancelled': 'bg-slate-100 border-slate-300 text-slate-500 line-through',
 };
 
@@ -166,18 +178,19 @@ function CalendarView({ data }: CalendarProps) {
   const [scheduleItems, setScheduleItems] = useState<ScheduleItem[]>([]);
   const [clientServices, setClientServices] = useState<ClientServiceRow[]>([]);
   const printRef = useRef<HTMLDivElement>(null);
+  const { isExcluded } = data;
 
   const REFRESH_COOLDOWN_MS = 15 * 60 * 1000;
 
   // Shared cooldown — read from database so all users see the same lock
   const checkCooldown = useCallback(async () => {
-    const { data } = await supabase
+    const { data: cd } = await supabase
       .from('booking_refresh_state')
       .select('last_refresh_at')
       .eq('id', 1)
       .maybeSingle();
-    if (data?.last_refresh_at) {
-      const ts = new Date(data.last_refresh_at).getTime();
+    if (cd?.last_refresh_at) {
+      const ts = new Date(cd.last_refresh_at).getTime();
       const elapsed = Date.now() - ts;
       setRefreshBlocked(elapsed < REFRESH_COOLDOWN_MS);
       setLastRefresh(new Date(ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }));
@@ -201,9 +214,9 @@ function CalendarView({ data }: CalendarProps) {
     const dayEnd = date + 'T23:59:59Z';
     let q = supabase.from('appointments').select('*').gte('start_datetime', dayStart).lte('start_datetime', dayEnd).order('start_datetime');
     if (locationId !== 'all') q = q.eq('location_id', locationId);
-    const { data, error } = await q;
+    const { data: apptRows, error } = await q;
     if (error) { console.error(error); setAppts([]); }
-    else setAppts((data || []) as Appt[]);
+    else setAppts((apptRows || []) as Appt[]);
 
     // Load schedule items for the same day
     const { data: sched } = await supabase
@@ -266,12 +279,22 @@ function CalendarView({ data }: CalendarProps) {
     [appts, showCancelled]
   );
 
-  // Build columns: staff + resources grouped
+  // Build columns: only staff/resources with activity that day, filtered by location + exclusion
   const columns = useMemo(() => {
-    const staffWithAppts = new Set(visibleAppts.map(a => a.staff_id).filter(Boolean) as string[]);
-    const cols = data.staffByLocation.filter(s => staffWithAppts.has(s.id) || locationId === 'all');
-    return cols;
-  }, [visibleAppts, data.staffByLocation, locationId]);
+    const activeIds = new Set<string>();
+    visibleAppts.forEach(a => { if (a.staff_id) activeIds.add(a.staff_id); });
+    scheduleItems.forEach(s => { if (s.staff_id) activeIds.add(s.staff_id); });
+
+    return data.staffByLocation.filter(s => {
+      if (!activeIds.has(s.id)) return false;
+      if (locationId !== 'all') {
+        const hasApptHere = visibleAppts.some(a => a.staff_id === s.id && a.location_id === locationId);
+        const hasSchedHere = scheduleItems.some(si => si.staff_id === s.id && si.location_id === locationId);
+        if (!hasApptHere && !hasSchedHere) return false;
+      }
+      return true;
+    });
+  }, [visibleAppts, scheduleItems, data.staffByLocation, locationId]);
 
   // Group schedule by staff
   const scheduleByStaff = useMemo(() => {
@@ -284,18 +307,16 @@ function CalendarView({ data }: CalendarProps) {
     return m;
   }, [scheduleItems]);
 
-  // Hours range
+  // Hours range — default 08:00–20:00, expand if appointments/schedules go beyond
   const hours = useMemo(() => {
-    if (visibleAppts.length === 0) return [8, 20];
-    let min = 23, max = 0;
+    let min = 8, max = 20;
     for (const a of visibleAppts) {
       min = Math.min(min, apptHour(a.start_datetime));
-      max = Math.max(max, apptHour(a.end_datetime) + 1);
+      max = Math.max(max, apptHour(a.end_datetime) + (apptMinute(a.end_datetime) > 0 ? 1 : 0));
     }
-    // Also consider schedule items
     for (const s of scheduleItems) {
       min = Math.min(min, apptHour(s.start_datetime));
-      max = Math.max(max, apptHour(s.end_datetime) + 1);
+      max = Math.max(max, apptHour(s.end_datetime) + (apptMinute(s.end_datetime) > 0 ? 1 : 0));
     }
     return [Math.max(0, min), Math.min(23, max)];
   }, [visibleAppts, scheduleItems]);
@@ -382,9 +403,15 @@ function CalendarView({ data }: CalendarProps) {
                   {columns.map(s => {
                     const staffAppts = visibleAppts.filter(a => a.staff_id === s.id && apptHour(a.start_datetime) === h);
                     const staffSched = (scheduleByStaff.get(s.id) || []).filter(sc => apptHour(sc.start_datetime) <= h && apptHour(sc.end_datetime) > h);
-                    const isOff = staffSched.some(sc => sc.kind === 'unavailable');
+                    const unavailBlocks = staffSched.filter(sc => sc.kind === 'unavailable');
+                    const isOff = unavailBlocks.length > 0;
                     return (
-                      <div key={s.id} className={`relative w-40 shrink-0 border-l border-slate-100 px-1 py-1 ${isOff ? 'bg-slate-100' : ''}`}>
+                      <div key={s.id} className={`relative w-40 shrink-0 border-l border-slate-100 px-1 py-1 ${isOff ? 'bg-slate-200/60' : ''}`}>
+                        {isOff && staffAppts.length === 0 && (
+                          <div className="rounded bg-slate-200 px-1.5 py-1 text-xs text-slate-500">
+                            {unavailBlocks[0]?.description || 'Unavailable'}
+                          </div>
+                        )}
                         {staffAppts.map(a => (
                           <button
                             key={a.id}
@@ -393,6 +420,7 @@ function CalendarView({ data }: CalendarProps) {
                           >
                             <div className="font-medium">{apptTime(a.start_datetime)} {data.sessionTypeMap.get(a.session_type_id)?.name?.split(' ').slice(0, 3).join(' ') || '—'}</div>
                             <div className="truncate text-slate-600">{clientName(a.client_id)}</div>
+                            {a.status === 'NoShow' && <div className="text-[10px] font-medium text-rose-600">No-Show</div>}
                           </button>
                         ))}
                       </div>
@@ -425,8 +453,9 @@ function CalendarView({ data }: CalendarProps) {
                 {columns.map(s => {
                   const staffAppts = visibleAppts.filter(a => a.staff_id === s.id && apptHour(a.start_datetime) === h);
                   const staffSched = (scheduleByStaff.get(s.id) || []).filter(sc => apptHour(sc.start_datetime) <= h && apptHour(sc.end_datetime) > h);
-                  const isOff = staffSched.some(sc => sc.kind === 'unavailable');
-                  if (isOff && staffAppts.length === 0) return <td key={s.id} style={{ background: '#f5f5f5', color: '#999' }}>Off</td>;
+                  const unavailBlocks = staffSched.filter(sc => sc.kind === 'unavailable');
+                  const isOff = unavailBlocks.length > 0;
+                  if (isOff && staffAppts.length === 0) return <td key={s.id} style={{ background: '#f5f5f5', color: '#999' }}>{unavailBlocks[0]?.description || 'Unavailable'}</td>;
                   if (staffAppts.length === 0) return <td key={s.id}></td>;
                   return (
                     <td key={s.id}>
@@ -436,7 +465,8 @@ function CalendarView({ data }: CalendarProps) {
                           {data.sessionTypeMap.get(a.session_type_id)?.name?.split(' ').slice(0, 3).join(' ') || '—'}
                           <br />
                           <span style={{ color: '#666' }}>{clientName(a.client_id)}</span>
-                          {a.status && a.status !== 'Booked' && (
+                          {a.status === 'NoShow' && <span style={{ color: '#c33', fontSize: 9 }}> · No-Show</span>}
+                          {a.status && a.status !== 'Booked' && a.status !== 'NoShow' && (
                             <span style={{ color: '#999', fontSize: 9 }}> · {a.status}</span>
                           )}
                         </div>
