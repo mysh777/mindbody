@@ -24,33 +24,36 @@
     display: block !important;
     font-family: Georgia, 'Times New Roman', serif;
     color: #1a1a1a;
-    font-size: 11px;
-    line-height: 1.5;
-    padding: 20px;
+    font-size: 9pt;
+    line-height: 1.35;
+    padding: 0;
   }
 
-  @page { size: landscape; margin: 12mm 10mm; }
+  /* Default landscape; .print-portrait overrides */
+  @page { size: A4 landscape; margin: 8mm 7mm; }
+  .print-clone.print-portrait { }
+  .print-clone.print-portrait ~ * { }
 
   .print-clone thead { display: table-header-group; }
   .print-clone tfoot { display: table-row-group; }
   .print-clone tr:not(:has(table)) { break-inside: avoid; }
   .print-clone h1, .print-clone h2, .print-clone h3 { break-after: avoid; }
-  .print-clone .recharts-wrapper { break-inside: avoid; }
+  .print-clone .recharts-wrapper { break-inside: avoid; max-height: 6cm; }
 
-  .print-clone h1 { font-size: 18px; margin-bottom: 4px; }
-  .print-clone .pr-sub { color: #666; margin-bottom: 20px; font-size: 12px; }
+  .print-clone h1 { font-size: 12pt; margin-bottom: 2px; }
+  .print-clone .pr-sub { color: #666; margin-bottom: 8px; font-size: 8pt; }
   .print-clone h2 {
-    font-size: 13px; text-transform: uppercase; letter-spacing: 1px;
-    border-bottom: 2px solid #333; padding-bottom: 4px; margin: 20px 0 8px;
+    font-size: 10pt; text-transform: uppercase; letter-spacing: 0.5px;
+    border-bottom: 1.5px solid #333; padding-bottom: 2px; margin: 10px 0 4px;
   }
-  .print-clone table { border-collapse: collapse; width: 100%; margin-bottom: 12px; }
+  .print-clone table { border-collapse: collapse; width: 100%; margin-bottom: 6px; }
   .print-clone th,
-  .print-clone td { border: 1px solid #ccc; padding: 4px 6px; text-align: left; font-size: 10px; }
+  .print-clone td { border: 1px solid #ccc; padding: 2px 4px; text-align: left; font-size: 8.5pt; }
   .print-clone th {
     background: #f0f0f0 !important; font-weight: bold;
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
-  .print-clone .pr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 24px; max-width: 380px; }
+  .print-clone .pr-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 16px; max-width: 380px; }
   .print-clone .pr-grid dt { color: #666; }
   .print-clone .pr-grid dd { font-weight: bold; text-align: right; margin: 0; }
   .print-clone .text-right { text-align: right; }
@@ -58,28 +61,27 @@
     font-weight: bold; background: #f0f0f0 !important;
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
-  .print-clone .pr-staff-section { page-break-inside: avoid; margin-top: 16px; }
+  .print-clone .pr-staff-section { page-break-inside: avoid; margin-top: 8px; }
   .print-clone .pr-svc-row td { font-weight: 600; background: #fafafa !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .print-clone .pr-visit-header > td { border: none; padding: 0 0 0 16px; }
-  .print-clone .pr-visit-table { width: 100%; margin: 0 0 6px; border-collapse: collapse; }
+  .print-clone .pr-visit-header > td { border: none; padding: 0 0 0 12px; }
+  .print-clone .pr-visit-table { width: 100%; margin: 0 0 4px; border-collapse: collapse; }
   .print-clone .pr-visit-table th,
-  .print-clone .pr-visit-table td { font-size: 8.5px; padding: 2px 5px; border: 1px solid #ddd; }
-  .print-clone .pr-visit-table th { background: #f8f8f8 !important; font-weight: 600; text-transform: uppercase; font-size: 7.5px; letter-spacing: 0.5px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .print-clone .pr-visit-table td { font-size: 7.5pt; padding: 1px 4px; border: 1px solid #ddd; }
+  .print-clone .pr-visit-table th { background: #f8f8f8 !important; font-weight: 600; text-transform: uppercase; font-size: 7pt; letter-spacing: 0.3px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .print-clone .pr-visit-table .text-right { text-align: right; }
   .print-clone .pr-grand-total {
-    margin-top: 24px; padding-top: 12px;
-    border-top: 3px double #333;
+    margin-top: 12px; padding-top: 6px;
+    border-top: 2px double #333;
   }
-  .print-clone .pr-grand-total .pr-grid dd { font-size: 12px; }
+  .print-clone .pr-grand-total .pr-grid dd { font-size: 10pt; }
 
   .print-clone.owner-print {
     font-family: inherit;
-    font-size: 11px;
+    font-size: 9pt;
     padding: 0;
-    zoom: 0.88;
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
-  .print-clone.owner-print > * + * { margin-top: 12px; }
+  .print-clone.owner-print > * + * { margin-top: 8px; }
   .print-clone.print-summary .summary-hide { display: none !important; }
   .print-clone:not(.print-summary) .summary-only { display: none !important; }
   .print-clone.owner-print section.owner-breakable { break-inside: auto; }
@@ -89,10 +91,17 @@
   .print-clone.owner-print table { margin-bottom: 0; }
   .print-clone.owner-print .recharts-responsive-container,
   .print-clone.owner-print .recharts-wrapper,
-  .print-clone.owner-print svg.recharts-surface { max-width: 100% !important; }
+  .print-clone.owner-print svg.recharts-surface { max-width: 100% !important; max-height: 6cm; }
   .print-clone.owner-print th,
-  .print-clone.owner-print td { border: none; font-size: 9.5px; padding: 3px 6px; }
+  .print-clone.owner-print td { border: none; font-size: 8.5pt; padding: 2px 4px; }
   .print-clone.owner-print th,
   .print-clone.owner-print td:not(.heat-cell) { background: transparent !important; }
   .print-clone.owner-print .text-right { text-align: right; }
+}
+
+/* Portrait @page override — applied when .print-portrait is on the clone.
+   Browsers don't support per-element @page, so we use a second @page rule
+   that only takes effect when the body has a portrait clone. */
+@media print {
+  body:has(.print-clone.print-portrait) { }
 }

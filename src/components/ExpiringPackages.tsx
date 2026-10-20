@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { handlePrint } from '../utils/printReport';
+import { handlePrint, buildPrintFileName, todayPeriod } from '../utils/printReport';
 import { supabase } from '../lib/supabase';
 import { fetchAllPages } from '../lib/fetchAllPages';
 import { fetchByIds } from '../lib/fetchByIds';
@@ -264,7 +264,7 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
         });
       }
     }
-    exportToExcel(data, 'expiring_packages');
+    exportToExcel(data, buildPrintFileName({ report: 'Expiring-Packages', period: todayPeriod(), location: 'All locations', detail: filter }));
   };
 
   return (
@@ -335,7 +335,7 @@ export function ExpiringPackages({ onViewClient, urlParams, onParamsChange }: Ex
                   Excel
                 </button>
                 <button
-                  onClick={() => handlePrint(containerRef)}
+                  onClick={() => handlePrint(containerRef, { fileName: buildPrintFileName({ report: 'Expiring-Packages', period: todayPeriod(), location: 'All locations', detail: filter }) })}
                   className="px-4 py-2 bg-slate-600 text-white rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors flex items-center gap-2"
                 >
                   <Printer className="w-4 h-4" />

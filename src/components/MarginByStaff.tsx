@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { handlePrint } from '../utils/printReport';
+import { handlePrint, buildPrintFileName, rangePeriod } from '../utils/printReport';
 import { formatApptDate, formatApptTime } from '../utils/formatDateTime';
 import { Users, ArrowUpDown, AlertTriangle, Sparkles, Loader2, ChevronDown, ChevronRight, Search, X, Download, Printer } from 'lucide-react';
 import { CopyLinkButton } from './CopyLinkButton';
@@ -8,7 +8,6 @@ import { useSalesMarginData } from '../hooks/useSalesMarginData';
 import { formatCurrency } from '../utils/salesFilters';
 import { exportToExcel } from '../utils/exportExcel';
 
-import type { ByStaffRow, AppointmentRow } from '../hooks/useSalesMarginData';
 
 import { type DatePreset, getPresetDates } from '../utils/datePresets';
 import { DateRangePicker } from './DateRangePicker';
@@ -216,7 +215,7 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
       'Gross margin (EUR)': Number(totals.margin.toFixed(2)),
       'Gross margin (%)': Number(totals.marginPercent.toFixed(1)),
     });
-    exportToExcel(data, 'margin_by_staff');
+    exportToExcel(data, buildPrintFileName({ report: 'Margin-by-Staff', period: rangePeriod(dateRange.start, dateRange.end), location: locationName }));
   };
 
   const handleExportVisits = () => {
@@ -236,10 +235,10 @@ export function MarginByStaff({ urlParams, onParamsChange }: MarginByStaffProps)
       'Staff cost (EUR)': Number(a.staffCost.toFixed(2)),
       'Gross margin (EUR)': a.margin != null ? Number(a.margin.toFixed(2)) : '',
       'Price basis': !a.hasRevenueData ? 'No price data' : a.isEstimated ? 'Estimated' : 'Package / sale',
-    })), 'margin_by_staff_visits');
+    })), buildPrintFileName({ report: 'Margin-by-Staff', period: rangePeriod(dateRange.start, dateRange.end), location: locationName, detail: 'visits' }));
   };
 
-  const onPrint = () => handlePrint(containerRef);
+  const onPrint = () => handlePrint(containerRef, { fileName: buildPrintFileName({ report: 'Margin-by-Staff', period: rangePeriod(dateRange.start, dateRange.end), location: locationName }) });
 
   const SH = ({ field, label }: { field: SortField; label: string }) => (
     <th className="px-4 py-3 text-right font-semibold text-slate-600 cursor-pointer hover:text-slate-900 select-none" onClick={() => toggleSort(field)}>

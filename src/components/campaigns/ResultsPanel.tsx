@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarRange, FileSpreadsheet, Loader2, Printer, RefreshCw } from 'lucide-react';
 import { LocationFilter } from '../LocationFilter';
-import { handlePrint } from '../../utils/printReport';
+import { handlePrint, buildPrintFileName, rangePeriod } from '../../utils/printReport';
 import { toLocalISO } from '../../utils/datePresets';
 import { computeCampaign, type CampaignResult, type PeriodMode } from '../../utils/campaignResults';
 import { exportCampaign } from '../../utils/campaignExport';
@@ -93,7 +93,7 @@ export function ResultsPanel({ list, members, onViewClient }: ResultsPanelProps)
                 className="px-4 py-2 bg-white text-emerald-700 border border-emerald-600 rounded-lg text-sm font-medium hover:bg-emerald-50 transition-colors flex items-center gap-2">
                 <FileSpreadsheet className="w-4 h-4" />Excel
               </button>
-              <button onClick={() => handlePrint(printRef)}
+              <button onClick={() => handlePrint(printRef, { fileName: buildPrintFileName({ report: 'Campaign', period: rangePeriod(range.start, range.end), location: locationLabel, detail: list.name }) })}
                 className="px-4 py-2 bg-white text-slate-700 border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors flex items-center gap-2">
                 <Printer className="w-4 h-4" />Print / PDF
               </button>

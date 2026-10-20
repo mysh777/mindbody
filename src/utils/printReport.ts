@@ -32,7 +32,7 @@ function makeChartsScalable(root: HTMLElement) {
     svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
     svg.removeAttribute('width');
     svg.removeAttribute('height');
-    svg.style.cssText = `display:block;width:100%;height:auto;aspect-ratio:${w} / ${h};`;
+    svg.style.cssText = `display:block;width:100%;height:auto;aspect-ratio:${w} / ${h};max-height:6cm;`;
 
     for (let el: HTMLElement | null = wrapper; el && el !== root; el = el.parentElement) {
       el.style.width = '100%';
@@ -51,7 +51,77 @@ function makeChartsScalable(root: HTMLElement) {
   root.querySelectorAll<HTMLElement>('.recharts-tooltip-wrapper').forEach(el => el.remove());
 }
 
-export function handlePrint(containerRef: React.RefObject<HTMLElement | null>, options: { summary?: boolean } = {}) {
+// ─── File-name builder ───
+
+function stripDiacritics(s: string): string {
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function safeName(s: string): string {
+  return stripDiacritics(s)
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 40);
+}
+
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function compactRange(start: string, end: string): string {
+  if (start === end) return start;
+  if (start.slice(0, 7) === end.slice(0, 7)) return start.slice(0, 7);
+  return `${start}_${end}`;
+}
+
+export interface PrintFileNameParts {
+  report: string;
+  period?: string;
+  location?: string;
+  detail?: string;
+}
+
+export function buildPrintFileName(parts: PrintFileNameParts): string {
+  const segments = [
+    'BREEZE',
+    safeName(parts.report),
+    parts.period ? safeName(parts.period) : todayISO(),
+    parts.location ? safeName(parts.location) : 'All',
+    parts.detail ? safeName(parts.detail) : '',
+  ].filter(Boolean);
+  const name = segments.join('_').slice(0, 80);
+  return name;
+}
+
+// Helper for single-month periods (YYYY-MM)
+export function monthPeriod(monthStr: string): string {
+  return monthStr;
+}
+
+// Helper for date ranges
+export function rangePeriod(start: string, end: string): string {
+  return compactRange(start, end);
+}
+
+export function locationLabel(id: string, fallback?: string): string {
+  if (!id || id === 'all') return 'All';
+  return fallback || id;
+}
+
+export function todayPeriod(): string {
+  return todayISO();
+}
+
+// ─── Print dispatcher ───
+
+export interface PrintOptions {
+  summary?: boolean;
+  fileName?: string;
+  orientation?: 'portrait' | 'landscape';
+}
+
+export function handlePrint(containerRef: React.RefObject<HTMLElement | null>, options: PrintOptions = {}) {
   const source = containerRef.current?.querySelector('.print-report');
   if (!source) {
     window.print();
@@ -62,14 +132,27 @@ export function handlePrint(containerRef: React.RefObject<HTMLElement | null>, o
   clone.classList.remove('hidden', 'print-report');
   clone.classList.add('print-clone');
   if (options.summary) clone.classList.add('print-summary');
+  if (options.orientation === 'portrait') clone.classList.add('print-portrait');
   clone.style.display = 'block';
   isolateSvgIds(clone);
   makeChartsScalable(clone);
   document.body.appendChild(clone);
 
+  const prevTitle = document.title;
+  if (options.fileName) {
+    document.title = options.fileName;
+  }
+
+  const cleanup = () => {
+    document.title = prevTitle;
+    clone.remove();
+  };
+
   try {
     window.print();
   } finally {
-    document.body.removeChild(clone);
+    // afterprint fires in most browsers; fallback timeout covers Safari/edge cases
+    window.addEventListener('afterprint', cleanup, { once: true });
+    setTimeout(cleanup, 500);
   }
 }

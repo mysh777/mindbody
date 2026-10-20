@@ -5,7 +5,7 @@ import { loadClientNames } from '../lib/clientNames';
 import { computeMoneyReceived, type MoneyReceived } from '../hooks/useSalesMarginData';
 import { loadUsage } from '../utils/mindbodyUsage';
 import { CalendarDays, Clock, Users, DollarSign, Calendar, Scissors, RefreshCw, ChevronLeft, ChevronRight, Phone, AlertCircle, Wallet, Package, X, MapPin, Printer } from 'lucide-react';
-import { handlePrint } from '../utils/printReport';
+import { handlePrint, buildPrintFileName } from '../utils/printReport';
 import { formatApptTime, formatApptDate } from '../utils/formatDateTime';
 
 // ─── Types ───
@@ -334,7 +334,7 @@ function CalendarView({ data }: CalendarProps) {
   const clientName = (id: string | null) => id ? (clientNames[id] || '…') : '—';
   const locationLabel = locationId === 'all' ? 'All locations' : (data.locationMap.get(locationId)?.name || '');
 
-  const onPrint = () => handlePrint(printRef);
+  const onPrint = () => handlePrint(printRef, { fileName: buildPrintFileName({ report: 'Appointment-Book', period: date, location: locationLabel }) });
 
   return (
     <div className="flex h-full" ref={printRef}>

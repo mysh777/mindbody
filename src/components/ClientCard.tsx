@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
-import { handlePrint } from '../utils/printReport';
+import { handlePrint, buildPrintFileName, rangePeriod } from '../utils/printReport';
 import { supabase } from '../lib/supabase';
 import { fetchAllPages } from '../lib/fetchAllPages';
 import { fetchByIds } from '../lib/fetchByIds';
@@ -612,7 +612,7 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
       });
     }
 
-    const fname = `client_${selectedClient.first_name}_${selectedClient.last_name}`;
+    const fname = buildPrintFileName({ report: 'Client-Card', period: rangePeriod(startDate, endDate), location: locationName || 'All locations', detail: `${selectedClient.first_name}_${selectedClient.last_name}` });
     exportMultiSheetExcel(
       [
         { name: 'Summary', data: summaryRows },
@@ -623,7 +623,7 @@ export function ClientCard({ urlParams, onParamsChange }: ClientCardProps) {
     );
   };
 
-  const onPrint = () => handlePrint(printRef);
+  const onPrint = () => handlePrint(printRef, { fileName: buildPrintFileName({ report: 'Client-Card', period: rangePeriod(startDate, endDate), location: locationName || 'All locations', detail: selectedClient ? `${selectedClient.first_name}_${selectedClient.last_name}` : undefined }) });
 
   // ── Date preset buttons ──
 

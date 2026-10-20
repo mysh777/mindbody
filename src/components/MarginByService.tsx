@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { handlePrint } from '../utils/printReport';
+import { handlePrint, buildPrintFileName, rangePeriod } from '../utils/printReport';
 import { TrendingUp, ArrowUpDown, AlertTriangle, Sparkles, Loader2, Search, X, Download, Printer, ChevronDown, ChevronRight } from 'lucide-react';
 import { CopyLinkButton } from './CopyLinkButton';
 import { LoadErrorBanner } from './LoadErrorBanner';
@@ -11,7 +11,6 @@ import { formatApptDate, formatApptTime } from '../utils/formatDateTime';
 import { fetchByIds } from '../lib/fetchByIds';
 import { TariffSalesList, TariffVisitsList, type TariffSale } from './MarginByServiceDetails';
 
-import type { ByServiceRow, AppointmentRow } from '../hooks/useSalesMarginData';
 
 import { type DatePreset, getPresetDates } from '../utils/datePresets';
 import { DateRangePicker } from './DateRangePicker';
@@ -461,7 +460,7 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
         'Sales − Staff cost (EUR)': Number(mergedTotals.margin.toFixed(2)),
         'Sales − Staff cost (%)': Number(mergedTotals.marginPercent.toFixed(1)),
       });
-      exportToExcel(data, 'margin_by_procedure_sale_date');
+      exportToExcel(data, buildPrintFileName({ report: 'Margin-by-Service', period: rangePeriod(dateRange.start, dateRange.end), location: locationName, detail: 'sale-date' }));
     } else {
       if (visitFlatSorted.length === 0) return;
       const data = visitFlatSorted.map(r => ({
@@ -486,7 +485,7 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
         'Gross margin (%)': Number(visitTotals.marginPercent.toFixed(1)),
         'Revenue earned / visit': Number(visitTotals.avgRevPerVisit.toFixed(2)),
       });
-      exportToExcel(data, 'margin_by_procedure_visit_date');
+      exportToExcel(data, buildPrintFileName({ report: 'Margin-by-Service', period: rangePeriod(dateRange.start, dateRange.end), location: locationName, detail: 'visit-date' }));
     }
   };
 
@@ -516,7 +515,7 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
           });
         }
       }
-      exportToExcel(data, 'margin_by_service_sales');
+      exportToExcel(data, buildPrintFileName({ report: 'Margin-by-Service', period: rangePeriod(dateRange.start, dateRange.end), location: locationName, detail: 'sales' }));
     } else {
       const data = visitFlatSorted.flatMap(r => (visitsByKey.get(r.pricingOptionKey) || []).map(a => ({
         'Category': r.categoryName || 'Uncategorized',
@@ -531,11 +530,11 @@ export function MarginByService({ urlParams, onParamsChange }: MarginByServicePr
         'Gross margin (EUR)': a.margin != null ? Number(a.margin.toFixed(2)) : '',
         'Price basis': !a.hasRevenueData ? 'No price data' : a.isEstimated ? 'Estimated' : 'Package / sale',
       })));
-      exportToExcel(data, 'margin_by_service_visits');
+      exportToExcel(data, buildPrintFileName({ report: 'Margin-by-Service', period: rangePeriod(dateRange.start, dateRange.end), location: locationName, detail: 'visits' }));
     }
   };
 
-  const onPrint = () => handlePrint(containerRef);
+  const onPrint = () => handlePrint(containerRef, { fileName: buildPrintFileName({ report: 'Margin-by-Service', period: rangePeriod(dateRange.start, dateRange.end), location: locationName, detail: revenueBasis === 'sale_date' ? 'sale-date' : 'visit-date' }) });
 
   const SH = ({ field, label }: { field: SortField; label: string }) => (
     <th className="px-4 py-3 text-right font-semibold text-slate-600 cursor-pointer hover:text-slate-900 select-none" onClick={() => toggleSort(field)}>

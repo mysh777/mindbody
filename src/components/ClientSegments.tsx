@@ -10,7 +10,7 @@ import {
 } from '../utils/clientSegments';
 import { PagePurpose } from './PageHeader';
 import { ClientSegmentsPrint, exportAllSegments, SEGMENTS, monthLabel, pct } from './ClientSegmentsReport';
-import { handlePrint } from '../utils/printReport';
+import { handlePrint, buildPrintFileName, monthPeriod } from '../utils/printReport';
 
 interface ClientSegmentsProps {
   onViewClient?: (clientId: string) => void;
@@ -217,7 +217,7 @@ export function ClientSegments({ onViewClient, urlParams, onParamsChange, onOpen
                     Excel (all)
                   </button>
                   <button
-                    onClick={() => handlePrint(containerRef)}
+                    onClick={() => handlePrint(containerRef, { fileName: buildPrintFileName({ report: 'Client-Segments', period: endMonth, location: locationLabel }) })}
                     className="px-4 py-2 bg-white text-slate-700 border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors flex items-center gap-2"
                   >
                     <Printer className="w-4 h-4" />

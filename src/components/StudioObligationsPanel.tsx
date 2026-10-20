@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, Download, Loader2, Printer, Search, Users, Wallet, Ticket } from 'lucide-react';
-import { handlePrint } from '../utils/printReport';
+import { handlePrint, buildPrintFileName, todayPeriod } from '../utils/printReport';
 import { fetchByIds } from '../lib/fetchByIds';
 import { loadStudioObligations, type ClientObligation, type ObligationsSummary } from '../utils/obligations';
 import { exportToExcel } from '../utils/exportExcel';
@@ -87,7 +87,7 @@ export function StudioObligationsPanel({ onOpenClient }: Props) {
       'Obligations (EUR)': Number(r.value.toFixed(2)),
       'Paid-price Part (EUR)': Number(r.paidPart.toFixed(2)),
       'Next Expiry': r.nextExpiry || '',
-    })), 'client_obligations');
+    })), buildPrintFileName({ report: 'Studio-Obligations', period: todayPeriod(), location: 'All locations' }));
   };
 
   const SortHead = ({ k, label, align = 'left' }: { k: SortKey; label: string; align?: 'left' | 'right' }) => (
@@ -156,7 +156,7 @@ export function StudioObligationsPanel({ onOpenClient }: Props) {
                 <button onClick={handleExport} className="inline-flex items-center gap-2 px-3 py-2 text-sm border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors">
                   <Download className="w-4 h-4" /> Export Excel
                 </button>
-                <button onClick={() => handlePrint(printRef)} className="inline-flex items-center gap-2 px-3 py-2 text-sm border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors">
+                <button onClick={() => handlePrint(printRef, { fileName: buildPrintFileName({ report: 'Studio-Obligations', period: todayPeriod(), location: 'All locations' }) })} className="inline-flex items-center gap-2 px-3 py-2 text-sm border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 transition-colors">
                   <Printer className="w-4 h-4" /> Print / PDF
                 </button>
               </div>

@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
-import { handlePrint } from '../utils/printReport';
+import { handlePrint, buildPrintFileName, todayPeriod } from '../utils/printReport';
 import { formatApptDate } from '../utils/formatDateTime';
 import { supabase } from '../lib/supabase';
 import { fetchAllPages } from '../lib/fetchAllPages';
@@ -474,7 +474,7 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
         });
       }
     }
-    exportToExcel(data, 'sleeping_clients');
+    exportToExcel(data, buildPrintFileName({ report: 'Sleeping-Clients', period: todayPeriod(), location: 'All locations', detail: onlyWithPackage ? 'with-package' : undefined }));
   };
 
   // ── Group filter toggle ──
@@ -588,7 +588,7 @@ export function SleepingClients({ onViewClient, urlParams, onParamsChange }: Sle
                   Excel
                 </button>
                 <button
-                  onClick={() => handlePrint(containerRef)}
+                  onClick={() => handlePrint(containerRef, { fileName: buildPrintFileName({ report: 'Sleeping-Clients', period: todayPeriod(), location: 'All locations', detail: onlyWithPackage ? 'with-package' : undefined }) })}
                   className="px-4 py-2 bg-slate-600 text-white rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors flex items-center gap-2"
                 >
                   <Printer className="w-4 h-4" />

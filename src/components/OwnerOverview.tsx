@@ -6,7 +6,7 @@ import { OwnerOverviewCharts } from './OwnerOverviewCharts';
 import { OwnerMoneyBreakdown } from './OwnerMoneyBreakdown';
 import { OwnerStaffLoad } from './OwnerStaffLoad';
 import { OwnerHeatmap } from './OwnerHeatmap';
-import { handlePrint } from '../utils/printReport';
+import { handlePrint, buildPrintFileName } from '../utils/printReport';
 import { toLocalISO } from '../utils/datePresets';
 import { loadStudioObligations, type ObligationsSummary } from '../utils/obligations';
 import { OVERVIEW_LOCATIONS, SERIES_START_MONTH, loadOverviewSeries, monthsBetween, requestOverviewRecompute, seriesKey, type MonthMetrics, type OverviewSeries } from '../utils/ownerOverview';
@@ -189,7 +189,7 @@ export function OwnerOverview({ urlParams, onParamsChange, onOpenReport }: Owner
             {recomputing ? 'Recalculating…' : 'Recalculate'}
           </button>
           <button
-            onClick={() => handlePrint(containerRef, { summary: true })}
+            onClick={() => handlePrint(containerRef, { summary: true, fileName: buildPrintFileName({ report: 'Overview-summary', period: month, location: locationLabel }), orientation: 'portrait' })}
             disabled={!m}
             title="Short version: key figures, charts, top 10 staff"
             className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-white border border-slate-200 text-slate-700 rounded-lg shadow-sm hover:bg-slate-50 disabled:opacity-50 transition-colors"
@@ -198,7 +198,7 @@ export function OwnerOverview({ urlParams, onParamsChange, onOpenReport }: Owner
             Print summary
           </button>
           <button
-            onClick={() => handlePrint(containerRef)}
+            onClick={() => handlePrint(containerRef, { fileName: buildPrintFileName({ report: 'Overview', period: month, location: locationLabel }), orientation: 'portrait' })}
             disabled={!m}
             title="Everything on the page, including the full staff table"
             className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-sky-700 text-white rounded-lg shadow-sm hover:bg-sky-800 disabled:opacity-50 transition-colors"
