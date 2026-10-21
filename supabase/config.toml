@@ -6,3 +6,6 @@ verify_jwt = true
 
 [functions.overview-totals]
 verify_jwt = false
+
+[functions.reconciliation-nightly]
+verify_jwt = false

@@ -38,6 +38,24 @@ export interface ProvisionalMonth {
   unspentDeposits: number;
 }
 
+export interface AutoConfirmEntry {
+  period: string;
+  checkType: 'reference' | 'case' | 'baseline_drift' | 'stored_totals';
+  checkKey: string;
+  originalExpected: number;
+  actualValue: number;
+  diff: number;
+  explanation: string;
+  fifoDetails: { client: string; date: string; amount: number }[];
+}
+
+export interface NotificationSettings {
+  emailRecipients: string;
+  notifyRedReconciliation: boolean;
+  notifySyncErrors: boolean;
+  notifyDataIssues: boolean;
+}
+
 export interface CaseCheck {
   caseNumber: number;
   description: string;
@@ -97,6 +115,7 @@ export interface ReconciliationResult {
   storedTotals: StoredTotalsCheck[];
   provisionalMonths: ProvisionalMonth[];
   provisionalMismatches: number;
+  autoConfirmed: AutoConfirmEntry[];
   allOk: boolean;
   checkedAt: string;
   baselineExists: boolean;
@@ -673,6 +692,218 @@ async function withTimeoutRetry<T extends { errors: string[] }>(cache: SalesCach
   return result;
 }
 
+interface FifoExplanation {
+  client: string;
+  date: string;
+  amount: number;
+}
+
+function collectFifoExplanations(
+  cache: SalesCache,
+  cases: CaseCheck[],
+  references: RefCheck[],
+  provisionalMonths: ProvisionalMonth[],
+): Map<string, FifoExplanation[]> {
+  const explanations = new Map<string, FifoExplanation[]>();
+  const provisionalPeriods = new Set(provisionalMonths.map(m => m.period));
+
+  for (const c of cases) {
+    if (!c.provisional || !c.clientId) continue;
+    const entry = cache.get(`${c.period}|all`);
+    if (!entry || !entry.ok) continue;
+    const ctKey = `${c.clientId}|${c.tariffName}`;
+    const ct = entry.result.clientTariffBreakdown.get(ctKey);
+    if (!ct) continue;
+    const fifoDetails = ct.details
+      .filter(d => d.rule === 'fifo')
+      .map(d => ({ client: c.clientId!, date: d.saleDate, amount: Math.round(d.amount * 100) / 100 }));
+    if (fifoDetails.length > 0) {
+      explanations.set(`case_${c.caseNumber}`, fifoDetails);
+    }
+  }
+
+  for (const r of references) {
+    if (!r.provisional || r.metric !== 'sales_total') continue;
+    const entry = cache.get(`${r.period}|${r.location}`);
+    if (!entry || !entry.ok) continue;
+    const allFifo: FifoExplanation[] = [];
+    for (const [, ct] of entry.result.clientTariffBreakdown) {
+      for (const d of ct.details) {
+        if (d.rule === 'fifo') {
+          allFifo.push({ client: '', date: d.saleDate, amount: Math.round(d.amount * 100) / 100 });
+        }
+      }
+    }
+    if (allFifo.length > 0) {
+      explanations.set(`ref_${r.metric}_${r.period}_${r.location}`, allFifo);
+    }
+  }
+
+  return explanations;
+}
+
+async function loadClientNames(clientIds: string[]): Promise<Map<string, string>> {
+  if (clientIds.length === 0) return new Map();
+  const names = new Map<string, string>();
+  const unique = [...new Set(clientIds)].filter(id => id);
+  const { data } = await supabase
+    .from('clients')
+    .select('id, first_name, last_name')
+    .in('id', unique.slice(0, 200));
+  for (const c of data || []) {
+    names.set(c.id, `${c.first_name || ''} ${c.last_name || ''}`.trim() || c.id);
+  }
+  return names;
+}
+
+async function performAutoConfirm(
+  cache: SalesCache,
+  references: RefCheck[],
+  cases: CaseCheck[],
+  baselineDrifts: BaselineDrift[],
+  storedTotals: StoredTotalsCheck[],
+  provisionalMonths: ProvisionalMonth[],
+): Promise<AutoConfirmEntry[]> {
+  const confirmed: AutoConfirmEntry[] = [];
+  const fifoExplanations = collectFifoExplanations(cache, cases, references, provisionalMonths);
+
+  const allClientIds = [...fifoExplanations.values()].flatMap(list => list.map(e => e.client).filter(Boolean));
+  const clientNames = await loadClientNames(allClientIds);
+
+  for (const c of cases) {
+    if (!c.provisional) continue;
+    const growth = c.actualValue != null && c.expectedValue != null ? c.actualValue - c.expectedValue : null;
+    if (growth == null || growth <= 0.005) continue;
+    const fifoDetails = fifoExplanations.get(`case_${c.caseNumber}`) || [];
+    const totalFifo = fifoDetails.reduce((s, d) => s + d.amount, 0);
+    if (Math.abs(totalFifo - growth) > 0.01) continue;
+
+    const explanationParts = fifoDetails.map(d => {
+      const name = d.client ? (clientNames.get(d.client) || d.client) : 'unknown';
+      return `deposit spent by ${name}, ${d.date}, ${fmt2(d.amount)}`;
+    });
+    confirmed.push({
+      period: c.period, checkType: 'case', checkKey: `case_${c.caseNumber}`,
+      originalExpected: c.expectedValue ?? 0, actualValue: c.actualValue ?? 0, diff: growth,
+      explanation: `Auto-confirmed: ${explanationParts.join('; ')}`,
+      fifoDetails: fifoDetails.map(d => ({ client: d.client, date: d.date, amount: d.amount })),
+    });
+  }
+
+  for (const r of references) {
+    if (!r.provisional || r.metric !== 'sales_total' || r.diff == null || r.diff <= 0.005) continue;
+    const fifoDetails = fifoExplanations.get(`ref_${r.metric}_${r.period}_${r.location}`) || [];
+    const totalFifo = fifoDetails.reduce((s, d) => s + d.amount, 0);
+    if (Math.abs(totalFifo - r.diff) > 0.01) continue;
+    confirmed.push({
+      period: r.period, checkType: 'reference', checkKey: `${r.metric}|${r.location}`,
+      originalExpected: r.expected, actualValue: r.actual ?? 0, diff: r.diff,
+      explanation: `Auto-confirmed: ${fifoDetails.length} deposit spending(s) totaling ${fmt2(totalFifo)}`,
+      fifoDetails: fifoDetails.map(d => ({ client: d.client, date: d.date, amount: d.amount })),
+    });
+  }
+
+  return confirmed;
+}
+
+function fmt2(n: number): string {
+  return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(n);
+}
+
+async function applyAutoConfirmations(confirmed: AutoConfirmEntry[]): Promise<void> {
+  if (confirmed.length === 0) return;
+
+  const refUpdates: { period: string; metric: string; location: string; value: number }[] = [];
+  for (const c of confirmed) {
+    if (c.checkType === 'reference' && c.checkKey.includes('sales_total')) {
+      const [metric, location] = c.checkKey.split('|');
+      refUpdates.push({ period: c.period, metric, location, value: c.actualValue });
+    }
+  }
+  if (refUpdates.length > 0) {
+    await supabase.from('reconciliation_references').upsert(
+      refUpdates,
+      { onConflict: 'period,metric,location' },
+    );
+  }
+
+  const caseUpdates: { case_number: number; expected_value: number }[] = [];
+  for (const c of confirmed) {
+    if (c.checkType === 'case') {
+      const caseNum = parseInt(c.checkKey.replace('case_', ''), 10);
+      caseUpdates.push({ case_number: caseNum, expected_value: c.actualValue });
+    }
+  }
+  if (caseUpdates.length > 0) {
+    for (const cu of caseUpdates) {
+      await supabase.from('reconciliation_cases')
+        .update({ expected_value: cu.expected_value })
+        .eq('case_number', cu.case_number);
+    }
+  }
+
+  await supabase.from('reconciliation_auto_confirm_log').insert(
+    confirmed.map(c => ({
+      period: c.period,
+      check_type: c.checkType,
+      check_key: c.checkKey,
+      original_expected: c.originalExpected,
+      actual_value: c.actualValue,
+      diff: c.diff,
+      explanation: c.explanation,
+      fifo_details: c.fifoDetails,
+    })),
+  );
+}
+
+export async function loadAutoConfirmLog(): Promise<AutoConfirmEntry[]> {
+  const { data, error } = await supabase
+    .from('reconciliation_auto_confirm_log')
+    .select('period, check_type, check_key, original_expected, actual_value, diff, explanation, fifo_details, confirmed_at')
+    .order('confirmed_at', { ascending: false })
+    .limit(50);
+  if (error || !data) return [];
+  return data.map((r: Record<string, unknown>) => ({
+    period: r.period as string,
+    checkType: r.check_type as AutoConfirmEntry['checkType'],
+    checkKey: r.check_key as string,
+    originalExpected: Number(r.original_expected),
+    actualValue: Number(r.actual_value),
+    diff: Number(r.diff),
+    explanation: r.explanation as string,
+    fifoDetails: (r.fifo_details as { client: string; date: string; amount: number }[]) || [],
+  }));
+}
+
+export async function loadNotificationSettings(): Promise<NotificationSettings | null> {
+  const { data } = await supabase
+    .from('notification_settings')
+    .select('email_recipients, notify_red_reconciliation, notify_sync_errors, notify_data_issues')
+    .eq('id', 1)
+    .maybeSingle();
+  if (!data) return null;
+  return {
+    emailRecipients: data.email_recipients || '',
+    notifyRedReconciliation: data.notify_red_reconciliation ?? true,
+    notifySyncErrors: data.notify_sync_errors ?? true,
+    notifyDataIssues: data.notify_data_issues ?? true,
+  };
+}
+
+export async function saveNotificationSettings(settings: NotificationSettings): Promise<boolean> {
+  const { error } = await supabase
+    .from('notification_settings')
+    .update({
+      email_recipients: settings.emailRecipients,
+      notify_red_reconciliation: settings.notifyRedReconciliation,
+      notify_sync_errors: settings.notifySyncErrors,
+      notify_data_issues: settings.notifyDataIssues,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', 1);
+  return !error;
+}
+
 export async function runReconciliationCheck(): Promise<ReconciliationResult> {
   const cache: SalesCache = new Map();
   const allErrors: string[] = [];
@@ -708,6 +939,27 @@ export async function runReconciliationCheck(): Promise<ReconciliationResult> {
     references.filter(r => r.provisional).length + cases.filter(c => c.provisional).length +
     baselineDrifts.filter(d => d.provisional).length + storedTotals.filter(s => s.provisional).length;
 
+  let autoConfirmed: AutoConfirmEntry[] = [];
+  if (provisionalMismatches > 0 && allErrors.length === 0) {
+    try {
+      autoConfirmed = await performAutoConfirm(cache, references, cases, baselineDrifts, storedTotals, provisionalMonths);
+      if (autoConfirmed.length > 0) {
+        await applyAutoConfirmations(autoConfirmed);
+        for (const c of cases) {
+          const match = autoConfirmed.find(a => a.checkKey === `case_${c.caseNumber}`);
+          if (match) { c.ok = true; c.provisional = false; }
+        }
+        for (const r of references) {
+          const match = autoConfirmed.find(a => a.checkKey === `${r.metric}|${r.location}` && a.period === r.period);
+          if (match) { r.ok = true; r.provisional = false; }
+        }
+      }
+    } catch (err) {
+      // Auto-confirm failure should not block the check result
+      allErrors.push(`Auto-confirm failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   const hasErrors = allErrors.length > 0;
   const allOk =
     !hasErrors &&
@@ -723,7 +975,7 @@ export async function runReconciliationCheck(): Promise<ReconciliationResult> {
 
   return {
     references, baselineDrifts, cases, unknownPaymentTypes, tariffQuality, storedTotals,
-    provisionalMonths, provisionalMismatches, allOk, checkedAt: new Date().toISOString(), baselineExists,
+    provisionalMonths, provisionalMismatches, autoConfirmed, allOk, checkedAt: new Date().toISOString(), baselineExists,
     errors: [...new Set(allErrors)],
   };
 }

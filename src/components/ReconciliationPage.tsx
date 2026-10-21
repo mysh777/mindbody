@@ -2,6 +2,9 @@ import { useState, useCallback, Fragment } from 'react';
 import {
   useReconciliationStatus,
   saveReconciliationBaseline,
+  loadAutoConfirmLog,
+  loadNotificationSettings,
+  saveNotificationSettings,
   type RefCheck,
   type CaseCheck,
   type BaselineDrift,
@@ -9,6 +12,8 @@ import {
   type TariffQualityCheck,
   type StoredTotalsCheck,
   type ProvisionalMonth,
+  type AutoConfirmEntry,
+  type NotificationSettings,
   TARIFF_QUALITY_THRESHOLD_PCT,
   type ReconciliationResult,
 } from '../hooks/useReconciliationData';
@@ -27,6 +32,8 @@ import {
   ChevronRight,
   Info,
   Hourglass,
+  Zap,
+  Bell,
 } from 'lucide-react';
 
 const fmt = (n: number) =>
@@ -454,6 +461,102 @@ function AddReferenceForm({ onAdded }: { onAdded: () => void }) {
   );
 }
 
+function AutoConfirmedPanel({ entries }: { entries: AutoConfirmEntry[] }) {
+  if (entries.length === 0) return null;
+  return (
+    <div className="px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-lg">
+      <div className="flex items-center gap-2 text-sm font-medium text-emerald-900">
+        <Zap className="w-4 h-4 text-emerald-600 shrink-0" /> Auto-confirmed ({entries.length})
+      </div>
+      <p className="text-xs text-emerald-800 mt-1 pl-6">
+        These mismatches were fully explained by deposit spending (FIFO) in our data. The reference values and baseline were updated automatically.
+      </p>
+      <div className="mt-2 pl-6 space-y-1">
+        {entries.map((e, i) => (
+          <div key={i} className="text-xs text-emerald-800">
+            <span className="font-mono">{e.period}</span> · {e.checkType} ·
+            <span className="font-medium"> {fmt2(e.diff)}</span> —
+            {e.explanation}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function fmt2(n: number) {
+  return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(n);
+}
+
+function NotificationSettingsPanel() {
+  const [settings, setSettings] = useState<NotificationSettings | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    loadNotificationSettings().then(setSettings);
+  }, []);
+
+  if (!settings) return null;
+
+  const handleSave = async () => {
+    setSaving(true);
+    const ok = await saveNotificationSettings(settings);
+    setSaving(false);
+    setSaved(ok);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+        <Bell className="w-4 h-4 text-slate-600" />
+        <span className="font-semibold text-slate-800">Email Notifications</span>
+      </div>
+      <div className="px-4 py-3 space-y-3">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">Recipients (comma-separated)</label>
+          <input
+            type="text"
+            value={settings.emailRecipients}
+            onChange={(e) => setSettings({ ...settings, emailRecipients: e.target.value })}
+            placeholder="owner@example.com"
+            className="w-full px-3 py-1.5 text-sm border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          />
+        </div>
+        <div className="space-y-2">
+          {([
+            ['notifyRedReconciliation', 'Red reconciliation (mismatches found)'],
+            ['notifySyncErrors', 'Sync errors (sync step fails)'],
+            ['notifyDataIssues', 'Data quality issues (tariff coverage, unknown payment types)'],
+          ] as const).map(([key, label]) => (
+            <label key={key} className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={settings[key]}
+                onChange={(e) => setSettings({ ...settings, [key]: e.target.checked })}
+                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 rounded-md transition-colors"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            Save settings
+          </button>
+          {saved && <span className="text-xs text-emerald-600">Saved</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export interface ReconciliationPageProps {
   onResultChange?: (result: ReconciliationResult | null) => void;
 }
@@ -466,6 +569,7 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
   const [savingBaseline, setSavingBaseline] = useState(false);
   const [baselineMsg, setBaselineMsg] = useState<string | null>(null);
   const [showAddRef, setShowAddRef] = useState(false);
+  const [autoConfirmLog, setAutoConfirmLog] = useState<AutoConfirmEntry[]>([]);
 
   const toggle = (key: string) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
 
@@ -586,6 +690,8 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
             </div>
           )}
 
+          {result.autoConfirmed.length > 0 && <AutoConfirmedPanel entries={result.autoConfirmed} />}
+
           {result.provisionalMonths.length > 0 && <ProvisionalMonthsPanel months={result.provisionalMonths} />}
 
           {tariffFails.some(t => !t.error) && (
@@ -687,6 +793,8 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
               </div>
             )}
           </div>
+
+          <NotificationSettingsPanel />
         </>
       )}
     </div>
