@@ -1,4 +1,4 @@
-import { useState, useCallback, Fragment } from 'react';
+import { useState, useCallback, useEffect, Fragment } from 'react';
 import {
   useReconciliationStatus,
   saveReconciliationBaseline,
@@ -577,6 +577,10 @@ export function ReconciliationPage({ onResultChange }: ReconciliationPageProps) 
     const r = await check();
     onResultChange?.(r ?? null);
   }, [check, onResultChange]);
+
+  useEffect(() => {
+    loadAutoConfirmLog().then(setAutoConfirmLog).catch(() => {});
+  }, [result]);
 
   const handleSaveBaseline = useCallback(async () => {
     if (!result || !result.allOk) return;
