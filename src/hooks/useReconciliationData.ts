@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { computeSalesByDateData, type SalesByDateResult, type ClientTariffDetail } from './useSalesByDateData';
+import { computeSalesByDateData, type SalesByDateResult, type ClientTariffDetail, type DepositClientData, loadDepositClientData } from './useSalesByDateData';
 import { computeStaffCostByLocation, computeStaffCostByStaff, computeMoneyReceived, computeTariffCoverage, type MoneyReceived } from './useSalesMarginData';
 import type { DateRange } from '../utils/salesFilters';
 import { computeOverviewMonths, loadStoredOverviewRows, type MonthMetrics } from '../utils/ownerOverview';
@@ -140,6 +140,27 @@ type SalesCache = Map<string, SalesCacheEntry>;
 
 const moneyCache = new WeakMap<SalesCache, Map<string, Promise<MoneyReceived>>>();
 
+// Shared preloaded deposit-client data — loaded once per reconciliation run and passed to
+// every computeSalesByDateData call so the per-client fetch loop is skipped.
+let sharedDepositData: DepositClientData | null = null;
+let sharedDepositDataPromise: Promise<DepositClientData> | null = null;
+
+export async function getSharedDepositData(): Promise<DepositClientData> {
+  if (sharedDepositData) return sharedDepositData;
+  if (!sharedDepositDataPromise) {
+    sharedDepositDataPromise = loadDepositClientData().then(d => {
+      sharedDepositData = d;
+      return d;
+    });
+  }
+  return sharedDepositDataPromise;
+}
+
+export function resetSharedDepositData() {
+  sharedDepositData = null;
+  sharedDepositDataPromise = null;
+}
+
 function getMoneyForPeriod(cache: SalesCache, period: string, location: string): Promise<MoneyReceived> {
   if (!moneyCache.has(cache)) moneyCache.set(cache, new Map());
   const perCache = moneyCache.get(cache)!;
@@ -150,12 +171,12 @@ function getMoneyForPeriod(cache: SalesCache, period: string, location: string):
 
 const MONEY_BASELINE_KEYS: (keyof MoneyReceived)[] = ['cashIn', 'cashInGiftCards', 'cashInDeposits', 'paidFromAccount', 'paidByGiftCard'];
 
-async function getSalesForPeriod(cache: SalesCache, period: string, location: string): Promise<SalesCacheEntry> {
+async function getSalesForPeriod(cache: SalesCache, period: string, location: string, depositData?: DepositClientData): Promise<SalesCacheEntry> {
   const key = `${period}|${location}`;
   if (cache.has(key)) return cache.get(key)!;
   try {
     const dateRange = periodToDateRange(period);
-    const result = await computeSalesByDateData(dateRange, location);
+    const result = await computeSalesByDateData(dateRange, location, depositData);
     const entry: SalesCacheEntry = { ok: true, result };
     cache.set(key, entry);
     return entry;
@@ -183,7 +204,7 @@ async function loadReferences(): Promise<{ refs: ReferenceRow[]; error: string |
   return { refs: data || [], error: null };
 }
 
-async function evaluateReferences(refs: ReferenceRow[], cache: SalesCache): Promise<{ checks: RefCheck[]; errors: string[] }> {
+async function evaluateReferences(refs: ReferenceRow[], cache: SalesCache, depositData?: DepositClientData): Promise<{ checks: RefCheck[]; errors: string[] }> {
   const checks: RefCheck[] = [];
   const errors: string[] = [];
   for (const ref of refs) {
@@ -191,7 +212,7 @@ async function evaluateReferences(refs: ReferenceRow[], cache: SalesCache): Prom
     let checkError: string | null = null;
 
     if (ref.metric === 'sales_total' || ref.metric === 'sales_qty') {
-      const entry = await getSalesForPeriod(cache, ref.period, ref.location);
+      const entry = await getSalesForPeriod(cache, ref.period, ref.location, depositData);
       if (!entry.ok) {
         checkError = entry.error;
         errors.push(entry.error);
@@ -235,7 +256,7 @@ async function evaluateReferences(refs: ReferenceRow[], cache: SalesCache): Prom
   return { checks, errors };
 }
 
-async function checkBaseline(cache: SalesCache, periods: string[]): Promise<{ drifts: BaselineDrift[]; exists: boolean; errors: string[] }> {
+async function checkBaseline(cache: SalesCache, periods: string[], depositData?: DepositClientData): Promise<{ drifts: BaselineDrift[]; exists: boolean; errors: string[] }> {
   if (periods.length === 0) return { drifts: [], exists: false, errors: [] };
   const { data: baselines, error: fetchErr } = await supabase
     .from('reconciliation_baseline')
@@ -249,7 +270,7 @@ async function checkBaseline(cache: SalesCache, periods: string[]): Promise<{ dr
   const errors: string[] = [];
   for (const b of baselines) {
     if (b.report === 'sales_by_tariff') {
-      const entry = await getSalesForPeriod(cache, b.period, b.location);
+      const entry = await getSalesForPeriod(cache, b.period, b.location, depositData);
       if (!entry.ok) {
         errors.push(entry.error);
         continue;
@@ -318,7 +339,7 @@ async function checkBaseline(cache: SalesCache, periods: string[]): Promise<{ dr
   return { drifts, exists: true, errors };
 }
 
-async function checkCases(cache: SalesCache): Promise<{ checks: CaseCheck[]; errors: string[] }> {
+async function checkCases(cache: SalesCache, depositData?: DepositClientData): Promise<{ checks: CaseCheck[]; errors: string[] }> {
   const { data: cases, error: fetchErr } = await supabase
     .from('reconciliation_cases')
     .select('*')
@@ -334,7 +355,7 @@ async function checkCases(cache: SalesCache): Promise<{ checks: CaseCheck[]; err
     let clientDetails: ClientTariffDetail[] = [];
     let checkError: string | null = null;
 
-    const entry = await getSalesForPeriod(cache, c.period, c.location);
+    const entry = await getSalesForPeriod(cache, c.period, c.location, depositData);
     if (!entry.ok) {
       checkError = entry.error;
       errors.push(entry.error);
@@ -481,11 +502,11 @@ const DEPOSIT_SENSITIVE_REF_METRICS = new Set(['sales_total', 'sales_qty']);
 const DEPOSIT_SENSITIVE_STORED_METRICS = new Set<string>(['salesByService']);
 
 // Sales by service credits a deposit's month only as the balance is spent, so a month with unspent deposits keeps changing.
-async function findProvisionalMonths(cache: SalesCache, periods: string[]): Promise<{ months: ProvisionalMonth[]; errors: string[] }> {
+async function findProvisionalMonths(cache: SalesCache, periods: string[], depositData?: DepositClientData): Promise<{ months: ProvisionalMonth[]; errors: string[] }> {
   const months: ProvisionalMonth[] = [];
   const errors: string[] = [];
   for (const period of [...new Set(periods)].sort()) {
-    const entry = await getSalesForPeriod(cache, period, 'all');
+    const entry = await getSalesForPeriod(cache, period, 'all', depositData);
     if (!entry.ok) { errors.push(entry.error); continue; }
     const unspent = Math.round(entry.result.unallocatedAmount * 100) / 100;
     if (unspent >= 0.01) months.push({ period, unspentDeposits: unspent });
@@ -555,8 +576,8 @@ export interface BaselinePlan {
   summary: string[];
 }
 
-export async function buildBaselinePlan(refs: ReferenceRow[], cache: SalesCache = new Map()): Promise<BaselinePlan> {
-  const { checks } = await evaluateReferences(refs, cache);
+export async function buildBaselinePlan(refs: ReferenceRow[], cache: SalesCache = new Map(), depositData?: DepositClientData): Promise<BaselinePlan> {
+  const { checks } = await evaluateReferences(refs, cache, depositData);
   const byPeriod = new Map<string, RefCheck[]>();
   for (const c of checks) {
     if (!byPeriod.has(c.period)) byPeriod.set(c.period, []);
@@ -580,7 +601,7 @@ export async function buildBaselinePlan(refs: ReferenceRow[], cache: SalesCache 
 
     const salesLocations = new Set(periodChecks.filter(c => c.metric === 'sales_total' || c.metric === 'sales_qty').map(c => c.location));
     for (const location of salesLocations) {
-      const entry = await getSalesForPeriod(cache, period, location);
+      const entry = await getSalesForPeriod(cache, period, location, depositData);
       if (!entry.ok) throw new Error(entry.error);
       for (const r of entry.result.rows) {
         rows.push({
@@ -635,7 +656,9 @@ export async function saveReconciliationBaseline(): Promise<BaselineSaveResult> 
   const { refs, error: loadErr } = await loadReferences();
   if (loadErr) return { ok: false, message: loadErr };
 
-  const plan = await buildBaselinePlan(refs);
+  let depositData: DepositClientData | undefined;
+  try { depositData = await getSharedDepositData(); } catch { /* fallback to per-client fetch */ }
+  const plan = await buildBaselinePlan(refs, new Map(), depositData);
   const skippedNote = plan.skippedPeriods.length > 0
     ? ` Skipped (references not matching): ${plan.skippedPeriods.map(s => s.period).join(', ')}.`
     : '';
@@ -694,29 +717,42 @@ async function withTimeoutRetry<T extends { errors: string[] }>(cache: SalesCach
 
 interface FifoExplanation {
   client: string;
-  date: string;
+  date: string;   // spending (debit) date
   amount: number;
+  depositDate: string; // credit (deposit) date — must fall within the reference month
 }
 
+function periodEnd(period: string): string {
+  const [y, m] = period.split('-').map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  return `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+}
+
+// Collects FIFO spending that explains a provisional growth: only entries where the deposit
+// (credit) was made within the reference month and the spending (debit) happened AFTER the month.
 function collectFifoExplanations(
   cache: SalesCache,
   cases: CaseCheck[],
   references: RefCheck[],
-  provisionalMonths: ProvisionalMonth[],
 ): Map<string, FifoExplanation[]> {
   const explanations = new Map<string, FifoExplanation[]>();
-  const provisionalPeriods = new Set(provisionalMonths.map(m => m.period));
 
   for (const c of cases) {
     if (!c.provisional || !c.clientId) continue;
     const entry = cache.get(`${c.period}|all`);
     if (!entry || !entry.ok) continue;
+    const pEnd = periodEnd(c.period);
     const ctKey = `${c.clientId}|${c.tariffName}`;
     const ct = entry.result.clientTariffBreakdown.get(ctKey);
     if (!ct) continue;
     const fifoDetails = ct.details
-      .filter(d => d.rule === 'fifo')
-      .map(d => ({ client: c.clientId!, date: d.saleDate, amount: Math.round(d.amount * 100) / 100 }));
+      .filter(d => d.rule === 'fifo' && d.debitDate && d.debitDate > pEnd)
+      .map(d => ({
+        client: c.clientId!,
+        date: d.debitDate!,
+        amount: Math.round(d.amount * 100) / 100,
+        depositDate: d.saleDate,
+      }));
     if (fifoDetails.length > 0) {
       explanations.set(`case_${c.caseNumber}`, fifoDetails);
     }
@@ -726,11 +762,18 @@ function collectFifoExplanations(
     if (!r.provisional || r.metric !== 'sales_total') continue;
     const entry = cache.get(`${r.period}|${r.location}`);
     if (!entry || !entry.ok) continue;
+    const pEnd = periodEnd(r.period);
     const allFifo: FifoExplanation[] = [];
-    for (const [, ct] of entry.result.clientTariffBreakdown) {
+    for (const [ctKey, ct] of entry.result.clientTariffBreakdown) {
+      const clientId = ctKey.split('|')[0];
       for (const d of ct.details) {
-        if (d.rule === 'fifo') {
-          allFifo.push({ client: '', date: d.saleDate, amount: Math.round(d.amount * 100) / 100 });
+        if (d.rule === 'fifo' && d.debitDate && d.debitDate > pEnd) {
+          allFifo.push({
+            client: clientId,
+            date: d.debitDate,
+            amount: Math.round(d.amount * 100) / 100,
+            depositDate: d.saleDate,
+          });
         }
       }
     }
@@ -760,12 +803,9 @@ async function performAutoConfirm(
   cache: SalesCache,
   references: RefCheck[],
   cases: CaseCheck[],
-  baselineDrifts: BaselineDrift[],
-  storedTotals: StoredTotalsCheck[],
-  provisionalMonths: ProvisionalMonth[],
 ): Promise<AutoConfirmEntry[]> {
   const confirmed: AutoConfirmEntry[] = [];
-  const fifoExplanations = collectFifoExplanations(cache, cases, references, provisionalMonths);
+  const fifoExplanations = collectFifoExplanations(cache, cases, references);
 
   const allClientIds = [...fifoExplanations.values()].flatMap(list => list.map(e => e.client).filter(Boolean));
   const clientNames = await loadClientNames(allClientIds);
@@ -795,10 +835,15 @@ async function performAutoConfirm(
     const fifoDetails = fifoExplanations.get(`ref_${r.metric}_${r.period}_${r.location}`) || [];
     const totalFifo = fifoDetails.reduce((s, d) => s + d.amount, 0);
     if (Math.abs(totalFifo - r.diff) > 0.01) continue;
+
+    const explanationParts = fifoDetails.map(d => {
+      const name = d.client ? (clientNames.get(d.client) || d.client) : 'unknown';
+      return `deposit spent by ${name}, ${d.date}, ${fmt2(d.amount)}`;
+    });
     confirmed.push({
       period: r.period, checkType: 'reference', checkKey: `${r.metric}|${r.location}`,
       originalExpected: r.expected, actualValue: r.actual ?? 0, diff: r.diff,
-      explanation: `Auto-confirmed: ${fifoDetails.length} deposit spending(s) totaling ${fmt2(totalFifo)}`,
+      explanation: `Auto-confirmed: ${explanationParts.join('; ')}`,
       fifoDetails: fifoDetails.map(d => ({ client: d.client, date: d.date, amount: d.amount })),
     });
   }
@@ -908,15 +953,24 @@ export async function runReconciliationCheck(): Promise<ReconciliationResult> {
   const cache: SalesCache = new Map();
   const allErrors: string[] = [];
 
+  // Load all deposit-client transactions once via RPC — replaces hundreds of per-client
+  // paginated fetches with a single database call.
+  let depositData: DepositClientData | undefined;
+  try {
+    depositData = await getSharedDepositData();
+  } catch (err) {
+    allErrors.push(`Deposit client data load failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   const { refs, error: loadErr } = await loadReferences();
   if (loadErr) allErrors.push(loadErr);
-  const { checks: references, errors: refErrors } = await withTimeoutRetry(cache, () => evaluateReferences(refs, cache));
+  const { checks: references, errors: refErrors } = await withTimeoutRetry(cache, () => evaluateReferences(refs, cache, depositData));
   allErrors.push(...refErrors);
   const refPeriods = [...new Set(refs.map(r => r.period))];
 
   const [{ drifts: baselineDrifts, exists: baselineExists, errors: blErrors }, { checks: cases, errors: caseErrors }, { types: unknownPaymentTypes, errors: ptErrors }, { checks: tariffQuality, errors: tqErrors }] = await Promise.all([
-    withTimeoutRetry(cache, () => checkBaseline(cache, refPeriods)),
-    withTimeoutRetry(cache, () => checkCases(cache)),
+    withTimeoutRetry(cache, () => checkBaseline(cache, refPeriods, depositData)),
+    withTimeoutRetry(cache, () => checkCases(cache, depositData)),
     withTimeoutRetry(cache, () => checkUnknownPaymentTypes()),
     withTimeoutRetry(cache, () => checkTariffQuality()),
   ]);
@@ -932,7 +986,7 @@ export async function runReconciliationCheck(): Promise<ReconciliationResult> {
     ...baselineDrifts.filter(d => d.report === 'sales_by_tariff').map(d => d.period),
     ...storedTotals.filter(s => !s.ok && DEPOSIT_SENSITIVE_STORED_METRICS.has(s.metric)).map(s => s.period),
   ];
-  const { months: provisionalMonths, errors: pvErrors } = await withTimeoutRetry(cache, () => findProvisionalMonths(cache, salesPeriods));
+  const { months: provisionalMonths, errors: pvErrors } = await withTimeoutRetry(cache, () => findProvisionalMonths(cache, salesPeriods, depositData));
   allErrors.push(...pvErrors);
   markProvisional({ references, cases, baselineDrifts, storedTotals }, provisionalMonths);
   const provisionalMismatches =
@@ -942,7 +996,7 @@ export async function runReconciliationCheck(): Promise<ReconciliationResult> {
   let autoConfirmed: AutoConfirmEntry[] = [];
   if (provisionalMismatches > 0 && allErrors.length === 0) {
     try {
-      autoConfirmed = await performAutoConfirm(cache, references, cases, baselineDrifts, storedTotals, provisionalMonths);
+      autoConfirmed = await performAutoConfirm(cache, references, cases);
       if (autoConfirmed.length > 0) {
         await applyAutoConfirmations(autoConfirmed);
         for (const c of cases) {
